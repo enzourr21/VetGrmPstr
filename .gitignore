@@ -1,0 +1,26 @@
+# Local development tools
+/tools/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Dependencies
+/vendor/
+
+# Logs and temporary files
+/storage/logs/*
+/tmp/
+
+# Uploaded files
+/storage/uploads/*
+
+# Operating system files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE settings
+.idea/
+.vscode/
