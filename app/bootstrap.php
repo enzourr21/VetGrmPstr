@@ -24,6 +24,11 @@ function money(mixed $v): string
     return '$' . number_format((float)$v, 2);
 }
 
+function peso(mixed $v): string
+{
+    return money($v);
+}
+
 set_exception_handler(function (Throwable $t): void {
     $dir = APP_ROOT . '/storage/logs';
     if (!is_dir($dir)) {
@@ -40,4 +45,3 @@ set_exception_handler(function (Throwable $t): void {
 });
 
 App\Core\Session::start();
-

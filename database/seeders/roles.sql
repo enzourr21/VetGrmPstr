@@ -1,10 +1,12 @@
 -- Roles (position != role != permission; see BUSINESS_RULES.md 1.2).
 -- Only the confirmed role names are created here. Permissions are attached in permissions.sql.
 INSERT IGNORE INTO role (role_name, description) VALUES
- ('SYSTEM_ADMINISTRATOR', 'Manages accounts, roles and permissions within the assigned business unit'),
+ ('SUPER_ADMINISTRATOR', 'Highest-level permanent account with unrestricted system-wide administrative access'),
+ ('SYSTEM_ADMINISTRATOR', 'Manages accounts, roles, positions, and permissions within the assigned business unit'),
  ('BUSINESS_MANAGER', 'Operational management within the assigned business unit'),
  ('RECEPTIONIST', 'Customer-facing administration and appointment coordination'),
  ('VETERINARIAN', 'Consultation, diagnosis, treatment and medical records'),
  ('NURSE', 'Administers authorized treatments and documents nursing work'),
- ('TECHNICIAN', 'Technical tasks and diagnostic processing');
-
+ ('TECHNICIAN', 'Technical tasks and diagnostic processing'),
+ ('INVENTORY_MANAGER', 'Pet Store stock oversight: tracks inventory levels, receiving, and stock accuracy'),
+ ('DELIVERY_PERSONNEL', 'Pet Store order delivery: views assigned delivery orders and updates delivery progress');

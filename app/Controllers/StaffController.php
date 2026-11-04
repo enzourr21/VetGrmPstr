@@ -6,6 +6,7 @@ namespace App\Controllers;
 use App\Core\Controller;
 use App\Core\CSRF;
 use App\Core\Session;
+use App\Models\Audit;
 use App\Models\Units;
 
 final class StaffController extends Controller
@@ -25,29 +26,136 @@ final class StaffController extends Controller
     public function login(): void
     {
         CSRF::check();
-        $email = strtolower($this->post('email'));
+        $raw = $this->post('email') !== '' ? $this->post('email') : ($this->post('username') !== '' ? $this->post('username') : $this->post('identifier'));
+        $identifier = strtolower($raw);
         $password = is_string($_POST['password'] ?? null) ? $_POST['password'] : '';
-        $s = $this->db->prepare('SELECT ua.user_account_id, ua.password_hash, ua.account_status,
-                (SELECT customer_id FROM customer c WHERE c.user_account_id=ua.user_account_id AND c.customer_status="active") AS customer_id,
-                (SELECT employee_id FROM employee e WHERE e.user_account_id=ua.user_account_id AND e.employee_status="active") AS employee_id
-            FROM user_account ua WHERE ua.email=?');
-        $s->execute([$email]);
+        $isEmail = str_contains($identifier, '@');
+
+        if ($isEmail) {
+            $s = $this->db->prepare('SELECT ua.user_account_id, ua.email, ua.username, ua.password_hash, ua.account_status, ua.is_super_admin,
+                    (SELECT customer_id FROM customer c WHERE c.user_account_id=ua.user_account_id AND c.customer_status="active") AS customer_id,
+                    (SELECT employee_id FROM employee e WHERE e.user_account_id=ua.user_account_id AND e.employee_status="active") AS employee_id
+                FROM user_account ua WHERE ua.email=?');
+        } else {
+            $s = $this->db->prepare('SELECT ua.user_account_id, ua.email, ua.username, ua.password_hash, ua.account_status, ua.is_super_admin,
+                    (SELECT customer_id FROM customer c WHERE c.user_account_id=ua.user_account_id AND c.customer_status="active") AS customer_id,
+                    (SELECT employee_id FROM employee e WHERE e.user_account_id=ua.user_account_id AND e.employee_status="active") AS employee_id
+                FROM user_account ua WHERE ua.username=?');
+        }
+        $s->execute([$identifier]);
         $a = $s->fetch();
         static $dummy = null;
         $dummy ??= password_hash('not-a-real-password', PASSWORD_DEFAULT);
         $ok = password_verify($password, $a['password_hash'] ?? $dummy);
-        if (!$a || !$ok || $a['account_status'] !== 'active' || $a['employee_id'] === null) {
+
+        // Priority 3.3 & 3.4: If an employee or System Administrator signs in using their username,
+        // the resulting session must be customer-only (never exposing employee/admin privileges).
+        if ($a && $ok && $a['account_status'] === 'active' && !$isEmail) {
+            $uid = (int)$a['user_account_id'];
+            $cid = AuthController::ensureCustomerProfile(
+                $this->db,
+                $uid,
+                $a['customer_id'] !== null ? (int)$a['customer_id'] : null
+            );
+            Session::login([
+                'user_id' => $uid,
+                'email' => (string)$a['email'],
+                'username' => $a['username'] ?? null,
+                'customer_id' => $cid,
+                'employee_id' => null,
+                'auth_method' => 'username',
+                'base_context' => 'customer',
+                'active_context' => 'customer',
+                'is_super_admin' => false,
+            ]);
+            Audit::log('auth.login.customer_via_username', 'Username sign-in established customer-only session.', null, 'user_account', $uid, $uid);
+            $this->redirect('/');
+        }
+
+        if (!$a || !$ok || $a['account_status'] !== 'active' || ($a['employee_id'] === null && !(bool)$a['is_super_admin'])) {
             http_response_code(401);
             Session::flash('error', 'Incorrect email or password, or this account has no staff access.');
             $this->render('staff/login', ['title' => 'Staff sign in']);
             return;
         }
+
+        $uid = (int)$a['user_account_id'];
+        $isSuper = (bool)$a['is_super_admin'];
+        $landing = AuthController::resolveEmployeeLandingFor($this->db, $uid, $isSuper);
+
         Session::login([
-            'user_id' => (int)$a['user_account_id'], 'email' => $email,
+            'user_id' => $uid,
+            'email' => (string)$a['email'],
+            'username' => $a['username'] ?? null,
             'customer_id' => $a['customer_id'] !== null ? (int)$a['customer_id'] : null,
-            'employee_id' => (int)$a['employee_id'],
+            'employee_id' => $a['employee_id'] !== null ? (int)$a['employee_id'] : null,
+            'auth_method' => 'email',
+            'base_context' => 'employee',
+            'active_context' => 'employee',
+            'is_super_admin' => $isSuper,
         ]);
-        $this->redirect('/staff/appointments');
+        Audit::log('auth.login.staff', "Staff email sign-in ($landing).", null, 'user_account', $uid, $uid);
+        $this->redirect($landing);
+    }
+
+    public function workspace(): void
+    {
+        $uid = Session::get('user_id');
+        if (!$uid) {
+            $this->redirect('/staff/login');
+        }
+        $baseContext = Session::get('base_context', Session::get('employee_id') ? 'employee' : 'customer');
+        $activeContext = Session::get('active_context', $baseContext);
+        $authMethod = Session::get('auth_method', 'email');
+        if ($baseContext !== 'employee' || $activeContext === 'customer' || $authMethod === 'username') {
+            $this->forbidden('Customer sessions cannot access the employee workspace.');
+        }
+
+        $isSuper = $this->isSuperAdmin();
+        $empStmt = $this->db->prepare(
+            "SELECT e.employee_id, e.first_name, e.last_name, e.position, e.phone, e.employee_status,
+                    ua.email, ua.username, bu.business_unit_id, bu.business_unit_name
+             FROM user_account ua
+             LEFT JOIN employee e ON e.user_account_id = ua.user_account_id
+             LEFT JOIN business_unit bu ON bu.business_unit_id = e.business_unit_id
+             WHERE ua.user_account_id = ? AND ua.account_status = 'active'"
+        );
+        $empStmt->execute([(int)$uid]);
+        $emp = $empStmt->fetch();
+        if (!$emp || (!$isSuper && ($emp['employee_id'] === null || $emp['employee_status'] !== 'active'))) {
+            $this->forbidden();
+        }
+
+        $rolesStmt = $this->db->prepare(
+            "SELECT r.role_name, r.description, bu.business_unit_id, bu.business_unit_name
+             FROM account_role ar
+             JOIN role r ON r.role_id = ar.role_id
+             JOIN business_unit bu ON bu.business_unit_id = ar.business_unit_id
+             WHERE ar.user_account_id = ?
+             ORDER BY bu.business_unit_id, r.role_name"
+        );
+        $rolesStmt->execute([(int)$uid]);
+        $roles = $rolesStmt->fetchAll();
+
+        $permsStmt = $this->db->prepare(
+            "SELECT DISTINCT p.permission_code, p.description, bu.business_unit_name
+             FROM account_role ar
+             JOIN role_permission rp ON rp.role_id = ar.role_id
+             JOIN permission p ON p.permission_id = rp.permission_id
+             JOIN business_unit bu ON bu.business_unit_id = ar.business_unit_id
+             WHERE ar.user_account_id = ?
+             ORDER BY bu.business_unit_name, p.permission_code"
+        );
+        $permsStmt->execute([(int)$uid]);
+        $permissions = $permsStmt->fetchAll();
+
+        $this->render('staff/workspace', [
+            'title' => 'Employee Workspace',
+            'emp' => $emp,
+            'roles' => $roles,
+            'permissions' => $permissions,
+            'isSuper' => $isSuper,
+        ]);
     }
 
     public function appointments(): void
@@ -112,6 +220,9 @@ final class StaffController extends Controller
         // optimistic check on the current status prevents lost updates
         $u = $this->db->prepare('UPDATE appointment SET appointment_status_id=? WHERE appointment_id=? AND business_unit_id=? AND appointment_status_id=?');
         $u->execute([$tid, $id, $unit, $cur['appointment_status_id']]);
+        if ($u->rowCount()) {
+            Audit::log('appointment.status_changed', "Grooming appointment #$id status changed from {$cur['status_name']} to $target.", $unit, 'appointment', $id);
+        }
         Session::flash($u->rowCount() ? 'success' : 'error', $u->rowCount() ? "Status changed to $target." : 'The request was changed by someone else. Please review it again.');
         $this->redirect("/staff/appointments/$id");
     }
@@ -122,4 +233,3 @@ final class StaffController extends Controller
         return is_string($v) ? trim($v) : '';
     }
 }
-

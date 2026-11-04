@@ -1,8 +1,14 @@
 <?php
 $curPath = rtrim((string)parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH), '/') ?: '/';
-$isCustomer = (bool)\App\Core\Session::get('customer_id');
-$isEmployee = (bool)\App\Core\Session::get('employee_id');
 $isSignedIn = (bool)\App\Core\Session::get('user_id');
+$baseContext = (string)\App\Core\Session::get('base_context', \App\Core\Session::get('employee_id') ? 'employee' : 'customer');
+$activeContext = (string)\App\Core\Session::get('active_context', $baseContext);
+$isWorkspaceRoute = str_starts_with($curPath, '/super-admin')
+    || str_starts_with($curPath, '/sysadmin')
+    || str_starts_with($curPath, '/manager')
+    || (str_starts_with($curPath, '/staff') && !str_starts_with($curPath, '/staffs') && $curPath !== '/staff/login');
+$showCustomerNav = $isSignedIn && ((bool)\App\Core\Session::get('customer_id') || $activeContext === 'customer' || !$isWorkspaceRoute);
+$showEmployeeWorkspaceNav = $isSignedIn && $baseContext === 'employee' && $activeContext === 'employee' && $isWorkspaceRoute;
 $isAuthSignInOrOut = str_starts_with($curPath, '/login') || str_starts_with($curPath, '/staff/login') || str_starts_with($curPath, '/logout');
 ?>
 <!DOCTYPE html>
@@ -26,16 +32,17 @@ $isAuthSignInOrOut = str_starts_with($curPath, '/login') || str_starts_with($cur
       <a href="/services" class="<?= str_starts_with($curPath, '/services') ? 'is-current' : '' ?>">Services</a>
       <a href="/staffs" class="<?= str_starts_with($curPath, '/staffs') ? 'is-current' : '' ?>">Staffs</a>
       <a href="/reviews" class="<?= str_starts_with($curPath, '/reviews') ? 'is-current' : '' ?>">Customer Reviews</a>
-<?php if ($isCustomer): ?>
+<?php if ($showCustomerNav && !$showEmployeeWorkspaceNav): ?>
       <span class="nav-divider" aria-hidden="true"></span>
       <a href="/appointments" class="<?= str_starts_with($curPath, '/appointments') ? 'is-current' : '' ?>">Appointments</a>
       <a href="/pets" class="<?= str_starts_with($curPath, '/pets') ? 'is-current' : '' ?>">My pets</a>
       <a href="/orders" class="<?= str_starts_with($curPath, '/orders') ? 'is-current' : '' ?>">Orders</a>
       <a href="/profile" class="<?= str_starts_with($curPath, '/profile') ? 'is-current' : '' ?>">Profile</a>
 <?php endif; ?>
-<?php if ($isEmployee): ?>
+<?php if ($showEmployeeWorkspaceNav): ?>
       <span class="nav-divider" aria-hidden="true"></span>
-      <a href="/staff/appointments" class="<?= str_starts_with($curPath, '/staff') ? 'is-current' : '' ?>">Workspace</a>
+      <a href="/workspace" class="is-current">Workspace</a>
+      <a href="/customer-interface">Customer Interface</a>
 <?php endif; ?>
 <?php if ($isSignedIn): ?>
       <form method="post" action="/logout" class="inline"><?= \App\Core\CSRF::field() ?><button class="link" type="submit">Sign out</button></form>

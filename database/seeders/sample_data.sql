@@ -79,6 +79,29 @@ JOIN business_unit bu ON bu.business_unit_name = v.unit
 JOIN product p ON p.product_name = v.pname
 JOIN business_product bp ON bp.business_unit_id = bu.business_unit_id AND bp.product_id = p.product_id;
 
+-- Default Business Unit Positions
+INSERT IGNORE INTO business_position (business_unit_id, position_name, description)
+SELECT bu.business_unit_id, pos.position_name, pos.description
+FROM (
+  SELECT 'Pet Store' AS uname, 'System Administrator' AS position_name, 'Manages Pet Store accounts, roles, and positions' AS description
+  UNION ALL SELECT 'Pet Store', 'Business Manager — Pet Store', 'Operational manager for Pet Store'
+  UNION ALL SELECT 'Pet Store', 'Inventory Manager', 'Oversees Pet Store stock levels, receiving, and inventory accuracy'
+  UNION ALL SELECT 'Pet Store', 'Receptionist', 'Front-desk customer assistance for Pet Store'
+  UNION ALL SELECT 'Veterinary Clinic', 'System Administrator', 'Manages Veterinary Clinic accounts, roles, and positions'
+  UNION ALL SELECT 'Veterinary Clinic', 'Business Manager — Veterinary Clinic', 'Operational manager for Veterinary Clinic'
+  UNION ALL SELECT 'Veterinary Clinic', 'Lead Veterinarian', 'Senior veterinarian overseeing clinical consultations and records'
+  UNION ALL SELECT 'Veterinary Clinic', 'Associate Veterinarian', 'Licensed veterinarian performing exams and treatments'
+  UNION ALL SELECT 'Veterinary Clinic', 'Senior Veterinary Nurse', 'Administers prescribed treatments and documents nursing care'
+  UNION ALL SELECT 'Veterinary Clinic', 'Veterinary Technician', 'Performs diagnostic and technical clinical procedures'
+  UNION ALL SELECT 'Veterinary Clinic', 'Receptionist', 'Clinical front-desk and appointment coordination'
+  UNION ALL SELECT 'Grooming Services', 'System Administrator', 'Manages Grooming Services accounts, roles, and positions'
+  UNION ALL SELECT 'Grooming Services', 'Business Manager — Grooming Services', 'Operational manager for Grooming Services'
+  UNION ALL SELECT 'Grooming Services', 'Master Pet Stylist & Reception Coordinator', 'Lead pet stylist and grooming appointment coordinator'
+  UNION ALL SELECT 'Grooming Services', 'Pet Groomer & Stylist', 'Performs baths, haircuts, and grooming treatments'
+  UNION ALL SELECT 'Grooming Services', 'Receptionist', 'Grooming appointment intake and scheduling'
+) pos
+JOIN business_unit bu ON bu.business_unit_name = pos.uname;
+
 -- [SAMPLE] Staff members & Business Managers for directory display (non-interactive sample accounts, status inactive for login safety)
 INSERT IGNORE INTO user_account (email, password_hash, account_status) VALUES
  ('elena.vance@staff.sample.vetgrpet', '$2y$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ01234', 'inactive'),
@@ -88,17 +111,18 @@ INSERT IGNORE INTO user_account (email, password_hash, account_status) VALUES
  ('hannah.kim@staff.sample.vetgrpet', '$2y$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ01234', 'inactive'),
  ('owen.bennett@staff.sample.vetgrpet', '$2y$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ01234', 'inactive');
 
-INSERT IGNORE INTO employee (user_account_id, first_name, last_name, position, employee_status)
-SELECT ua.user_account_id, s.first_name, s.last_name, s.position, 'active'
+INSERT IGNORE INTO employee (user_account_id, business_unit_id, first_name, last_name, position, employee_status)
+SELECT ua.user_account_id, bu.business_unit_id, s.first_name, s.last_name, s.position, 'active'
 FROM (
-  SELECT 'elena.vance@staff.sample.vetgrpet' AS email, 'Dr. Elena' AS first_name, 'Vance' AS last_name, 'Lead Veterinarian' AS position
-  UNION ALL SELECT 'marcus.chen@staff.sample.vetgrpet', 'Marcus', 'Chen', 'Business Manager — Grooming Services'
-  UNION ALL SELECT 'claire.dubois@staff.sample.vetgrpet', 'Claire', 'Dubois', 'Business Manager — Veterinary Clinic'
-  UNION ALL SELECT 'david.reyes@staff.sample.vetgrpet', 'David', 'Reyes', 'Business Manager — Pet Store'
-  UNION ALL SELECT 'hannah.kim@staff.sample.vetgrpet', 'Hannah', 'Kim', 'Senior Veterinary Nurse'
-  UNION ALL SELECT 'owen.bennett@staff.sample.vetgrpet', 'Owen', 'Bennett', 'Master Pet Stylist & Reception Coordinator'
+  SELECT 'elena.vance@staff.sample.vetgrpet' AS email, 'Veterinary Clinic' AS uname, 'Dr. Elena' AS first_name, 'Vance' AS last_name, 'Lead Veterinarian' AS position
+  UNION ALL SELECT 'marcus.chen@staff.sample.vetgrpet', 'Grooming Services', 'Marcus', 'Chen', 'Business Manager — Grooming Services'
+  UNION ALL SELECT 'claire.dubois@staff.sample.vetgrpet', 'Veterinary Clinic', 'Claire', 'Dubois', 'Business Manager — Veterinary Clinic'
+  UNION ALL SELECT 'david.reyes@staff.sample.vetgrpet', 'Pet Store', 'David', 'Reyes', 'Business Manager — Pet Store'
+  UNION ALL SELECT 'hannah.kim@staff.sample.vetgrpet', 'Veterinary Clinic', 'Hannah', 'Kim', 'Senior Veterinary Nurse'
+  UNION ALL SELECT 'owen.bennett@staff.sample.vetgrpet', 'Grooming Services', 'Owen', 'Bennett', 'Master Pet Stylist & Reception Coordinator'
 ) s
-JOIN user_account ua ON ua.email = s.email;
+JOIN user_account ua ON ua.email = s.email
+JOIN business_unit bu ON bu.business_unit_name = s.uname;
 
 INSERT IGNORE INTO account_role (user_account_id, role_id, business_unit_id)
 SELECT ua.user_account_id, r.role_id, bu.business_unit_id
@@ -113,3 +137,8 @@ FROM (
 JOIN user_account ua ON ua.email = m.email
 JOIN role r ON r.role_name = m.rname
 JOIN business_unit bu ON bu.business_unit_name = m.uname;
+
+UPDATE employee e
+JOIN account_role ar ON ar.user_account_id = e.user_account_id
+SET e.business_unit_id = ar.business_unit_id
+WHERE e.business_unit_id IS NULL;

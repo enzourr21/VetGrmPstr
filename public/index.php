@@ -23,7 +23,7 @@ $r->get('/staffs', 'HomeController', 'staffs');
 $r->get('/reviews', 'HomeController', 'reviews');
 $r->post('/reviews', 'HomeController', 'storeReview');
 
-// Customer authentication (single-page progressive disclosure, email-first)
+// Authentication & Session Context Switching
 $r->get('/login', 'AuthController', 'loginEmailForm');
 $r->post('/login', 'AuthController', 'loginPassword');
 $r->post('/login/email', 'AuthController', 'loginEmail');
@@ -35,6 +35,10 @@ $r->post('/register/email', 'AuthController', 'registerEmail');
 $r->get('/register/details', 'AuthController', 'registerDetailsForm');
 $r->post('/register/details', 'AuthController', 'registerDetails');
 $r->post('/logout', 'AuthController', 'logout');
+$r->post('/demo/super-admin', 'AuthController', 'demoSuperAdmin');
+$r->get('/customer-interface', 'AuthController', 'enterCustomerInterface');
+$r->get('/workspace', 'AuthController', 'returnToWorkspace');
+$r->post('/session/context', 'AuthController', 'switchContext');
 
 // Profile + pets
 $r->get('/profile', 'ProfileController', 'show');
@@ -64,12 +68,47 @@ $r->post('/checkout/{bu}', 'OrderController', 'place');
 $r->get('/orders', 'OrderController', 'index');
 $r->get('/orders/{id}', 'OrderController', 'show');
 
-// Staff (receptionist)
+// Staff & Employee Workspace
 $r->get('/staff/login', 'StaffController', 'loginForm');
 $r->post('/staff/login', 'StaffController', 'login');
+$r->get('/staff/workspace', 'StaffController', 'workspace');
 $r->get('/staff/appointments', 'StaffController', 'appointments');
 $r->get('/staff/appointments/{id}', 'StaffController', 'appointment');
 $r->post('/staff/appointments/{id}/status', 'StaffController', 'setStatus');
 
-$r->dispatch($_SERVER['REQUEST_URI'] ?? '/', $_SERVER['REQUEST_METHOD'] ?? 'GET');
+// Business Manager Interface
+$r->get('/manager', 'ManagerController', 'dashboard');
+$r->get('/manager/units/{id}', 'ManagerController', 'dashboard');
 
+// System Administrator Interface (Business-Unit Scoped)
+$r->get('/sysadmin', 'SysAdminController', 'dashboard');
+$r->get('/sysadmin/units/{id}', 'SysAdminController', 'dashboard');
+$r->get('/sysadmin/employees', 'SysAdminController', 'employees');
+$r->post('/sysadmin/employees', 'SysAdminController', 'storeEmployee');
+$r->get('/sysadmin/units/{id}/employees', 'SysAdminController', 'employees');
+$r->post('/sysadmin/units/{id}/employees', 'SysAdminController', 'storeEmployee');
+$r->post('/sysadmin/employees/{id}/roles', 'SysAdminController', 'updateEmployeeRoles');
+$r->post('/sysadmin/employees/{id}/status', 'SysAdminController', 'updateEmployeeStatus');
+$r->post('/sysadmin/employees/{id}/position', 'SysAdminController', 'updateEmployeePosition');
+$r->get('/sysadmin/activity', 'SysAdminController', 'activity');
+$r->get('/sysadmin/units/{id}/activity', 'SysAdminController', 'activity');
+$r->get('/sysadmin/positions', 'SysAdminController', 'positions');
+$r->post('/sysadmin/positions', 'SysAdminController', 'storePosition');
+$r->get('/sysadmin/units/{id}/positions', 'SysAdminController', 'positions');
+$r->post('/sysadmin/units/{id}/positions', 'SysAdminController', 'storePosition');
+$r->post('/sysadmin/positions/{id}/toggle', 'SysAdminController', 'togglePosition');
+$r->get('/sysadmin/roles', 'SysAdminController', 'roles');
+$r->get('/sysadmin/units/{id}/roles', 'SysAdminController', 'roles');
+
+// Super Administrator Interface (System-Wide)
+$r->get('/super-admin', 'SuperAdminController', 'dashboard');
+$r->get('/super-admin/business-units', 'SuperAdminController', 'businessUnits');
+$r->get('/super-admin/system-admins', 'SuperAdminController', 'systemAdmins');
+$r->post('/super-admin/system-admins', 'SuperAdminController', 'storeSystemAdmin');
+$r->get('/super-admin/employees', 'SuperAdminController', 'employees');
+$r->post('/super-admin/employees', 'SuperAdminController', 'storeEmployee');
+$r->post('/super-admin/accounts/{id}/status', 'SuperAdminController', 'updateAccountStatus');
+$r->get('/super-admin/roles', 'SuperAdminController', 'roles');
+$r->get('/super-admin/activity', 'SuperAdminController', 'activity');
+
+$r->dispatch($_SERVER['REQUEST_URI'] ?? '/', $_SERVER['REQUEST_METHOD'] ?? 'GET');

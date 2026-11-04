@@ -165,6 +165,7 @@ final class HomeController extends Controller
     /**
      * Public-safe employee directory query: exposes ONLY first_name, last_name, position,
      * public role name, and business unit name. Never exposes email, phone, or account IDs.
+     * Excludes purely internal system/super administrator accounts.
      */
     private function fetchPublicStaff(): array
     {
@@ -177,6 +178,7 @@ final class HomeController extends Controller
              LEFT JOIN role r ON r.role_id = ar.role_id
              LEFT JOIN business_unit bu ON bu.business_unit_id = ar.business_unit_id
              WHERE e.employee_status = 'active'
+               AND e.position NOT IN ('Super Administrator', 'System Administrator')
              GROUP BY e.employee_id, e.first_name, e.last_name, e.position
              ORDER BY FIELD( MIN(r.role_name), 'BUSINESS_MANAGER', 'VETERINARIAN', 'NURSE', 'TECHNICIAN', 'RECEPTIONIST' ), e.last_name"
         )->fetchAll();

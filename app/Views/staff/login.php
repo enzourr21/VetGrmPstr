@@ -11,8 +11,8 @@
       </div>
     </div>
 
-    <h1>Staff sign in</h1>
-    <p class="muted" style="margin-bottom:1.35rem">Enter your staff email address and click Continue.</p>
+    <h1>Staff &amp; Administrator sign in</h1>
+    <p class="muted" style="margin-bottom:1.35rem">Use your assigned staff email address to enter your Employee, Business Manager, System Administrator, or Super Administrator interface. Signing in with a username establishes a customer-only session.</p>
 
     <form method="post" action="/staff/login" data-progressive-login novalidate>
       <?= \App\Core\CSRF::field() ?>
@@ -21,7 +21,7 @@
           <label for="email" style="margin:0">Staff email</label>
           <button type="button" class="link" data-login-edit-email hidden style="padding:0;font-size:0.8rem;color:var(--brand)">Change email</button>
         </div>
-        <input id="email" name="email" type="email" autocomplete="username" placeholder="staff@vetgrpet.test" required autofocus>
+        <input id="email" name="email" type="text" autocomplete="username" placeholder="staff@vetgrpet.local" required autofocus>
         <div class="field-error" data-email-error hidden></div>
       </div>
 
@@ -47,5 +47,22 @@
         </div>
       </div>
     </form>
+
+    <div class="demo-access-panel">
+      <div class="demo-access-header">
+        <span class="section-kicker" style="margin:0">Project Demonstration</span>
+        <span class="caption">Super Administrator</span>
+      </div>
+      <div class="row" style="margin-top:0.5rem">
+        <?php if (\App\Controllers\AuthController::isDemoEnvironmentAllowed()): ?>
+          <form method="post" action="/demo/super-admin" class="inline" style="flex:1">
+            <?= \App\Core\CSRF::field() ?>
+            <button type="submit" class="btn secondary full" data-demo-super-admin>Super Administrator Demo Portal &rarr;</button>
+          </form>
+        <?php else: ?>
+          <a href="/super-admin" class="btn secondary full" data-demo-super-admin>Super Administrator Entry Point &rarr;</a>
+        <?php endif; ?>
+      </div>
+    </div>
   </div>
 </section>

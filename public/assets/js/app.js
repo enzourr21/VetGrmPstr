@@ -3,6 +3,7 @@
 
   var reducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   var emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+  var usernamePattern = /^[a-zA-Z0-9_.]{3,60}$/;
   var phonePattern = /^[0-9+()\-\s]{6,30}$/;
 
   function animateStageIn(el, focusSelector) {
@@ -108,8 +109,9 @@
 
     function validateAndUnlockLogin() {
       var val = (emailInput.value || '').trim();
-      if (!emailPattern.test(val)) {
-        showErrorSmooth(emailError, 'Enter a valid email address, for example name@example.com.');
+      var isValidIdentifier = val.indexOf('@') !== -1 ? emailPattern.test(val) : usernamePattern.test(val);
+      if (!isValidIdentifier) {
+        showErrorSmooth(emailError, 'Enter a valid email address (for example name@example.com) or username.');
         emailInput.focus();
         return false;
       }
@@ -424,6 +426,431 @@
       r.addEventListener('change', updateFulfillment);
     });
     updateFulfillment();
+  }
+
+  // ---- Dynamic Business-Unit Position & Role Filtering (Super Admin) ---
+  document.querySelectorAll('[data-unit-position-form]').forEach(function (form) {
+    var unitSelect = form.querySelector('[data-unit-select]');
+    var posSelect = form.querySelector('[data-position-select]');
+    var clinicalCards = form.querySelectorAll('[data-clinical-role="1"]');
+    if (!unitSelect || !posSelect) return;
+
+    function syncUnitOptions() {
+      var selectedUnit = unitSelect.value;
+      var optgroups = posSelect.querySelectorAll('optgroup[data-unit-group]');
+      optgroups.forEach(function (og) {
+        var groupUnit = og.getAttribute('data-unit-group');
+        var match = !selectedUnit || groupUnit === selectedUnit;
+        og.disabled = !match;
+        og.hidden = !match;
+      });
+      var currentOpt = posSelect.options[posSelect.selectedIndex];
+      if (currentOpt && currentOpt.parentElement && currentOpt.parentElement.tagName === 'OPTGROUP') {
+        if (currentOpt.parentElement.disabled) {
+          posSelect.value = '';
+        }
+      }
+      clinicalCards.forEach(function (card) {
+        var isVet = !selectedUnit || selectedUnit === '2';
+        card.style.opacity = isVet ? '1' : '0.45';
+        var cb = card.querySelector('input[type="checkbox"]');
+        if (cb && !isVet) {
+          cb.checked = false;
+        }
+      });
+    }
+
+    unitSelect.addEventListener('change', syncUnitOptions);
+    syncUnitOptions();
+  });
+
+  // ---- Confirmation Guard for Sensitive Admin Actions ------------------
+  document.querySelectorAll('[data-confirm-action]').forEach(function (el) {
+    var msg = el.getAttribute('data-confirm-action');
+    if (el.tagName === 'FORM') {
+      el.addEventListener('submit', function (ev) {
+        if (msg && !window.confirm(msg)) ev.preventDefault();
+      });
+      return;
+    }
+    el.addEventListener('click', function (ev) {
+      if (msg && !window.confirm(msg)) ev.preventDefault();
+    });
+  });
+
+  // ---- Native <dialog> modals (roster Show All, role picker) -----------
+  document.querySelectorAll('[data-modal-open]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var dlgId = btn.getAttribute('data-modal-open');
+      var dlg = document.getElementById(dlgId);
+      if (dlg && typeof dlg.showModal === 'function') {
+        dlg._triggerBtn = btn;
+        document.body.classList.add('has-modal-open');
+        dlg.showModal();
+        var closeBtn = dlg.querySelector('[data-modal-close]');
+        if (closeBtn && typeof closeBtn.focus === 'function') {
+          setTimeout(function () { closeBtn.focus(); }, 40);
+        }
+      }
+    });
+  });
+
+  document.querySelectorAll('dialog.modal').forEach(function (dlg) {
+    dlg.querySelectorAll('[data-modal-close]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        dlg.close();
+      });
+    });
+
+    var mouseDownOnBackdrop = false;
+    dlg.addEventListener('mousedown', function (ev) {
+      mouseDownOnBackdrop = (ev.target === dlg);
+    });
+    dlg.addEventListener('click', function (ev) {
+      if (ev.target === dlg && mouseDownOnBackdrop) {
+        dlg.close();
+      }
+      mouseDownOnBackdrop = false;
+    });
+
+    dlg.addEventListener('close', function () {
+      if (!document.querySelector('dialog.modal[open]')) {
+        document.body.classList.remove('has-modal-open');
+      }
+      if (dlg._triggerBtn && typeof dlg._triggerBtn.focus === 'function') {
+        dlg._triggerBtn.focus();
+        dlg._triggerBtn = null;
+      }
+    });
+  });
+
+  // ---- Add Role picker (employee creation) -----------------------------
+  document.querySelectorAll('[data-role-picker]').forEach(function (root) {
+    var addBtn = root.querySelector('[data-role-add]');
+    var dlg = root.querySelector('#role-modal');
+    var chips = root.querySelector('[data-role-chips]');
+    var emptyHint = root.querySelector('[data-role-empty]');
+    if (!addBtn || !dlg || !chips) return;
+
+    function selected() {
+      return Array.prototype.map.call(chips.querySelectorAll('[data-role-chip]'), function (c) {
+        return c.getAttribute('data-role-chip');
+      });
+    }
+    function sync() {
+      var sel = selected();
+      dlg.querySelectorAll('[data-role-option]').forEach(function (o) {
+        o.disabled = sel.indexOf(o.getAttribute('data-role-option')) !== -1;
+      });
+      if (emptyHint) emptyHint.hidden = sel.length > 0;
+    }
+    function addChip(name) {
+      if (selected().indexOf(name) !== -1) return;
+      var chip = document.createElement('span');
+      chip.className = 'role-chip';
+      chip.setAttribute('data-role-chip', name);
+      var input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = 'roles[]';
+      input.value = name;
+      var label = document.createElement('span');
+      label.textContent = name;
+      var rm = document.createElement('button');
+      rm.type = 'button';
+      rm.className = 'role-chip-remove';
+      rm.setAttribute('data-role-remove', '');
+      rm.setAttribute('aria-label', 'Remove role ' + name);
+      rm.innerHTML = '&times;';
+      chip.appendChild(input);
+      chip.appendChild(label);
+      chip.appendChild(rm);
+      chips.appendChild(chip);
+    }
+
+    addBtn.addEventListener('click', function () {
+      sync();
+      if (typeof dlg.showModal === 'function') {
+        dlg._triggerBtn = addBtn;
+        document.body.classList.add('has-modal-open');
+        dlg.showModal();
+        var closeBtn = dlg.querySelector('[data-modal-close]');
+        if (closeBtn && typeof closeBtn.focus === 'function') {
+          setTimeout(function () { closeBtn.focus(); }, 40);
+        }
+      }
+    });
+    dlg.querySelectorAll('[data-role-option]').forEach(function (o) {
+      o.addEventListener('click', function () {
+        addChip(o.getAttribute('data-role-option'));
+        sync();
+        dlg.close();
+      });
+    });
+    chips.addEventListener('click', function (ev) {
+      var rm = ev.target.closest('[data-role-remove]');
+      if (!rm) return;
+      var chip = rm.closest('[data-role-chip]');
+      if (chip) chip.remove();
+      sync();
+    });
+    sync();
+  });
+
+  // ---- Collapsible role cards (Pet Store Roles & Permissions) ----------
+  function toggleRoleCard(card, btn) {
+    if (!card) return;
+    if (!btn) btn = card.querySelector('[data-role-toggle]');
+
+    var isExpanding = !card.classList.contains('is-expanded');
+    var chevron = card.querySelector('.role-card-chevron');
+
+    // 1. Set ARIA state immediately
+    if (btn) {
+      btn.setAttribute('aria-expanded', isExpanding ? 'true' : 'false');
+      var label = btn.getAttribute('aria-label') || '';
+      btn.setAttribute('aria-label', isExpanding ? label.replace(/Show/i, 'Hide') : label.replace(/Hide/i, 'Show'));
+    }
+
+    // 2. Rotate chevron explicitly
+    if (chevron) {
+      chevron.style.transform = isExpanding ? 'rotate(180deg)' : 'rotate(0deg)';
+    }
+
+    // 3. Toggle expanded class on card
+    card.classList.toggle('is-expanded', isExpanding);
+  }
+
+  // Delegated click listener so clicks on the toggle button, the chevron SVG, or the card toggle reliably
+  document.addEventListener('click', function (ev) {
+    var toggle = ev.target.closest('[data-role-toggle]');
+    if (toggle) {
+      var card = toggle.closest('[data-role-card]');
+      if (card) {
+        ev.preventDefault();
+        toggleRoleCard(card, toggle);
+      }
+      return;
+    }
+
+    // Clicking anywhere on the role card outside interactive form elements also toggles
+    var card = ev.target.closest('[data-role-card]');
+    if (card && !ev.target.closest('a, button, input, select, textarea, label, form, .badge, code')) {
+      var btn = card.querySelector('[data-role-toggle]');
+      if (btn) {
+        toggleRoleCard(card, btn);
+      }
+    }
+  });
+
+  // ---- Active Navigation Indicators (Section 8: Topbar & Admin Subnav) ---
+  function initActiveNavIndicators() {
+    var navConfigs = [
+      {
+        container: document.querySelector('.topbar nav'),
+        storageKey: 'vetgrpet_topbar_active_rect',
+        isCurrent: function (link, pathname) {
+          if (link.classList.contains('is-current')) return true;
+          var linkPath = link.getAttribute('href');
+          if (!linkPath || linkPath.startsWith('#') || linkPath.startsWith('javascript:')) return false;
+          linkPath = linkPath.split('?')[0].replace(/\/+$/, '') || '/';
+          if (linkPath === '/workspace' && (pathname.startsWith('/sysadmin') || pathname.startsWith('/manager') || pathname.startsWith('/super-admin') || pathname.startsWith('/workspace'))) {
+            return true;
+          }
+          if (linkPath === '/' && pathname === '/') return true;
+          if (linkPath !== '/' && pathname.startsWith(linkPath)) return true;
+          return false;
+        },
+        activeClass: 'is-current'
+      },
+      {
+        container: document.querySelector('.admin-subnav'),
+        storageKey: 'vetgrpet_subnav_active_rect',
+        isCurrent: function (link, pathname) {
+          if (link.classList.contains('is-active')) return true;
+          var linkPath = link.getAttribute('href');
+          if (!linkPath || linkPath.startsWith('#')) return false;
+          linkPath = linkPath.split('?')[0].replace(/\/+$/, '') || '/';
+          var cleanCurrent = pathname.replace(/\/+$/, '') || '/';
+          return linkPath === cleanCurrent;
+        },
+        activeClass: 'is-active'
+      }
+    ];
+
+    var isReload = false;
+    try {
+      var navEntry = performance.getEntriesByType && performance.getEntriesByType('navigation')[0];
+      if (navEntry && navEntry.type === 'reload') {
+        isReload = true;
+      } else if (window.performance && window.performance.navigation && window.performance.navigation.type === 1) {
+        isReload = true;
+      }
+    } catch (e) {}
+
+    navConfigs.forEach(function (cfg) {
+      var container = cfg.container;
+      if (!container) return;
+
+      container.classList.add('has-nav-indicator');
+
+      var indicator = container.querySelector('.nav-active-indicator');
+      if (!indicator) {
+        indicator = document.createElement('span');
+        indicator.className = 'nav-active-indicator';
+        indicator.setAttribute('aria-hidden', 'true');
+        container.appendChild(indicator);
+      }
+
+      function updateActiveItem(clickedLink) {
+        var links = Array.from(container.querySelectorAll('a'));
+        var currentPath = window.location.pathname;
+        var activeLink = clickedLink || null;
+
+        if (!activeLink) {
+          for (var i = 0; i < links.length; i++) {
+            if (cfg.isCurrent(links[i], currentPath)) {
+              activeLink = links[i];
+              break;
+            }
+          }
+        }
+
+        if (!activeLink && links.length > 0 && links[0].classList.contains(cfg.activeClass)) {
+          activeLink = links[0];
+        }
+
+        links.forEach(function (lnk) {
+          if (lnk === activeLink) {
+            lnk.classList.add(cfg.activeClass);
+          } else {
+            lnk.classList.remove(cfg.activeClass);
+          }
+        });
+
+        if (!activeLink) {
+          indicator.style.opacity = '0';
+          return;
+        }
+
+        var navRect = container.getBoundingClientRect();
+        var linkRect = activeLink.getBoundingClientRect();
+        var targetLeft = linkRect.left - navRect.left + container.scrollLeft + 6;
+        var targetWidth = Math.max(14, linkRect.width - 12);
+
+        var prevStored = null;
+        try {
+          var raw = sessionStorage.getItem(cfg.storageKey);
+          if (raw) prevStored = JSON.parse(raw);
+        } catch (e) {}
+
+        var hadTransition = prevStored && (Date.now() - prevStored.time < 4000) && prevStored.path !== currentPath;
+
+        if (isReload) {
+          indicator.style.transition = 'none';
+          indicator.style.left = targetLeft + 'px';
+          indicator.style.width = targetWidth + 'px';
+          indicator.style.opacity = '1';
+        } else if (hadTransition && !reducedMotion) {
+          indicator.style.transition = 'none';
+          indicator.style.left = prevStored.left + 'px';
+          indicator.style.width = prevStored.width + 'px';
+          indicator.style.opacity = '1';
+
+          requestAnimationFrame(function () {
+            requestAnimationFrame(function () {
+              indicator.style.transition = 'left 240ms cubic-bezier(0.23, 1, 0.32, 1), width 240ms cubic-bezier(0.23, 1, 0.32, 1), opacity 180ms ease';
+              indicator.style.left = targetLeft + 'px';
+              indicator.style.width = targetWidth + 'px';
+            });
+          });
+          try { sessionStorage.removeItem(cfg.storageKey); } catch (e) {}
+        } else if (!reducedMotion && !prevStored) {
+          var center = targetLeft + (targetWidth / 2);
+          indicator.style.transition = 'none';
+          indicator.style.left = center + 'px';
+          indicator.style.width = '0px';
+          indicator.style.opacity = '0';
+
+          requestAnimationFrame(function () {
+            requestAnimationFrame(function () {
+              indicator.style.transition = 'left 220ms cubic-bezier(0.23, 1, 0.32, 1), width 220ms cubic-bezier(0.23, 1, 0.32, 1), opacity 180ms ease';
+              indicator.style.left = targetLeft + 'px';
+              indicator.style.width = targetWidth + 'px';
+              indicator.style.opacity = '1';
+            });
+          });
+        } else {
+          indicator.style.transition = 'left 220ms cubic-bezier(0.23, 1, 0.32, 1), width 220ms cubic-bezier(0.23, 1, 0.32, 1), opacity 180ms ease';
+          indicator.style.left = targetLeft + 'px';
+          indicator.style.width = targetWidth + 'px';
+          indicator.style.opacity = '1';
+        }
+
+        try {
+          sessionStorage.setItem(cfg.storageKey, JSON.stringify({
+            left: targetLeft,
+            width: targetWidth,
+            path: currentPath,
+            time: Date.now()
+          }));
+        } catch (e) {}
+      }
+
+      container.addEventListener('click', function (ev) {
+        var link = ev.target.closest('a');
+        if (!link || !container.contains(link)) return;
+        var href = link.getAttribute('href');
+        if (!href || href.startsWith('#') || href.startsWith('javascript:')) return;
+
+        var navRect = container.getBoundingClientRect();
+        var linkRect = link.getBoundingClientRect();
+        var targetLeft = linkRect.left - navRect.left + container.scrollLeft + 6;
+        var targetWidth = Math.max(14, linkRect.width - 12);
+
+        try {
+          sessionStorage.setItem(cfg.storageKey, JSON.stringify({
+            left: targetLeft,
+            width: targetWidth,
+            path: window.location.pathname,
+            time: Date.now()
+          }));
+        } catch (e) {}
+
+        indicator.style.transition = 'left 220ms cubic-bezier(0.23, 1, 0.32, 1), width 220ms cubic-bezier(0.23, 1, 0.32, 1), opacity 180ms ease';
+        indicator.style.left = targetLeft + 'px';
+        indicator.style.width = targetWidth + 'px';
+        indicator.style.opacity = '1';
+
+        var links = Array.from(container.querySelectorAll('a'));
+        links.forEach(function (l) {
+          if (l === link) l.classList.add(cfg.activeClass);
+          else l.classList.remove(cfg.activeClass);
+        });
+      });
+
+      updateActiveItem();
+
+      window.addEventListener('popstate', function () {
+        updateActiveItem();
+      });
+      window.addEventListener('pageshow', function () {
+        updateActiveItem();
+      });
+
+      var resizeTimer;
+      window.addEventListener('resize', function () {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(function () {
+          updateActiveItem();
+        }, 60);
+      });
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initActiveNavIndicators);
+  } else {
+    initActiveNavIndicators();
   }
 
   // ---- Full-Height Living Woodland & Animated Pet World Engine ----------
