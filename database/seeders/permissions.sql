@@ -59,7 +59,7 @@ FROM role r JOIN permission p ON p.permission_code IN (
     'clinical.records.manage',
     'appointment.view'
 )
-WHERE r.role_name = 'VETERINARIAN';
+WHERE r.role_name IN ('VETERINARIAN', 'VETERINARIAN_WORKSPACE');
 
 INSERT IGNORE INTO role_permission (role_id, permission_id)
 SELECT r.role_id, p.permission_id
@@ -67,12 +67,12 @@ FROM role r JOIN permission p ON p.permission_code IN (
     'clinical.records.view',
     'appointment.view'
 )
-WHERE r.role_name = 'NURSE';
+WHERE r.role_name IN ('NURSE', 'VETERINARY_NURSE_WORKSPACE');
 
 INSERT IGNORE INTO role_permission (role_id, permission_id)
 SELECT r.role_id, p.permission_id
 FROM role r JOIN permission p ON p.permission_code IN ('appointment.view')
-WHERE r.role_name = 'TECHNICIAN';
+WHERE r.role_name IN ('TECHNICIAN', 'VETERINARY_TECHNICIAN_WORKSPACE');
 
 INSERT IGNORE INTO role_permission (role_id, permission_id)
 SELECT r.role_id, p.permission_id

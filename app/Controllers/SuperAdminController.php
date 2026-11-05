@@ -1,4 +1,4 @@
-<?php
+ <?php
 declare(strict_types=1);
 
 namespace App\Controllers;
@@ -324,7 +324,7 @@ final class SuperAdminController extends Controller
              LEFT JOIN role_permission rp ON rp.role_id = r.role_id
              LEFT JOIN permission p ON p.permission_id = rp.permission_id
              GROUP BY r.role_id, r.role_name, r.description
-             ORDER BY FIELD(r.role_name, 'SUPER_ADMINISTRATOR', 'SYSTEM_ADMINISTRATOR', 'BUSINESS_MANAGER', 'INVENTORY_MANAGER', 'DELIVERY_PERSONNEL', 'VETERINARIAN', 'NURSE', 'TECHNICIAN', 'RECEPTIONIST'), r.role_name"
+             ORDER BY FIELD(r.role_name, 'SUPER_ADMINISTRATOR', 'SYSTEM_ADMINISTRATOR', 'BUSINESS_MANAGER', 'INVENTORY_MANAGER', 'DELIVERY_PERSONNEL', 'VETERINARIAN_WORKSPACE', 'VETERINARY_NURSE_WORKSPACE', 'VETERINARY_TECHNICIAN_WORKSPACE', 'VETERINARIAN', 'NURSE', 'TECHNICIAN', 'RECEPTIONIST'), r.role_name"
         )->fetchAll();
 
         $permissions = $this->db->query(

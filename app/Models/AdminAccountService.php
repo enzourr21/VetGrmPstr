@@ -10,10 +10,24 @@ use Throwable;
 final class AdminAccountService
 {
     /** Clinical roles restricted strictly to Veterinary Clinic. */
-    public const CLINICAL_ROLES = ['VETERINARIAN', 'NURSE', 'TECHNICIAN'];
+    public const CLINICAL_ROLES = [
+        'VETERINARIAN',
+        'NURSE',
+        'TECHNICIAN',
+        'VETERINARIAN_WORKSPACE',
+        'VETERINARY_NURSE_WORKSPACE',
+        'VETERINARY_TECHNICIAN_WORKSPACE',
+    ];
+
+    /** Three veterinary-specific workspace roles. */
+    public const VET_WORKSPACE_ROLES = [
+        'VETERINARIAN_WORKSPACE',
+        'VETERINARY_NURSE_WORKSPACE',
+        'VETERINARY_TECHNICIAN_WORKSPACE',
+    ];
 
     /** Roles that exist only for the Pet Store business unit. */
-    public const PET_STORE_ROLES = ['INVENTORY_MANAGER', 'DELIVERY_PERSONNEL'];
+    public const PET_STORE_ROLES = ['DELIVERY_PERSONNEL'];
 
     /** Explicit mapping of default position title to designated initial system role name. */
     public const POSITION_INITIAL_ROLE_MAP = [
@@ -23,15 +37,35 @@ final class AdminAccountService
         'Inventory Manager' => 'INVENTORY_MANAGER',
         'Receptionist' => 'RECEPTIONIST',
         // Veterinary Clinic
-        'Lead Veterinarian' => 'VETERINARIAN',
-        'Associate Veterinarian' => 'VETERINARIAN',
-        'Senior Veterinary Nurse' => 'NURSE',
-        'Veterinary Technician' => 'TECHNICIAN',
+        'Veterinarian (DVM)' => 'VETERINARIAN_WORKSPACE',
+        'Veterinary Nurse' => 'VETERINARY_NURSE_WORKSPACE',
+        'Veterinary Technician' => 'VETERINARY_TECHNICIAN_WORKSPACE',
+        'Veterinary Receptionist' => 'RECEPTIONIST',
+        'Lead Veterinarian' => 'VETERINARIAN_WORKSPACE',
+        'Associate Veterinarian' => 'VETERINARIAN_WORKSPACE',
+        'Senior Veterinary Nurse' => 'VETERINARY_NURSE_WORKSPACE',
         'Business Manager — Veterinary Clinic' => 'BUSINESS_MANAGER',
         // Grooming Services
         'Master Pet Stylist & Reception Coordinator' => 'RECEPTIONIST',
         'Business Manager — Grooming Services' => 'BUSINESS_MANAGER',
     ];
+
+    public static function normalizeRoleName(string $role): string
+    {
+        $role = trim($role);
+        $upper = strtoupper(str_replace([' ', '-'], '_', $role));
+        return match ($upper) {
+            'VETERINARIAN', 'VETERINARIAN_WORKSPACE' => 'VETERINARIAN_WORKSPACE',
+            'NURSE', 'VETERINARY_NURSE', 'VETERINARY_NURSE_WORKSPACE' => 'VETERINARY_NURSE_WORKSPACE',
+            'TECHNICIAN', 'VETERINARY_TECHNICIAN', 'VETERINARY_TECHNICIAN_WORKSPACE' => 'VETERINARY_TECHNICIAN_WORKSPACE',
+            'SYSTEM_ADMINISTRATOR', 'SYSADMIN' => 'SYSTEM_ADMINISTRATOR',
+            'BUSINESS_MANAGER' => 'BUSINESS_MANAGER',
+            'RECEPTIONIST', 'VETERINARY_RECEPTIONIST' => 'RECEPTIONIST',
+            'INVENTORY_MANAGER' => 'INVENTORY_MANAGER',
+            'DELIVERY_PERSONNEL' => 'DELIVERY_PERSONNEL',
+            default => $upper,
+        };
+    }
 
     public static function initialRoleForPosition(string $position, ?string $unitName = null): ?string
     {
@@ -54,6 +88,9 @@ final class AdminAccountService
         'SYSTEM_ADMINISTRATOR',
         'BUSINESS_MANAGER',
         'RECEPTIONIST',
+        'VETERINARIAN_WORKSPACE',
+        'VETERINARY_NURSE_WORKSPACE',
+        'VETERINARY_TECHNICIAN_WORKSPACE',
         'VETERINARIAN',
         'NURSE',
         'TECHNICIAN',
@@ -66,19 +103,55 @@ final class AdminAccountService
             "SELECT role_id, role_name, description
              FROM role
              WHERE role_name <> 'SUPER_ADMINISTRATOR'
-             ORDER BY FIELD(role_name, 'SYSTEM_ADMINISTRATOR', 'BUSINESS_MANAGER', 'INVENTORY_MANAGER', 'DELIVERY_PERSONNEL', 'VETERINARIAN', 'NURSE', 'TECHNICIAN', 'RECEPTIONIST'), role_name"
+             ORDER BY FIELD(role_name,
+                'SYSTEM_ADMINISTRATOR',
+                'BUSINESS_MANAGER',
+                'INVENTORY_MANAGER',
+                'RECEPTIONIST',
+                'VETERINARIAN_WORKSPACE',
+                'VETERINARY_NURSE_WORKSPACE',
+                'VETERINARY_TECHNICIAN_WORKSPACE',
+                'DELIVERY_PERSONNEL',
+                'VETERINARIAN',
+                'NURSE',
+                'TECHNICIAN'
+             ), role_name"
         )->fetchAll();
 
-        if ($unitName !== Units::VET_CLINIC) {
+        if ($unitName === Units::VET_CLINIC) {
+            // Veterinary Clinic: retain applicable shared roles (SYSTEM_ADMINISTRATOR, BUSINESS_MANAGER, INVENTORY_MANAGER, RECEPTIONIST)
+            // and the three veterinary-specific workspace roles; exclude DELIVERY_PERSONNEL and legacy unaliased roles
             $rows = array_values(array_filter(
                 $rows,
-                fn(array $r): bool => !in_array($r['role_name'], self::CLINICAL_ROLES, true)
+                fn(array $r): bool => in_array($r['role_name'], [
+                    'SYSTEM_ADMINISTRATOR',
+                    'BUSINESS_MANAGER',
+                    'INVENTORY_MANAGER',
+                    'RECEPTIONIST',
+                    'VETERINARIAN_WORKSPACE',
+                    'VETERINARY_NURSE_WORKSPACE',
+                    'VETERINARY_TECHNICIAN_WORKSPACE',
+                ], true)
             ));
-        }
-        if ($unitName !== Units::PET_STORE) {
+        } elseif ($unitName === Units::PET_STORE) {
             $rows = array_values(array_filter(
                 $rows,
-                fn(array $r): bool => !in_array($r['role_name'], self::PET_STORE_ROLES, true)
+                fn(array $r): bool => in_array($r['role_name'], [
+                    'SYSTEM_ADMINISTRATOR',
+                    'BUSINESS_MANAGER',
+                    'INVENTORY_MANAGER',
+                    'RECEPTIONIST',
+                    'DELIVERY_PERSONNEL',
+                ], true)
+            ));
+        } else {
+            $rows = array_values(array_filter(
+                $rows,
+                fn(array $r): bool => in_array($r['role_name'], [
+                    'SYSTEM_ADMINISTRATOR',
+                    'BUSINESS_MANAGER',
+                    'RECEPTIONIST',
+                ], true)
             ));
         }
         return $rows;
@@ -226,7 +299,8 @@ final class AdminAccountService
                 $byName[strtoupper((string)$r['role_name'])] = $r;
             }
             foreach ($rawRoles as $rv) {
-                $rObj = ctype_digit($rv) ? ($byId[$rv] ?? null) : ($byName[strtoupper($rv)] ?? null);
+                $norm = self::normalizeRoleName($rv);
+                $rObj = ctype_digit($rv) ? ($byId[$rv] ?? null) : ($byName[$norm] ?? ($byName[strtoupper($rv)] ?? null));
                 if (!$rObj) {
                     $errors['roles'] = 'One or more selected roles do not exist.';
                     break;
@@ -243,6 +317,10 @@ final class AdminAccountService
                     $errors['roles'] = "The role {$rObj['role_name']} can only be assigned in the Pet Store business unit.";
                     break;
                 }
+                if ($unit && $unit['business_unit_name'] === Units::VET_CLINIC && $rObj['role_name'] === 'DELIVERY_PERSONNEL') {
+                    $errors['roles'] = "The DELIVERY_PERSONNEL role cannot be assigned in the Veterinary Clinic business unit.";
+                    break;
+                }
                 $resolvedRoleIds[] = (int)$rObj['role_id'];
                 $resolvedRoleNames[] = (string)$rObj['role_name'];
             }
@@ -251,7 +329,7 @@ final class AdminAccountService
         }
 
         // 7. Password validation (skipped for invitation flow)
-        $isInvitation = !empty($input['is_invitation']) || ($unit && $unit['business_unit_name'] === Units::PET_STORE && !isset($input['password']));
+        $isInvitation = !empty($input['is_invitation']) || ($unit && in_array($unit['business_unit_name'], [Units::PET_STORE, Units::VET_CLINIC], true) && !isset($input['password']));
         $password = is_string($input['password'] ?? null) ? $input['password'] : '';
         if (!$isInvitation) {
             if (strlen($password) < 10) {

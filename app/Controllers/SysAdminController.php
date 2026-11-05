@@ -68,9 +68,14 @@ final class SysAdminController extends Controller
         return $emp;
     }
 
+    private function isPetOrVet(string $unitName): bool
+    {
+        return in_array($unitName, [Units::PET_STORE, Units::VET_CLINIC], true);
+    }
+
     private function isPetStore(string $unitName): bool
     {
-        return $unitName === Units::PET_STORE;
+        return $this->isPetOrVet($unitName);
     }
 
     private function suffix(bool $isSuper, int $unitId): string
@@ -312,7 +317,8 @@ final class SysAdminController extends Controller
             if (strtoupper($rv) === 'SUPER_ADMINISTRATOR') {
                 $this->forbidden('System Administrators cannot grant Super Administrator access.');
             }
-            $rObj = ctype_digit($rv) ? ($allowedById[$rv] ?? null) : ($allowedByName[strtoupper($rv)] ?? null);
+            $norm = AdminAccountService::normalizeRoleName($rv);
+            $rObj = ctype_digit($rv) ? ($allowedById[$rv] ?? null) : ($allowedByName[$norm] ?? ($allowedByName[strtoupper($rv)] ?? null));
             if (!$rObj) {
                 http_response_code(422);
                 Session::flash('error', "Role '$rv' is not valid for $unitName.");
@@ -655,7 +661,7 @@ final class SysAdminController extends Controller
         ]);
     }
 
-    /** Administrative Activity Log (Pet Store only); always scoped to the authorized business unit. */
+    /** Administrative Activity Log (Pet Store & Veterinary Clinic); always scoped to the authorized business unit. */
     public function activity(?int $routeUnitId = null): void
     {
         [, , $unitId, $unitName, $isSuper] = $this->requireSystemAdmin($routeUnitId);

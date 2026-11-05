@@ -180,7 +180,7 @@ final class HomeController extends Controller
              WHERE e.employee_status = 'active'
                AND e.position NOT IN ('Super Administrator', 'System Administrator')
              GROUP BY e.employee_id, e.first_name, e.last_name, e.position
-             ORDER BY FIELD( MIN(r.role_name), 'BUSINESS_MANAGER', 'VETERINARIAN', 'NURSE', 'TECHNICIAN', 'RECEPTIONIST' ), e.last_name"
+             ORDER BY FIELD( MIN(r.role_name), 'BUSINESS_MANAGER', 'VETERINARIAN_WORKSPACE', 'VETERINARIAN', 'VETERINARY_NURSE_WORKSPACE', 'NURSE', 'VETERINARY_TECHNICIAN_WORKSPACE', 'TECHNICIAN', 'RECEPTIONIST' ), e.last_name"
         )->fetchAll();
     }
 

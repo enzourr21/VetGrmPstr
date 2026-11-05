@@ -46,7 +46,10 @@ $unitQuery = !empty($isSuper) ? '?unit_id=' . (int)$unitId : '';
                   <div class="row" style="gap: 0.65rem; flex-wrap: wrap;">
                     <?php foreach ($assignableRoles as $r):
                       $rName = (string)$r['role_name'];
-                      $hasRole = in_array($rName, $currentRoles, true);
+                      $hasRole = in_array($rName, $currentRoles, true)
+                        || ($rName === 'VETERINARIAN_WORKSPACE' && in_array('VETERINARIAN', $currentRoles, true))
+                        || ($rName === 'VETERINARY_NURSE_WORKSPACE' && in_array('NURSE', $currentRoles, true))
+                        || ($rName === 'VETERINARY_TECHNICIAN_WORKSPACE' && in_array('TECHNICIAN', $currentRoles, true));
                     ?>
                       <label style="display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.82rem; font-weight: 500; cursor: pointer;">
                         <input type="checkbox" name="roles[]" value="<?= e($rName) ?>" <?= $hasRole ? 'checked' : '' ?> style="width: auto;">
