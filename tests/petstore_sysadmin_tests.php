@@ -135,9 +135,12 @@ check('Pet Store admin logs in to /sysadmin', $r['status'] === 302 && $r['locati
 $dash = $pet->get('/sysadmin');
 check('Dashboard no longer shows "Add Unit Employee"', !str_contains($dash['body'], 'Add Unit Employee'));
 check('Dashboard no longer shows "Manage Positions"', !str_contains($dash['body'], 'Manage Positions'));
-check('Dashboard keeps Business Unit Scope + Unit Employees cards, form and roster', str_contains($dash['body'], 'Business Unit Scope') && str_contains($dash['body'], 'Unit Employees') && str_contains($dash['body'], 'Create Employee in Pet Store') && str_contains($dash['body'], 'Unit Employee Roster'));
-check('Dashboard roster has Show All + modal', str_contains($dash['body'], 'data-modal-open="roster-modal"') && str_contains($dash['body'], 'id="roster-modal"'));
-check('Roster uses vertical-scroll list (no horizontal table-wrap)', str_contains($dash['body'], 'roster-list') && !str_contains($dash['body'], 'table-wrap'));
+check('Dashboard heading is Pet Store Administration without greeting', preg_match('/<h1[^>]*>\s*Pet Store Administration\s*<\/h1>/i', $dash['body']) && !preg_match('/Welcome\s*(back)?/i', $dash['body']));
+check('Dashboard subtitle is System Administrator · Pet Store · Unit #1', (bool)preg_match('/System Administrator\s*·\s*Pet Store\s*·\s*Unit #1/i', $dash['body']));
+check('Dashboard has 4 stat cards in order: Total -> Active -> Roles -> Positions', strpos($dash['body'], 'Total Employees') < strpos($dash['body'], 'Active Employees') && strpos($dash['body'], 'Active Employees') < strpos($dash['body'], 'System Roles') && strpos($dash['body'], 'System Roles') < strpos($dash['body'], 'Active Positions'));
+check('Dashboard has Administrative Attention section below statistics', strpos($dash['body'], 'Administrative Attention') > strpos($dash['body'], 'Active Positions'));
+check('Dashboard has Recent Administrative Activity section with full log link', strpos($dash['body'], 'Recent Administrative Activity') > strpos($dash['body'], 'Administrative Attention') && preg_match('/href="\/sysadmin\/activity(\?[^"]*)?"/i', $dash['body']));
+check('Overview excludes roster, employee creation form and modal', !str_contains($dash['body'], 'Unit Employee Roster') && !str_contains($dash['body'], 'id="add-employee-form"') && !str_contains($dash['body'], 'id="add-employee-modal"'));
 check('Nav shows Activity Log and no Unit Positions', str_contains($dash['body'], '>Activity Log<') && !preg_match('/class="segmented-pill[^"]*">Unit Positions<\/a>/', $dash['body']));
 preg_match_all('/<a [^>]*class="segmented-pill[^"]*"[^>]*>([^<]+)<\/a>/', $dash['body'], $navTabs);
 $cleanTabs = array_map(fn($t) => html_entity_decode(trim($t)), $navTabs[1]);

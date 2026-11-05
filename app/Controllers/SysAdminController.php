@@ -105,6 +105,13 @@ final class SysAdminController extends Controller
         [, , $unitId, $unitName, $isSuper] = $this->requireSystemAdmin($routeUnitId);
         $employees = $this->unitEmployees($unitId);
         $positions = AdminAccountService::positionsForUnit($unitId, false);
+        $assignableRoles = AdminAccountService::assignableRolesForUnit($unitName);
+
+        $activeEmployees = count(array_filter($employees, fn($e) => $e['employee_status'] === 'active' && $e['account_status'] === 'active'));
+        $totalEmployees = count($employees);
+        $totalRoles = count($assignableRoles);
+        $activePositionCount = count(array_filter($positions, fn($p) => $p['position_status'] === 'active'));
+        $totalPositionCount = count($positions);
 
         $sysAdminCount = 0;
         foreach ($employees as $e) {
@@ -113,13 +120,69 @@ final class SysAdminController extends Controller
             }
         }
 
+        // Administrative Attention items (scoped strictly to current business unit)
+        $attentionItems = [];
+
+        // 1. Pending employee invitations (email_verified_at IS NULL AND active)
+        $pendingInvites = $this->db->prepare(
+            "SELECT e.employee_id, e.first_name, e.last_name, e.position, ua.email, ua.created_at
+             FROM employee e
+             JOIN user_account ua ON ua.user_account_id = e.user_account_id
+             WHERE e.business_unit_id = ? AND ua.email_verified_at IS NULL AND ua.account_status = 'active'
+             ORDER BY ua.created_at DESC"
+        );
+        $pendingInvites->execute([$unitId]);
+        foreach ($pendingInvites->fetchAll() as $inv) {
+            $attentionItems[] = [
+                'type' => 'pending_invitation',
+                'badge' => 'Pending Invitation',
+                'badge_class' => 'warn',
+                'title' => "Invitation pending for {$inv['first_name']} {$inv['last_name']}",
+                'subtitle' => "{$inv['email']} · Assigned position: {$inv['position']}",
+                'time' => $inv['created_at'],
+                'action_url' => '/sysadmin/employees' . $this->suffix($isSuper, $unitId),
+                'action_label' => 'View in Employees',
+            ];
+        }
+
+        // 2. Inactive employee accounts in this unit
+        $inactiveAccounts = $this->db->prepare(
+            "SELECT e.employee_id, e.first_name, e.last_name, e.position, ua.email, ua.updated_at
+             FROM employee e
+             JOIN user_account ua ON ua.user_account_id = e.user_account_id
+             WHERE e.business_unit_id = ? AND (ua.account_status = 'inactive' OR e.employee_status = 'inactive')
+             ORDER BY ua.updated_at DESC"
+        );
+        $inactiveAccounts->execute([$unitId]);
+        foreach ($inactiveAccounts->fetchAll() as $inact) {
+            $attentionItems[] = [
+                'type' => 'inactive_account',
+                'badge' => 'Inactive Account',
+                'badge_class' => 'neutral',
+                'title' => "Inactive account: {$inact['first_name']} {$inact['last_name']}",
+                'subtitle' => "{$inact['email']} · Position: {$inact['position']}",
+                'time' => $inact['updated_at'],
+                'action_url' => '/sysadmin/employees' . $this->suffix($isSuper, $unitId),
+                'action_label' => 'Review Account',
+            ];
+        }
+
+        // Recent administrative activity (most recent relevant events from audit_log for this unit)
+        $recentActivityData = Audit::activityForUnit($unitId, [], 1, 6);
+        $recentActivity = $recentActivityData['rows'];
+
         $data = $this->employeesData($unitId, $unitName, $isSuper);
-        $data['title'] = "$unitName · System Administrator";
+        $data['title'] = "$unitName System Administrator · Overview";
         $data['activeTab'] = 'dashboard';
         $data['positions'] = $this->isPetStore($unitName) ? $data['positions'] : $positions;
-        $data['activePositionCount'] = count(array_filter($positions, fn($p) => $p['position_status'] === 'active'));
-        $data['totalPositionCount'] = count($positions);
+        $data['activePositionCount'] = $activePositionCount;
+        $data['totalPositionCount'] = $totalPositionCount;
+        $data['totalEmployees'] = $totalEmployees;
+        $data['activeEmployees'] = $activeEmployees;
+        $data['totalRoles'] = $totalRoles;
         $data['sysAdminCount'] = $sysAdminCount;
+        $data['attentionItems'] = $attentionItems;
+        $data['recentActivity'] = $recentActivity;
         $data['recentLogs'] = Audit::recent(10, $unitId);
         $this->render('sysadmin/dashboard', $data);
     }
