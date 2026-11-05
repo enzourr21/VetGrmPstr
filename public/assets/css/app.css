@@ -2000,7 +2000,8 @@ a.btn.btn-sm {
   padding-right: 0.25rem;
 }
 
-.roster-list-full {
+.roster-list-full,
+.roster-list-paginated {
   max-height: none;
   overflow: visible;
 }
@@ -2069,6 +2070,28 @@ a.btn.btn-sm {
   flex: 1 1 10rem;
   height: 2.15rem;
   font-size: 0.82rem;
+}
+
+/* Horizontal center-aligned pagination controls */
+.pagination-centered {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.85rem;
+  margin: 1.5rem auto 0.5rem;
+  text-align: center;
+  width: 100%;
+}
+
+.pagination-centered .pagination-status {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--text-heading, #1f2937);
+}
+
+.pagination-centered .pagination-sep {
+  color: var(--text-muted, #9ca3af);
+  user-select: none;
 }
 
 .position-list {

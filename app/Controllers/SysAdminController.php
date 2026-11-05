@@ -81,6 +81,7 @@ final class SysAdminController extends Controller
     /** Shared view data for the employees page (and the Pet Store dashboard employee form). */
     private function employeesData(int $unitId, string $unitName, bool $isSuper, array $errors = [], array $old = []): array
     {
+        $all = $this->unitEmployees($unitId);
         return [
             'title' => "Employees · $unitName System Admin",
             'activeTab' => 'employees',
@@ -89,7 +90,8 @@ final class SysAdminController extends Controller
             'isSuper' => $isSuper,
             'isPetStore' => $this->isPetStore($unitName),
             'allUnits' => $isSuper ? Units::all() : [],
-            'employees' => $this->unitEmployees($unitId),
+            'allEmployees' => $all,
+            'employees' => $all,
             'positions' => AdminAccountService::positionsForUnit($unitId, true),
             'allPositions' => AdminAccountService::positionsForUnit($unitId, false),
             'assignableRoles' => AdminAccountService::assignableRolesForUnit($unitName),
@@ -125,7 +127,24 @@ final class SysAdminController extends Controller
     public function employees(?int $routeUnitId = null): void
     {
         [, , $unitId, $unitName, $isSuper] = $this->requireSystemAdmin($routeUnitId);
-        $this->render('sysadmin/employees', $this->employeesData($unitId, $unitName, $isSuper));
+        $data = $this->employeesData($unitId, $unitName, $isSuper);
+        if ($this->isPetStore($unitName)) {
+            $perPage = 6;
+            $all = $data['allEmployees'];
+            $totalEmployees = count($all);
+            $totalPages = max(1, (int)ceil($totalEmployees / $perPage));
+            $currentPage = max(1, (int)($_GET['page'] ?? 1));
+            if ($currentPage > $totalPages) {
+                $currentPage = $totalPages;
+            }
+            $offset = ($currentPage - 1) * $perPage;
+            $data['currentPage'] = $currentPage;
+            $data['totalPages'] = $totalPages;
+            $data['perPage'] = $perPage;
+            $data['totalEmployees'] = $totalEmployees;
+            $data['employees'] = array_slice($all, $offset, $perPage);
+        }
+        $this->render('sysadmin/employees', $data);
     }
 
     public function storeEmployee(?int $routeUnitId = null): void
@@ -137,7 +156,17 @@ final class SysAdminController extends Controller
         if (!is_array($rawRoles)) {
             $rawRoles = $rawRoles !== '' ? [$rawRoles] : [];
         }
+        $position = $this->post('position');
 
+        // Automatically assign initial role for position if not already present
+        if ($position !== '') {
+            $initRole = AdminAccountService::initialRoleForPosition($position, $unitName);
+            if ($initRole !== null && !in_array($initRole, $rawRoles, true)) {
+                array_unshift($rawRoles, $initRole);
+            }
+        }
+
+        $isPetStore = $this->isPetStore($unitName);
         $input = [
             'full_name' => $this->post('full_name'),
             'first_name' => $this->post('first_name'),
@@ -145,23 +174,43 @@ final class SysAdminController extends Controller
             'email' => $this->post('email'),
             'username' => $this->post('username'),
             'business_unit_id' => $unitId,
-            'position' => $this->post('position'),
+            'position' => $position,
             'roles' => $rawRoles,
-            'password' => $_POST['password'] ?? '',
             'phone' => $this->post('phone'),
+            'is_invitation' => $isPetStore,
         ];
+        if (!$isPetStore && isset($_POST['password'])) {
+            $input['password'] = $_POST['password'];
+        }
 
         $res = AdminAccountService::createEmployeeAccount($input, $unitId, $actorUid);
         if (!$res['ok']) {
             http_response_code(422);
-            Session::flash('error', 'Could not create employee account. Please check the form errors.');
+            Session::flash('error', $isPetStore ? 'Could not send employee invitation. Please check the form errors.' : 'Could not create employee account. Please check the form errors.');
             $oldSafe = $input;
             unset($oldSafe['password']);
-            $this->render('sysadmin/employees', $this->employeesData($unitId, $unitName, $isSuper, $res['errors'], $oldSafe));
+            $data = $this->employeesData($unitId, $unitName, $isSuper, $res['errors'], $oldSafe);
+            if ($isPetStore) {
+                $perPage = 6;
+                $all = $data['allEmployees'];
+                $totalEmployees = count($all);
+                $totalPages = max(1, (int)ceil($totalEmployees / $perPage));
+                $currentPage = max(1, (int)($_GET['page'] ?? 1));
+                if ($currentPage > $totalPages) {
+                    $currentPage = $totalPages;
+                }
+                $offset = ($currentPage - 1) * $perPage;
+                $data['currentPage'] = $currentPage;
+                $data['totalPages'] = $totalPages;
+                $data['perPage'] = $perPage;
+                $data['totalEmployees'] = $totalEmployees;
+                $data['employees'] = array_slice($all, $offset, $perPage);
+            }
+            $this->render('sysadmin/employees', $data);
             return;
         }
 
-        Session::flash('success', "Employee account created in $unitName.");
+        Session::flash('success', $isPetStore ? "Invitation link sent to {$input['email']}." : "Employee account created in $unitName.");
         $this->redirect('/sysadmin/employees' . $this->suffix($isSuper, $unitId));
     }
 

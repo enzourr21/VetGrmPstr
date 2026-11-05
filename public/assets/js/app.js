@@ -478,7 +478,7 @@
     });
   });
 
-  // ---- Native <dialog> modals (roster Show All, role picker) -----------
+  // ---- Native <dialog> modals (roster Show All, role picker, employee modal) ---
   document.querySelectorAll('[data-modal-open]').forEach(function (btn) {
     btn.addEventListener('click', function () {
       var dlgId = btn.getAttribute('data-modal-open');
@@ -487,6 +487,7 @@
         dlg._triggerBtn = btn;
         document.body.classList.add('has-modal-open');
         dlg.showModal();
+        validateEmployeeModal();
         var closeBtn = dlg.querySelector('[data-modal-close]');
         if (closeBtn && typeof closeBtn.focus === 'function') {
           setTimeout(function () { closeBtn.focus(); }, 40);
@@ -494,6 +495,88 @@
       }
     });
   });
+
+  // Auto-open modal on page load if marked (e.g. form validation error)
+  document.querySelectorAll('dialog.modal[data-open-on-load="true"]').forEach(function (dlg) {
+    if (typeof dlg.showModal === 'function' && !dlg.open) {
+      document.body.classList.add('has-modal-open');
+      dlg.showModal();
+    }
+  });
+
+  // ---- Pet Store Employee Creation Modal Validation (Send Invite Link) --
+  function validateEmployeeModal() {
+    var empForm = document.getElementById('add-employee-form');
+    if (!empForm) return;
+    var submitBtn = document.getElementById('create-emp-submit-btn') || empForm.querySelector('button[type="submit"]');
+    if (!submitBtn) return;
+
+    var nameInput = empForm.querySelector('input[name="full_name"]');
+    var emailInput = empForm.querySelector('input[name="email"]');
+    var posSelect = empForm.querySelector('select[name="position"]');
+    var chips = empForm.querySelector('[data-role-chips]');
+    var usernameInput = empForm.querySelector('input[name="username"]');
+    var phoneInput = empForm.querySelector('input[name="phone"]');
+
+    // 1. Employee full name: required, non-empty trimmed string
+    var nameVal = nameInput ? nameInput.value.trim() : '';
+    var nameValid = nameVal.length > 0;
+
+    // 2. Email address: required, valid email format
+    var emailVal = emailInput ? emailInput.value.trim() : '';
+    var emailPattern = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;
+    var emailValid = emailVal.length > 0 && emailPattern.test(emailVal);
+
+    // 3. Default position: required, non-empty selection
+    var posVal = posSelect ? posSelect.value.trim() : '';
+    var posValid = posVal.length > 0;
+
+    // 4. System roles: at least one system role chip selected
+    var roleChips = chips ? chips.querySelectorAll('[data-role-chip]') : [];
+    var rolesValid = roleChips.length > 0;
+
+    // 5. Optional username: if entered, 3-60 chars (letters, numbers, _, .)
+    var userVal = usernameInput ? usernameInput.value.trim() : '';
+    var usernameValid = userVal === '' || /^[a-zA-Z0-9_.]{3,60}$/.test(userVal);
+
+    // 6. Optional phone: if entered, 6-30 chars
+    var phoneVal = phoneInput ? phoneInput.value.trim() : '';
+    var phoneValid = phoneVal === '' || /^[0-9+()\-\s]{6,30}$/.test(phoneVal);
+
+    var allValid = nameValid && emailValid && posValid && rolesValid && usernameValid && phoneValid;
+
+    if (allValid) {
+      submitBtn.removeAttribute('disabled');
+      submitBtn.disabled = false;
+    } else {
+      submitBtn.setAttribute('disabled', 'disabled');
+      submitBtn.disabled = true;
+    }
+  }
+
+  // Prevent double submissions on employee creation form
+  var empForm = document.getElementById('add-employee-form');
+  if (empForm) {
+    empForm.addEventListener('input', validateEmployeeModal);
+    empForm.addEventListener('change', validateEmployeeModal);
+    empForm.addEventListener('submit', function (ev) {
+      if (empForm._submitting) {
+        ev.preventDefault();
+        return;
+      }
+      var submitBtn = document.getElementById('create-emp-submit-btn') || empForm.querySelector('button[type="submit"]');
+      if (submitBtn) {
+        if (submitBtn.disabled) {
+          ev.preventDefault();
+          return;
+        }
+        empForm._submitting = true;
+        submitBtn.disabled = true;
+        submitBtn.setAttribute('data-original-text', submitBtn.textContent);
+        submitBtn.textContent = 'Sending Invite Link...';
+      }
+    });
+  }
 
   document.querySelectorAll('dialog.modal').forEach(function (dlg) {
     dlg.querySelectorAll('[data-modal-close]').forEach(function (b) {
@@ -530,7 +613,17 @@
     var dlg = root.querySelector('#role-modal');
     var chips = root.querySelector('[data-role-chips]');
     var emptyHint = root.querySelector('[data-role-empty]');
-    if (!addBtn || !dlg || !chips) return;
+    var posSelect = root.querySelector('select[name="position"]');
+    if (!chips) return;
+
+    var posRoles = {};
+    if (posSelect && posSelect.getAttribute('data-position-roles')) {
+      try {
+        posRoles = JSON.parse(posSelect.getAttribute('data-position-roles') || '{}');
+      } catch (e) {
+        posRoles = {};
+      }
+    }
 
     function selected() {
       return Array.prototype.map.call(chips.querySelectorAll('[data-role-chip]'), function (c) {
@@ -539,16 +632,28 @@
     }
     function sync() {
       var sel = selected();
-      dlg.querySelectorAll('[data-role-option]').forEach(function (o) {
-        o.disabled = sel.indexOf(o.getAttribute('data-role-option')) !== -1;
-      });
+      if (dlg) {
+        dlg.querySelectorAll('[data-role-option]').forEach(function (o) {
+          o.disabled = sel.indexOf(o.getAttribute('data-role-option')) !== -1;
+        });
+      }
       if (emptyHint) emptyHint.hidden = sel.length > 0;
+      validateEmployeeModal();
     }
-    function addChip(name) {
-      if (selected().indexOf(name) !== -1) return;
+    function addChip(name, isAuto) {
+      if (selected().indexOf(name) !== -1) {
+        var existing = chips.querySelector('[data-role-chip="' + name + '"]');
+        if (existing && isAuto) {
+          existing.setAttribute('data-role-auto', 'true');
+        }
+        return;
+      }
       var chip = document.createElement('span');
-      chip.className = 'role-chip';
+      chip.className = 'role-chip' + (isAuto ? ' is-auto-role' : '');
       chip.setAttribute('data-role-chip', name);
+      if (isAuto) {
+        chip.setAttribute('data-role-auto', 'true');
+      }
       var input = document.createElement('input');
       input.type = 'hidden';
       input.name = 'roles[]';
@@ -567,25 +672,62 @@
       chips.appendChild(chip);
     }
 
-    addBtn.addEventListener('click', function () {
-      sync();
-      if (typeof dlg.showModal === 'function') {
-        dlg._triggerBtn = addBtn;
-        document.body.classList.add('has-modal-open');
-        dlg.showModal();
-        var closeBtn = dlg.querySelector('[data-modal-close]');
-        if (closeBtn && typeof closeBtn.focus === 'function') {
-          setTimeout(function () { closeBtn.focus(); }, 40);
+    function updateAutoRole(isInitial) {
+      if (!posSelect) return;
+      var currentPos = posSelect.value;
+      var targetRole = posRoles[currentPos] || null;
+      var prevAutoChip = chips.querySelector('[data-role-auto="true"]');
+      var prevAutoRole = prevAutoChip ? prevAutoChip.getAttribute('data-role-chip') : null;
+
+      // If position changed, remove previous auto-assigned chip if different
+      if (prevAutoChip && prevAutoRole !== targetRole) {
+        prevAutoChip.remove();
+      }
+
+      // Add new auto-assigned role chip if defined
+      if (targetRole) {
+        var existing = chips.querySelector('[data-role-chip="' + targetRole + '"]');
+        if (!existing) {
+          addChip(targetRole, true);
+        } else {
+          existing.setAttribute('data-role-auto', 'true');
         }
       }
-    });
-    dlg.querySelectorAll('[data-role-option]').forEach(function (o) {
-      o.addEventListener('click', function () {
-        addChip(o.getAttribute('data-role-option'));
-        sync();
-        dlg.close();
+      sync();
+    }
+
+    if (posSelect) {
+      posSelect.addEventListener('change', function () {
+        updateAutoRole(false);
       });
-    });
+      // Initial sync on load if position is selected but auto role not yet assigned
+      if (posSelect.value && !chips.querySelector('[data-role-auto="true"]')) {
+        updateAutoRole(true);
+      }
+    }
+
+    if (addBtn && dlg) {
+      addBtn.addEventListener('click', function () {
+        sync();
+        if (typeof dlg.showModal === 'function') {
+          dlg._triggerBtn = addBtn;
+          document.body.classList.add('has-modal-open');
+          dlg.showModal();
+          var closeBtn = dlg.querySelector('[data-modal-close]');
+          if (closeBtn && typeof closeBtn.focus === 'function') {
+            setTimeout(function () { closeBtn.focus(); }, 40);
+          }
+        }
+      });
+      dlg.querySelectorAll('[data-role-option]').forEach(function (o) {
+        o.addEventListener('click', function () {
+          addChip(o.getAttribute('data-role-option'), false);
+          sync();
+          dlg.close();
+        });
+      });
+    }
+
     chips.addEventListener('click', function (ev) {
       var rm = ev.target.closest('[data-role-remove]');
       if (!rm) return;
@@ -594,6 +736,7 @@
       sync();
     });
     sync();
+    validateEmployeeModal();
   });
 
   // ---- Collapsible role cards (Pet Store Roles & Permissions) ----------

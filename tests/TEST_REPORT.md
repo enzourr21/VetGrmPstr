@@ -1,6 +1,6 @@
 # Acceptance test report
 
-Generated: 2026-11-04T15:22:07+00:00 by `php tests/acceptance.php` against `http://127.0.0.1:8080`.
+Generated: 2026-11-05T08:58:08+00:00 by `php tests/acceptance.php` against `http://127.0.0.1:8080`.
 
 | # | Scenario | Result | Checks |
 |---|---|---|---|

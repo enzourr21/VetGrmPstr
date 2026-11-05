@@ -9,6 +9,16 @@ $roleDescriptions = [];
 foreach ($assignableRoles as $r) {
     $roleDescriptions[(string)$r['role_name']] = (string)$r['description'];
 }
+
+$positionRoleMap = [];
+foreach ($positions as $pos) {
+    $initRole = \App\Models\AdminAccountService::initialRoleForPosition($pos['position_name'], $unitName);
+    if ($initRole !== null) {
+        $positionRoleMap[$pos['position_name']] = $initRole;
+    }
+}
+$selectedPos = $old['position'] ?? '';
+$initialRoleForSelectedPos = $positionRoleMap[$selectedPos] ?? null;
 ?>
 <section class="card" data-role-picker>
   <h2>Create Employee in <?= e($unitName) ?></h2>
@@ -61,7 +71,9 @@ foreach ($assignableRoles as $r) {
 
       <div class="field">
         <label for="sa-emp-position">4. Default position</label>
-        <select id="sa-emp-position" name="position" required aria-invalid="<?= isset($errors['position']) ? 'true' : 'false' ?>">
+        <select id="sa-emp-position" name="position" required
+                data-position-roles='<?= htmlspecialchars(json_encode($positionRoleMap), ENT_QUOTES, 'UTF-8') ?>'
+                aria-invalid="<?= isset($errors['position']) ? 'true' : 'false' ?>">
           <option value="">Select position in <?= e($unitName) ?>&hellip;</option>
           <?php foreach ($positions as $pos): ?>
             <option value="<?= e($pos['position_name']) ?>"
@@ -83,7 +95,7 @@ foreach ($assignableRoles as $r) {
       </div>
       <div class="role-chips" data-role-chips aria-live="polite">
         <?php foreach ($selectedRoles as $rn): if ($rn === '' || !isset($roleDescriptions[$rn])) continue; ?>
-          <span class="role-chip" data-role-chip="<?= e($rn) ?>">
+          <span class="role-chip" data-role-chip="<?= e($rn) ?>" <?= ($rn === $initialRoleForSelectedPos) ? 'data-role-auto="true"' : '' ?>>
             <input type="hidden" name="roles[]" value="<?= e($rn) ?>">
             <span><?= e($rn) ?></span>
             <button type="button" class="role-chip-remove" data-role-remove aria-label="Remove role <?= e($rn) ?>">&times;</button>

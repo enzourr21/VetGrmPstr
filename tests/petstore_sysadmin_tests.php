@@ -145,7 +145,13 @@ check('Navigation tab order for Pet Store is Overview -> Unit Employees -> Roles
 
 $emp = $pet->get('/sysadmin/employees');
 check('Employee form shows no hashing implementation text', !str_contains($emp['body'], 'password_hash') && !str_contains($emp['body'], 'Hashed with'));
-check('Position list uses rigid alignment classes (position-info, position-badge, position-toggle-btn)', str_contains($emp['body'], 'position-info') && str_contains($emp['body'], 'position-badge') && str_contains($emp['body'], 'position-toggle-btn'));
+check('Add Employee button present at top-right and opens modal', str_contains($emp['body'], 'data-modal-open="add-employee-modal"') && str_contains($emp['body'], '+ Add Employee'));
+check('Creation form lives inside modal and not directly on page body', str_contains($emp['body'], '<dialog class="modal modal-wide" id="add-employee-modal"') && !preg_match('/<div class="grid grid-2"[^>]*>\s*<section class="card"[^>]*data-role-picker/s', $emp['body']));
+check('Modal contains no password input field', !preg_match('/<input[^>]*name="password"/i', $emp['body']) && !str_contains($emp['body'], 'sa-emp-password'));
+check('Submit button label is Send Invite Link', str_contains($emp['body'], 'Send Invite Link'));
+check('Submit button is initially disabled', (bool)preg_match('/id="create-emp-submit-btn"[^>]*\bdisabled\b/i', $emp['body']));
+check('Required attribute present on full name, email, position', preg_match('/name="full_name"[^>]*\brequired\b/i', $emp['body']) && preg_match('/name="email"[^>]*\brequired\b/i', $emp['body']) && preg_match('/name="position"[^>]*\brequired\b/i', $emp['body']));
+check('Optional username and phone do not have required attribute', !preg_match('/name="username"[^>]*\brequired\b/i', $emp['body']) && !preg_match('/name="phone"[^>]*\brequired\b/i', $emp['body']));
 check('Position dropdown has Inventory Manager', str_contains($emp['body'], '<option value="Inventory Manager"'));
 check('Position dropdown lacks Store Supervisor and Sales & Inventory Associate', !str_contains($emp['body'], '<option value="Store Supervisor"') && !str_contains($emp['body'], 'value="Sales &amp; Inventory Associate"'));
 check('Add Role button + picker lists new and previous roles', str_contains($emp['body'], 'data-role-add') && str_contains($emp['body'], 'data-role-option="INVENTORY_MANAGER"') && str_contains($emp['body'], 'data-role-option="DELIVERY_PERSONNEL"') && str_contains($emp['body'], 'data-role-option="BUSINESS_MANAGER"') && str_contains($emp['body'], 'data-role-option="RECEPTIONIST"'));
@@ -165,12 +171,11 @@ $res = $pet->post('/sysadmin/employees', [
     'username' => 'ps_test_pat',
     'position' => 'Inventory Manager',
     'roles' => ['INVENTORY_MANAGER', 'DELIVERY_PERSONNEL'],
-    'password' => 'PatTester!2026',
 ]);
 check('Creation with two roles succeeds (302)', $res['status'] === 302);
-$row = $pdo->query("SELECT ua.user_account_id, ua.password_hash, e.employee_id, e.position, e.business_unit_id FROM user_account ua JOIN employee e ON e.user_account_id=ua.user_account_id WHERE ua.email='ps.test.pat@vetgrpet.local'")->fetch();
+$row = $pdo->query("SELECT ua.user_account_id, ua.password_hash, ua.email_verified_at, e.employee_id, e.position, e.business_unit_id FROM user_account ua JOIN employee e ON e.user_account_id=ua.user_account_id WHERE ua.email='ps.test.pat@vetgrpet.local'")->fetch();
 check('Employee saved in Pet Store with chosen position', (bool)$row && (int)$row['business_unit_id'] === $petUnit && $row['position'] === 'Inventory Manager');
-check('Password still stored hashed', (bool)$row && password_verify('PatTester!2026', (string)$row['password_hash']) && $row['password_hash'] !== 'PatTester!2026');
+check('Invitation flow: user account created with secure unguessable hash (password not directly set)', (bool)$row && strlen((string)$row['password_hash']) > 50 && $row['email_verified_at'] === null);
 $roleRows = $pdo->prepare('SELECT r.role_name FROM account_role ar JOIN role r ON r.role_id=ar.role_id WHERE ar.user_account_id=? AND ar.business_unit_id=? ORDER BY 1');
 $roleRows->execute([$row['user_account_id'], $petUnit]);
 check('Both roles assigned', $roleRows->fetchAll(PDO::FETCH_COLUMN) === ['DELIVERY_PERSONNEL', 'INVENTORY_MANAGER']);
@@ -180,20 +185,40 @@ $log->execute([$row['employee_id']]);
 $L = $log->fetch();
 check('Creation recorded with actor, affected employee and unit', (bool)$L && (int)$L['actor_user_id'] === $sysUid && (int)$L['business_unit_id'] === $petUnit);
 check('Creation record has details (position + roles) and no secrets', (bool)$L && str_contains((string)$L['new_value'], 'Inventory Manager') && !str_contains($L['summary'] . $L['new_value'], 'PatTester') && !str_contains($L['summary'] . $L['new_value'], '$2y$'));
+$invLog = $pdo->prepare("SELECT * FROM audit_log WHERE action_code='invitation.created' AND affected_employee_id=? ORDER BY log_id DESC LIMIT 1");
+$invLog->execute([$row['employee_id']]);
+$iL = $invLog->fetch();
+check('Invitation recorded in audit_log with invitation.created action code', (bool)$iL && (int)$iL['actor_user_id'] === $sysUid && (int)$iL['business_unit_id'] === $petUnit);
 
 $before = auditCount($pdo);
 $form = $pet->get('/sysadmin/employees');
 $dup = $pet->post('/sysadmin/employees', [
     'csrf_token' => $pet->csrf($form['body']), 'business_unit_id' => $petUnit, 'full_name' => 'Dup Person',
-    'email' => 'ps.test.pat@vetgrpet.local', 'position' => 'Receptionist', 'roles' => ['RECEPTIONIST'], 'password' => 'DupPerson!2026',
+    'email' => 'ps.test.pat@vetgrpet.local', 'position' => 'Receptionist', 'roles' => ['RECEPTIONIST'],
 ]);
 check('Failed creation (duplicate email) returns 422 and records nothing', $dup['status'] === 422 && auditCount($pdo) === $before);
 check('Failed creation keeps chosen roles as chips after error', str_contains($dup['body'], 'data-role-chip="RECEPTIONIST"'));
 $bad = $pet->post('/sysadmin/employees', [
     'csrf_token' => $pet->csrf($dup['body']), 'business_unit_id' => $petUnit, 'full_name' => 'Bad Role',
-    'email' => 'ps.test.bad@vetgrpet.local', 'position' => 'Receptionist', 'roles' => ['VETERINARIAN'], 'password' => 'BadRolePerson!2026',
+    'email' => 'ps.test.bad@vetgrpet.local', 'position' => 'Receptionist', 'roles' => ['VETERINARIAN'],
 ]);
 check('Clinical role cannot be assigned in Pet Store (422, no audit)', $bad['status'] === 422 && auditCount($pdo) === $before);
+
+// Test automatic initial system role assignment (without passing roles)
+$autoEmail = 'ps.test.autorole@vetgrpet.local';
+$pdo->exec("DELETE FROM user_account WHERE email='$autoEmail'");
+$autoForm = $pet->get('/sysadmin/employees');
+$autoRes = $pet->post('/sysadmin/employees', [
+    'csrf_token' => $pet->csrf($autoForm['body']),
+    'business_unit_id' => $petUnit,
+    'full_name' => 'Auto Role Employee',
+    'email' => $autoEmail,
+    'position' => 'Inventory Manager',
+]);
+check('Creation without specifying roles automatically assigns designated initial role (302)', $autoRes['status'] === 302);
+$autoRow = $pdo->query("SELECT ua.user_account_id, e.employee_id, e.position FROM user_account ua JOIN employee e ON e.user_account_id=ua.user_account_id WHERE ua.email='$autoEmail'")->fetch();
+$autoRoles = $pdo->query("SELECT r.role_name FROM account_role ar JOIN role r ON r.role_id=ar.role_id WHERE ar.user_account_id={$autoRow['user_account_id']}")->fetchAll(PDO::FETCH_COLUMN);
+check('Designated initial role INVENTORY_MANAGER assigned automatically', $autoRoles === ['INVENTORY_MANAGER']);
 
 // ------------------------------------------------------------------ status
 echo "\nSuite D: account status, roles, positions\n";
@@ -254,13 +279,14 @@ $s = $pet->post("/sysadmin/positions/$vp/toggle", ['csrf_token' => $tok, 'busine
 check('Toggling another unit\'s position denied (403, no record)', $s['status'] === 403 && auditCount($pdo) === $b);
 
 // ------------------------------------------------------------------ roster
-echo "\nSuite E: roster\n";
+echo "\nSuite E: roster & pagination\n";
 $pg = $pet->get('/sysadmin/employees');
-check('Roster preview limited and complete roster rendered in modal', substr_count($pg['body'], 'class="roster-item"') >= 5 && str_contains($pg['body'], 'roster-list-full'));
 $empCount = (int)scalar($pdo, "SELECT COUNT(DISTINCT e.employee_id) FROM employee e JOIN user_account ua ON ua.user_account_id=e.user_account_id WHERE ua.is_super_admin=0 AND (e.business_unit_id=? OR EXISTS (SELECT 1 FROM account_role ar WHERE ar.user_account_id=ua.user_account_id AND ar.business_unit_id=?))", [$petUnit, $petUnit]);
-$modalPart = substr($pg['body'], (int)strpos($pg['body'], 'roster-list-full'));
-check('Modal contains every Pet Store employee', substr_count($modalPart, 'class="roster-item"') === $empCount);
-check('Modal has Pet Store Employees heading with count and close control', str_contains($pg['body'], 'Pet Store Employees (' . $empCount . ')') && str_contains($pg['body'], 'data-modal-close'));
+$expectedPage1Count = min(6, $empCount);
+check('Roster displays up to 6 employees per page', substr_count($pg['body'], 'class="roster-item"') === $expectedPage1Count);
+check('Centered pagination container present', str_contains($pg['body'], 'class="pagination-centered"'));
+check('Pagination format matches Previous · Page 1 of N · Next', (bool)preg_match('/Page 1 of \d+/', $pg['body']));
+check('Previous button disabled on page 1', (bool)preg_match('/<button[^>]*class="[^"]*pagination-prev[^"]*"[^>]*disabled/i', $pg['body']));
 check('Roster items keep email, username, position, roles, status and actions', str_contains($pg['body'], 'ps.test.pat@vetgrpet.local') && str_contains($pg['body'], 'Default position') && str_contains($pg['body'], 'Roles in unit') && str_contains($pg['body'], 'Change position') && str_contains($pg['body'], 'Deactivate'));
 
 // ------------------------------------------------------------------ activity page

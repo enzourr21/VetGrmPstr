@@ -15,6 +15,40 @@ final class AdminAccountService
     /** Roles that exist only for the Pet Store business unit. */
     public const PET_STORE_ROLES = ['INVENTORY_MANAGER', 'DELIVERY_PERSONNEL'];
 
+    /** Explicit mapping of default position title to designated initial system role name. */
+    public const POSITION_INITIAL_ROLE_MAP = [
+        // Pet Store
+        'System Administrator' => 'SYSTEM_ADMINISTRATOR',
+        'Business Manager — Pet Store' => 'BUSINESS_MANAGER',
+        'Inventory Manager' => 'INVENTORY_MANAGER',
+        'Receptionist' => 'RECEPTIONIST',
+        // Veterinary Clinic
+        'Lead Veterinarian' => 'VETERINARIAN',
+        'Associate Veterinarian' => 'VETERINARIAN',
+        'Senior Veterinary Nurse' => 'NURSE',
+        'Veterinary Technician' => 'TECHNICIAN',
+        'Business Manager — Veterinary Clinic' => 'BUSINESS_MANAGER',
+        // Grooming Services
+        'Master Pet Stylist & Reception Coordinator' => 'RECEPTIONIST',
+        'Business Manager — Grooming Services' => 'BUSINESS_MANAGER',
+    ];
+
+    public static function initialRoleForPosition(string $position, ?string $unitName = null): ?string
+    {
+        $role = self::POSITION_INITIAL_ROLE_MAP[$position] ?? null;
+        if ($role === null) {
+            return null;
+        }
+        if ($unitName !== null) {
+            $allowed = self::assignableRolesForUnit($unitName);
+            $allowedNames = array_column($allowed, 'role_name');
+            if (!in_array($role, $allowedNames, true)) {
+                return null;
+            }
+        }
+        return $role;
+    }
+
     /** Assignable roles for employee / System Administrator creation (never SUPER_ADMINISTRATOR). */
     public const ASSIGNABLE_ROLES = [
         'SYSTEM_ADMINISTRATOR',
@@ -171,6 +205,14 @@ final class AdminAccountService
         }
         $rawRoles = array_values(array_unique(array_filter(array_map(fn($v) => trim((string)$v), $rawRoles), fn($v) => $v !== '')));
 
+        // Automatic initial system role assignment during employee creation
+        if ($position !== '' && $unit) {
+            $initRole = self::initialRoleForPosition($position, $unit['business_unit_name']);
+            if ($initRole !== null && !in_array($initRole, $rawRoles, true)) {
+                array_unshift($rawRoles, $initRole);
+            }
+        }
+
         $resolvedRoleIds = [];
         $resolvedRoleNames = [];
         if (!$rawRoles) {
@@ -208,12 +250,15 @@ final class AdminAccountService
             $resolvedRoleNames = array_values(array_unique($resolvedRoleNames));
         }
 
-        // 7. Password validation
+        // 7. Password validation (skipped for invitation flow)
+        $isInvitation = !empty($input['is_invitation']) || ($unit && $unit['business_unit_name'] === Units::PET_STORE && !isset($input['password']));
         $password = is_string($input['password'] ?? null) ? $input['password'] : '';
-        if (strlen($password) < 10) {
-            $errors['password'] = 'Password must be at least 10 characters long.';
-        } elseif (strlen($password) > 200) {
-            $errors['password'] = 'Password must be at most 200 characters long.';
+        if (!$isInvitation) {
+            if (strlen($password) < 10) {
+                $errors['password'] = 'Password must be at least 10 characters long.';
+            } elseif (strlen($password) > 200) {
+                $errors['password'] = 'Password must be at most 200 characters long.';
+            }
         }
 
         // Optional phone validation
@@ -230,12 +275,23 @@ final class AdminAccountService
         try {
             $db->beginTransaction();
 
-            $hash = password_hash($password, PASSWORD_DEFAULT);
+            if ($isInvitation) {
+                // Secure unguessable random password hash; account cannot be accessed until password set via invitation
+                $randomBytes = bin2hex(random_bytes(32));
+                $hash = password_hash($randomBytes, PASSWORD_DEFAULT);
+                $emailVerified = null;
+                $invitationToken = bin2hex(random_bytes(32));
+            } else {
+                $hash = password_hash($password, PASSWORD_DEFAULT);
+                $emailVerified = date('Y-m-d H:i:s');
+                $invitationToken = null;
+            }
+
             $insUa = $db->prepare(
                 "INSERT INTO user_account (email, username, password_hash, account_status, is_super_admin, email_verified_at)
-                 VALUES (?, ?, ?, 'active', 0, CURRENT_TIMESTAMP)"
+                 VALUES (?, ?, ?, 'active', 0, ?)"
             );
-            $insUa->execute([$email, $username, $hash]);
+            $insUa->execute([$email, $username, $hash, $emailVerified]);
             $uid = (int)$db->lastInsertId();
 
             $insEmp = $db->prepare(
@@ -278,12 +334,32 @@ final class AdminAccountService
                 substr((string)($_SERVER['REMOTE_ADDR'] ?? ''), 0, 45) ?: null,
             ]);
 
+            if ($isInvitation) {
+                $invSummary = "Sent invitation link to $email for position '$position' with role(s): $roleListStr.";
+                $db->prepare(
+                    'INSERT INTO audit_log (actor_user_id, business_unit_id, action_code, target_type, target_id, affected_employee_id, summary, new_value, ip_address)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                )->execute([
+                    $actorUserId,
+                    $unit['business_unit_id'],
+                    'invitation.created',
+                    'employee',
+                    $eid,
+                    $eid,
+                    mb_substr($invSummary, 0, 500),
+                    mb_substr("Position: $position; Roles: $roleListStr", 0, 255),
+                    substr((string)($_SERVER['REMOTE_ADDR'] ?? ''), 0, 45) ?: null,
+                ]);
+            }
+
             $db->commit();
             return [
                 'ok' => true,
                 'errors' => [],
                 'user_id' => $uid,
                 'employee_id' => $eid,
+                'is_invitation' => $isInvitation,
+                'invitation_token' => $invitationToken,
             ];
         } catch (Throwable $e) {
             if ($db->inTransaction()) {
