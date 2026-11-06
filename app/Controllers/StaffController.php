@@ -158,10 +158,40 @@ final class StaffController extends Controller
         ]);
     }
 
+    private function getStaffRoles(int $userId, int $unitId): array
+    {
+        $stmt = $this->db->prepare(
+            "SELECT r.role_name
+             FROM account_role ar
+             JOIN role r ON r.role_id = ar.role_id
+             WHERE ar.user_account_id = ? AND ar.business_unit_id = ?"
+        );
+        $stmt->execute([$userId, $unitId]);
+        return $stmt->fetchAll(\PDO::FETCH_COLUMN);
+    }
+
     public function appointments(): void
     {
         $unit = Units::groomingId();
-        $this->requireStaff('appointment.view', $unit);
+        $eid = $this->requireStaff('appointment.view', $unit);
+        $uid = (int)Session::get('user_id');
+        $roles = $this->getStaffRoles($uid, $unit);
+
+        // System Administrator and Inventory Manager have no operational appointment access by default
+        if (!$this->isSuperAdmin()) {
+            $hasOperationalAccess = in_array('RECEPTIONIST', $roles, true)
+                || in_array('BUSINESS_MANAGER', $roles, true)
+                || in_array('STYLIST_WORKSPACE', $roles, true)
+                || in_array('BATHER_WORKSPACE', $roles, true);
+            if (!$hasOperationalAccess) {
+                $this->forbidden('Operational appointment access is not granted to this role.');
+            }
+        }
+
+        $isAllAccess = $this->isSuperAdmin()
+            || in_array('RECEPTIONIST', $roles, true)
+            || in_array('BUSINESS_MANAGER', $roles, true);
+
         $filter = $this->get('status');
         $sql = 'SELECT a.appointment_id, a.preferred_date, a.preferred_time, a.created_at, st.status_name,
                     CONCAT(c.first_name, " ", c.last_name) AS customer_name,
@@ -171,6 +201,17 @@ final class StaffController extends Controller
                 JOIN customer c ON c.customer_id=a.customer_id
                 WHERE a.business_unit_id=?';
         $args = [$unit];
+
+        if (!$isAllAccess) {
+            // Stylist, Bather, Master Stylist view assigned appointments only
+            $sql .= ' AND EXISTS (
+                SELECT 1 FROM appointment_pet ap
+                JOIN performed_service ps ON ps.appointment_pet_id = ap.appointment_pet_id
+                WHERE ap.appointment_id = a.appointment_id AND ps.performer_employee_id = ?
+            )';
+            $args[] = $eid;
+        }
+
         if ($filter !== '') {
             $sql .= ' AND st.status_name=?';
             $args[] = $filter;
@@ -185,27 +226,69 @@ final class StaffController extends Controller
     public function appointment(int $id): void
     {
         $unit = Units::groomingId();
-        $this->requireStaff('appointment.view', $unit);
+        $eid = $this->requireStaff('appointment.view', $unit);
+        $uid = (int)Session::get('user_id');
+        $roles = $this->getStaffRoles($uid, $unit);
+
+        if (!$this->isSuperAdmin()) {
+            $hasOperationalAccess = in_array('RECEPTIONIST', $roles, true)
+                || in_array('BUSINESS_MANAGER', $roles, true)
+                || in_array('STYLIST_WORKSPACE', $roles, true)
+                || in_array('BATHER_WORKSPACE', $roles, true);
+            if (!$hasOperationalAccess) {
+                $this->forbidden('Operational appointment access is not granted to this role.');
+            }
+        }
+
+        $isAllAccess = $this->isSuperAdmin()
+            || in_array('RECEPTIONIST', $roles, true)
+            || in_array('BUSINESS_MANAGER', $roles, true);
+
         $s = $this->db->prepare('SELECT a.*, st.status_name, c.first_name, c.last_name, c.phone, ua.email
             FROM appointment a JOIN appointment_status st ON st.appointment_status_id=a.appointment_status_id
             JOIN customer c ON c.customer_id=a.customer_id JOIN user_account ua ON ua.user_account_id=c.user_account_id
             WHERE a.appointment_id=? AND a.business_unit_id=?');
         $s->execute([$id, $unit]);
         $a = $s->fetch() ?: $this->notFound();
+
+        if (!$isAllAccess) {
+            $chkAssigned = $this->db->prepare(
+                'SELECT 1 FROM appointment_pet ap
+                 JOIN performed_service ps ON ps.appointment_pet_id = ap.appointment_pet_id
+                 WHERE ap.appointment_id = ? AND ps.performer_employee_id = ? LIMIT 1'
+            );
+            $chkAssigned->execute([$id, $eid]);
+            if (!$chkAssigned->fetchColumn()) {
+                $this->forbidden('Access denied: you are not assigned to this appointment.');
+            }
+        }
+
         $pets = $this->db->prepare('SELECT p.pet_name, p.species, p.breed, p.sex, p.weight_kg, p.notes FROM appointment_pet ap JOIN pet p ON p.pet_id=ap.pet_id WHERE ap.appointment_id=?');
         $pets->execute([$id]);
         $this->render('staff/appointment', [
             'title' => 'Request #' . $id, 'a' => $a, 'pets' => $pets->fetchAll(),
             'lines' => AppointmentController::lines($this->db, $id),
-            'next' => self::TRANSITIONS[$a['status_name']] ?? [],
+            'next' => $isAllAccess ? (self::TRANSITIONS[$a['status_name']] ?? []) : [],
+            'canManage' => $isAllAccess,
         ]);
     }
 
     public function setStatus(int $id): void
     {
         $unit = Units::groomingId();
-        $this->requireStaff('appointment.process', $unit);
+        $eid = $this->requireStaff('appointment.process', $unit);
         CSRF::check();
+        $uid = (int)Session::get('user_id');
+        $roles = $this->getStaffRoles($uid, $unit);
+
+        // Only Receptionist and Business Manager can change status
+        $canProcess = $this->isSuperAdmin()
+            || in_array('RECEPTIONIST', $roles, true)
+            || in_array('BUSINESS_MANAGER', $roles, true);
+        if (!$canProcess) {
+            $this->forbidden('Only Receptionist and Business Manager can change appointment status.');
+        }
+
         $target = $this->post('status');
         $s = $this->db->prepare('SELECT a.appointment_status_id, st.status_name FROM appointment a JOIN appointment_status st ON st.appointment_status_id=a.appointment_status_id WHERE a.appointment_id=? AND a.business_unit_id=?');
         $s->execute([$id, $unit]);
@@ -214,16 +297,307 @@ final class StaffController extends Controller
             Session::flash('error', "Cannot change a request from {$cur['status_name']} to that status.");
             $this->redirect("/staff/appointments/$id");
         }
+
+        // Cancellation requires non-empty cancellation reason
+        $reason = trim((string)($this->post('cancellation_reason') ?: $this->post('reason')));
+        if ($target === 'Cancelled' && $reason === '') {
+            http_response_code(422);
+            Session::flash('error', 'A non-empty cancellation reason is required to cancel an appointment.');
+            $this->redirect("/staff/appointments/$id");
+        }
+
         $t = $this->db->prepare('SELECT appointment_status_id FROM appointment_status WHERE status_name=?');
         $t->execute([$target]);
         $tid = (int)$t->fetchColumn();
-        // optimistic check on the current status prevents lost updates
-        $u = $this->db->prepare('UPDATE appointment SET appointment_status_id=? WHERE appointment_id=? AND business_unit_id=? AND appointment_status_id=?');
-        $u->execute([$tid, $id, $unit, $cur['appointment_status_id']]);
-        if ($u->rowCount()) {
-            Audit::log('appointment.status_changed', "Grooming appointment #$id status changed from {$cur['status_name']} to $target.", $unit, 'appointment', $id);
+
+        $this->db->beginTransaction();
+        try {
+            $u = $this->db->prepare('UPDATE appointment SET appointment_status_id=? WHERE appointment_id=? AND business_unit_id=? AND appointment_status_id=?');
+            $u->execute([$tid, $id, $unit, $cur['appointment_status_id']]);
+
+            if ($u->rowCount()) {
+                if ($target === 'Cancelled') {
+                    Audit::record(
+                        $this->db,
+                        'appointment.cancelled',
+                        "Grooming appointment #$id cancelled: $reason",
+                        $unit,
+                        $uid,
+                        null,
+                        $cur['status_name'],
+                        'Cancelled',
+                        'appointment',
+                        $id
+                    );
+                } else {
+                    Audit::record(
+                        $this->db,
+                        'appointment.status_changed',
+                        "Grooming appointment #$id status changed from {$cur['status_name']} to $target.",
+                        $unit,
+                        $uid,
+                        null,
+                        $cur['status_name'],
+                        $target,
+                        'appointment',
+                        $id
+                    );
+                }
+            }
+            $this->db->commit();
+        } catch (\Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $e;
         }
+
         Session::flash($u->rowCount() ? 'success' : 'error', $u->rowCount() ? "Status changed to $target." : 'The request was changed by someone else. Please review it again.');
+        $this->redirect("/staff/appointments/$id");
+    }
+
+    public function cancelAppointment(int $id): void
+    {
+        $unit = Units::groomingId();
+        $eid = $this->requireStaff('appointment.process', $unit);
+        CSRF::check();
+        $uid = (int)Session::get('user_id');
+        $roles = $this->getStaffRoles($uid, $unit);
+
+        $canProcess = $this->isSuperAdmin()
+            || in_array('RECEPTIONIST', $roles, true)
+            || in_array('BUSINESS_MANAGER', $roles, true);
+        if (!$canProcess) {
+            $this->forbidden('Only Receptionist and Business Manager can cancel appointments.');
+        }
+
+        $reason = trim((string)($this->post('cancellation_reason') ?: $this->post('reason')));
+        if ($reason === '') {
+            http_response_code(422);
+            Session::flash('error', 'A non-empty cancellation reason is required to cancel an appointment.');
+            $this->redirect("/staff/appointments/$id");
+        }
+
+        $s = $this->db->prepare('SELECT a.appointment_status_id, st.status_name FROM appointment a JOIN appointment_status st ON st.appointment_status_id=a.appointment_status_id WHERE a.appointment_id=? AND a.business_unit_id=?');
+        $s->execute([$id, $unit]);
+        $cur = $s->fetch() ?: $this->notFound();
+
+        $t = $this->db->prepare('SELECT appointment_status_id FROM appointment_status WHERE status_name="Cancelled"');
+        $t->execute();
+        $cancelledId = (int)$t->fetchColumn();
+
+        $this->db->beginTransaction();
+        try {
+            $u = $this->db->prepare('UPDATE appointment SET appointment_status_id=? WHERE appointment_id=? AND business_unit_id=?');
+            $u->execute([$cancelledId, $id, $unit]);
+
+            Audit::record(
+                $this->db,
+                'appointment.cancelled',
+                "Grooming appointment #$id cancelled: $reason",
+                $unit,
+                $uid,
+                null,
+                $cur['status_name'],
+                'Cancelled',
+                'appointment',
+                $id
+            );
+            $this->db->commit();
+        } catch (\Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $e;
+        }
+
+        Session::flash('success', "Appointment #$id has been cancelled.");
+        $this->redirect("/staff/appointments/$id");
+    }
+
+    public function reassignAppointment(int $id): void
+    {
+        $unit = Units::groomingId();
+        $eid = $this->requireStaff('appointment.process', $unit);
+        CSRF::check();
+        $uid = (int)Session::get('user_id');
+        $roles = $this->getStaffRoles($uid, $unit);
+
+        $canProcess = $this->isSuperAdmin()
+            || in_array('RECEPTIONIST', $roles, true)
+            || in_array('BUSINESS_MANAGER', $roles, true);
+        if (!$canProcess) {
+            $this->forbidden('Only Receptionist and Business Manager can reassign appointments.');
+        }
+
+        $targetEmployeeId = (int)$this->post('employee_id');
+        $targetEmpStmt = $this->db->prepare(
+            "SELECT e.employee_id, e.first_name, e.last_name, e.position, e.employee_status,
+                    (SELECT GROUP_CONCAT(r.role_name) FROM account_role ar JOIN role r ON r.role_id = ar.role_id WHERE ar.user_account_id = e.user_account_id AND ar.business_unit_id = ?) AS roles
+             FROM employee e
+             WHERE e.employee_id = ? AND e.business_unit_id = ? AND e.employee_status = 'active'"
+        );
+        $targetEmpStmt->execute([$unit, $targetEmployeeId, $unit]);
+        $targetEmp = $targetEmpStmt->fetch();
+        if (!$targetEmp) {
+            http_response_code(422);
+            Session::flash('error', 'Selected employee is not an active staff member in Grooming Services.');
+            $this->redirect("/staff/appointments/$id");
+        }
+
+        $s = $this->db->prepare('SELECT appointment_id, preferred_date, preferred_time FROM appointment WHERE appointment_id = ? AND business_unit_id = ?');
+        $s->execute([$id, $unit]);
+        $appt = $s->fetch() ?: $this->notFound();
+
+        $targetRoles = array_filter(explode(',', (string)$targetEmp['roles']));
+        $targetPosition = (string)$targetEmp['position'];
+
+        // Availability check: Ensure the employee is not assigned to an overlapping appointment at the same preferred date/time
+        if (!empty($appt['preferred_date']) && !empty($appt['preferred_time'])) {
+            $conflictStmt = $this->db->prepare(
+                "SELECT a.appointment_id FROM appointment a
+                 JOIN appointment_pet ap ON ap.appointment_id = a.appointment_id
+                 JOIN performed_service ps ON ps.appointment_pet_id = ap.appointment_pet_id
+                 JOIN appointment_status ast ON ast.appointment_status_id = a.appointment_status_id
+                 WHERE ps.performer_employee_id = ?
+                   AND a.preferred_date = ?
+                   AND a.preferred_time = ?
+                   AND a.appointment_id <> ?
+                   AND ast.status_name NOT IN ('Cancelled', 'Rejected')
+                 LIMIT 1"
+            );
+            $conflictStmt->execute([$targetEmployeeId, $appt['preferred_date'], $appt['preferred_time'], $id]);
+            if ($conflictStmt->fetchColumn()) {
+                http_response_code(422);
+                Session::flash('error', "Employee {$targetEmp['first_name']} {$targetEmp['last_name']} has a scheduling conflict at this date and time.");
+                $this->redirect("/staff/appointments/$id");
+            }
+        }
+
+        // Get current performer if any
+        $prevPerformer = $this->db->prepare(
+            "SELECT ps.performer_employee_id, e.first_name, e.last_name
+             FROM appointment_pet ap
+             JOIN performed_service ps ON ps.appointment_pet_id = ap.appointment_pet_id
+             JOIN employee e ON e.employee_id = ps.performer_employee_id
+             WHERE ap.appointment_id = ? LIMIT 1"
+        );
+        $prevPerformer->execute([$id]);
+        $prev = $prevPerformer->fetch();
+        $prevName = $prev ? "{$prev['first_name']} {$prev['last_name']} (ID #{$prev['performer_employee_id']})" : "None";
+        $newName = "{$targetEmp['first_name']} {$targetEmp['last_name']} (ID #{$targetEmployeeId})";
+
+        $this->db->beginTransaction();
+        try {
+            // Update performer_employee_id on performed_service rows for this appointment
+            $updatePs = $this->db->prepare(
+                "UPDATE performed_service ps
+                 JOIN appointment_pet ap ON ap.appointment_pet_id = ps.appointment_pet_id
+                 SET ps.performer_employee_id = ?
+                 WHERE ap.appointment_id = ?"
+            );
+            $updatePs->execute([$targetEmployeeId, $id]);
+
+            Audit::record(
+                $this->db,
+                'appointment.reassigned',
+                "Reassigned Grooming appointment #$id: previous employee was $prevName, new employee is $newName.",
+                $unit,
+                $uid,
+                $targetEmployeeId,
+                $prevName,
+                $newName,
+                'appointment',
+                $id
+            );
+            $this->db->commit();
+        } catch (\Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $e;
+        }
+
+        Session::flash('success', "Appointment #$id reassigned to {$targetEmp['first_name']} {$targetEmp['last_name']}.");
+        $this->redirect("/staff/appointments/$id");
+    }
+
+    public function updateProgress(int $id): void
+    {
+        $unit = Units::groomingId();
+        $eid = $this->requireStaff('appointment.view', $unit);
+        CSRF::check();
+        $uid = (int)Session::get('user_id');
+        $roles = $this->getStaffRoles($uid, $unit);
+
+        // Receptionist and Business Manager cannot update grooming progress as though they personally performed the service
+        // Stylist, Bather, Master Stylist can update progress for assigned services only
+        $canUpdate = in_array('STYLIST_WORKSPACE', $roles, true) || in_array('BATHER_WORKSPACE', $roles, true);
+        if (!$canUpdate) {
+            $this->forbidden('Only assigned Stylists and Bathers can update grooming progress.');
+        }
+
+        // Verify assignment
+        $chkAssigned = $this->db->prepare(
+            'SELECT 1 FROM appointment_pet ap
+             JOIN performed_service ps ON ps.appointment_pet_id = ap.appointment_pet_id
+             WHERE ap.appointment_id = ? AND ps.performer_employee_id = ? LIMIT 1'
+        );
+        $chkAssigned->execute([$id, $eid]);
+        if (!$chkAssigned->fetchColumn()) {
+            $this->forbidden('Access denied: you can only update progress on services assigned to you.');
+        }
+
+        $progressNotes = trim((string)$this->post('notes'));
+        $this->db->prepare(
+            "UPDATE performed_service ps
+             JOIN appointment_pet ap ON ap.appointment_pet_id = ps.appointment_pet_id
+             SET ps.notes = ?, ps.updated_at = NOW()
+             WHERE ap.appointment_id = ? AND ps.performer_employee_id = ?"
+        )->execute([$progressNotes, $id, $eid]);
+
+        Session::flash('success', 'Grooming progress updated.');
+        $this->redirect("/staff/appointments/$id");
+    }
+
+    public function completeService(int $id): void
+    {
+        $unit = Units::groomingId();
+        $eid = $this->requireStaff('appointment.view', $unit);
+        CSRF::check();
+        $uid = (int)Session::get('user_id');
+        $roles = $this->getStaffRoles($uid, $unit);
+
+        $isManagerOrReception = $this->isSuperAdmin()
+            || in_array('RECEPTIONIST', $roles, true)
+            || in_array('BUSINESS_MANAGER', $roles, true);
+        $isWorker = in_array('STYLIST_WORKSPACE', $roles, true) || in_array('BATHER_WORKSPACE', $roles, true);
+
+        if (!$isManagerOrReception && !$isWorker) {
+            $this->forbidden('Access denied.');
+        }
+
+        if (!$isManagerOrReception) {
+            // Worker can only mark assigned services completed
+            $chkAssigned = $this->db->prepare(
+                'SELECT 1 FROM appointment_pet ap
+                 JOIN performed_service ps ON ps.appointment_pet_id = ap.appointment_pet_id
+                 WHERE ap.appointment_id = ? AND ps.performer_employee_id = ? LIMIT 1'
+            );
+            $chkAssigned->execute([$id, $eid]);
+            if (!$chkAssigned->fetchColumn()) {
+                $this->forbidden('Access denied: you can only mark completed for services assigned to you.');
+            }
+        }
+
+        $this->db->prepare(
+            "UPDATE performed_service ps
+             JOIN appointment_pet ap ON ap.appointment_pet_id = ps.appointment_pet_id
+             SET ps.performed_status = 'completed', ps.updated_at = NOW()
+             WHERE ap.appointment_id = ?" . (!$isManagerOrReception ? " AND ps.performer_employee_id = ?" : "")
+        )->execute(!$isManagerOrReception ? [$id, $eid] : [$id]);
+
+        Session::flash('success', 'Service marked as completed.');
         $this->redirect("/staff/appointments/$id");
     }
 

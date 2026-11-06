@@ -12,13 +12,13 @@ foreach ($assignableRoles as $r) {
 
 $positionRoleMap = [];
 foreach ($positions as $pos) {
-    $initRole = \App\Models\AdminAccountService::initialRoleForPosition($pos['position_name'], $unitName);
-    if ($initRole !== null) {
-        $positionRoleMap[$pos['position_name']] = $initRole;
+    $initRoles = \App\Models\AdminAccountService::initialRolesForPosition($pos['position_name'], $unitName);
+    if (!empty($initRoles)) {
+        $positionRoleMap[$pos['position_name']] = count($initRoles) === 1 ? $initRoles[0] : $initRoles;
     }
 }
 $selectedPos = $old['position'] ?? '';
-$initialRoleForSelectedPos = $positionRoleMap[$selectedPos] ?? null;
+$initialRolesForSelectedPos = \App\Models\AdminAccountService::initialRolesForPosition($selectedPos, $unitName);
 ?>
 <dialog class="modal modal-wide" id="add-employee-modal" aria-labelledby="add-employee-modal-title" <?= !empty($errors) ? 'data-open-on-load="true"' : '' ?> data-role-picker>
   <div class="modal-head">
@@ -99,7 +99,7 @@ $initialRoleForSelectedPos = $positionRoleMap[$selectedPos] ?? null;
         </div>
         <div class="role-chips" data-role-chips aria-live="polite">
           <?php foreach ($selectedRoles as $rn): if ($rn === '' || !isset($roleDescriptions[$rn])) continue; ?>
-            <span class="role-chip" data-role-chip="<?= e($rn) ?>" <?= ($rn === $initialRoleForSelectedPos) ? 'data-role-auto="true"' : '' ?>>
+            <span class="role-chip" data-role-chip="<?= e($rn) ?>" <?= in_array($rn, $initialRolesForSelectedPos, true) ? 'data-role-auto="true"' : '' ?>>
               <input type="hidden" name="roles[]" value="<?= e($rn) ?>">
               <span><?= e($rn) ?></span>
               <button type="button" class="role-chip-remove" data-role-remove aria-label="Remove role <?= e($rn) ?>">&times;</button>

@@ -75,6 +75,10 @@ $r->get('/staff/workspace', 'StaffController', 'workspace');
 $r->get('/staff/appointments', 'StaffController', 'appointments');
 $r->get('/staff/appointments/{id}', 'StaffController', 'appointment');
 $r->post('/staff/appointments/{id}/status', 'StaffController', 'setStatus');
+$r->post('/staff/appointments/{id}/cancel', 'StaffController', 'cancelAppointment');
+$r->post('/staff/appointments/{id}/reassign', 'StaffController', 'reassignAppointment');
+$r->post('/staff/appointments/{id}/progress', 'StaffController', 'updateProgress');
+$r->post('/staff/appointments/{id}/complete-service', 'StaffController', 'completeService');
 
 // Business Manager Interface
 $r->get('/manager', 'ManagerController', 'dashboard');

@@ -29,7 +29,13 @@ final class AdminAccountService
     /** Roles that exist only for the Pet Store business unit. */
     public const PET_STORE_ROLES = ['DELIVERY_PERSONNEL'];
 
-    /** Explicit mapping of default position title to designated initial system role name. */
+    /** Workspace roles specific to Grooming Services. */
+    public const GROOMING_WORKSPACE_ROLES = [
+        'STYLIST_WORKSPACE',
+        'BATHER_WORKSPACE',
+    ];
+
+    /** Explicit mapping of default position title to designated initial system role name(s). */
     public const POSITION_INITIAL_ROLE_MAP = [
         // Pet Store
         'System Administrator' => 'SYSTEM_ADMINISTRATOR',
@@ -45,8 +51,12 @@ final class AdminAccountService
         'Associate Veterinarian' => 'VETERINARIAN_WORKSPACE',
         'Business Manager — Veterinary Clinic' => 'BUSINESS_MANAGER',
         // Grooming Services
-        'Master Pet Stylist & Reception Coordinator' => 'RECEPTIONIST',
         'Business Manager — Grooming Services' => 'BUSINESS_MANAGER',
+        'Inventory Manager' => 'INVENTORY_MANAGER',
+        'Receptionist' => 'RECEPTIONIST',
+        'Stylist' => 'STYLIST_WORKSPACE',
+        'Bather' => 'BATHER_WORKSPACE',
+        'Master Stylist' => ['STYLIST_WORKSPACE', 'BATHER_WORKSPACE'],
     ];
 
     public static function normalizeRoleName(string $role): string
@@ -62,34 +72,45 @@ final class AdminAccountService
             'RECEPTIONIST', 'VETERINARY_RECEPTIONIST' => 'RECEPTIONIST',
             'INVENTORY_MANAGER' => 'INVENTORY_MANAGER',
             'DELIVERY_PERSONNEL' => 'DELIVERY_PERSONNEL',
+            'STYLIST', 'STYLIST_WORKSPACE' => 'STYLIST_WORKSPACE',
+            'BATHER', 'BATHER_WORKSPACE' => 'BATHER_WORKSPACE',
             default => $upper,
         };
     }
 
-    public static function initialRoleForPosition(string $position, ?string $unitName = null): ?string
+    public static function initialRolesForPosition(string $position, ?string $unitName = null): array
     {
-        $role = self::POSITION_INITIAL_ROLE_MAP[$position] ?? null;
-        if ($role === null) {
-            return null;
+        $roles = self::POSITION_INITIAL_ROLE_MAP[$position] ?? null;
+        if ($roles === null) {
+            return [];
         }
+        $roles = is_array($roles) ? $roles : [$roles];
         if ($unitName !== null) {
             $allowed = self::assignableRolesForUnit($unitName);
             $allowedNames = array_column($allowed, 'role_name');
-            if (!in_array($role, $allowedNames, true)) {
-                return null;
-            }
+            $roles = array_values(array_filter($roles, fn($r) => in_array($r, $allowedNames, true)));
         }
-        return $role;
+        return $roles;
+    }
+
+    public static function initialRoleForPosition(string $position, ?string $unitName = null): ?string
+    {
+        $roles = self::initialRolesForPosition($position, $unitName);
+        return $roles[0] ?? null;
     }
 
     /** Assignable roles for employee / System Administrator creation (never SUPER_ADMINISTRATOR). */
     public const ASSIGNABLE_ROLES = [
         'SYSTEM_ADMINISTRATOR',
         'BUSINESS_MANAGER',
+        'INVENTORY_MANAGER',
         'RECEPTIONIST',
+        'DELIVERY_PERSONNEL',
         'VETERINARIAN_WORKSPACE',
         'VETERINARY_NURSE_WORKSPACE',
         'VETERINARY_TECHNICIAN_WORKSPACE',
+        'STYLIST_WORKSPACE',
+        'BATHER_WORKSPACE',
         'VETERINARIAN',
         'NURSE',
         'TECHNICIAN',
@@ -110,6 +131,8 @@ final class AdminAccountService
                 'VETERINARIAN_WORKSPACE',
                 'VETERINARY_NURSE_WORKSPACE',
                 'VETERINARY_TECHNICIAN_WORKSPACE',
+                'STYLIST_WORKSPACE',
+                'BATHER_WORKSPACE',
                 'DELIVERY_PERSONNEL',
                 'VETERINARIAN',
                 'NURSE',
@@ -141,6 +164,18 @@ final class AdminAccountService
                     'INVENTORY_MANAGER',
                     'RECEPTIONIST',
                     'DELIVERY_PERSONNEL',
+                ], true)
+            ));
+        } elseif ($unitName === Units::GROOMING) {
+            $rows = array_values(array_filter(
+                $rows,
+                fn(array $r): bool => in_array($r['role_name'], [
+                    'SYSTEM_ADMINISTRATOR',
+                    'BUSINESS_MANAGER',
+                    'INVENTORY_MANAGER',
+                    'RECEPTIONIST',
+                    'STYLIST_WORKSPACE',
+                    'BATHER_WORKSPACE',
                 ], true)
             ));
         } else {
@@ -279,9 +314,11 @@ final class AdminAccountService
 
         // Automatic initial system role assignment during employee creation
         if ($position !== '' && $unit) {
-            $initRole = self::initialRoleForPosition($position, $unit['business_unit_name']);
-            if ($initRole !== null && !in_array($initRole, $rawRoles, true)) {
-                array_unshift($rawRoles, $initRole);
+            $initRoles = self::initialRolesForPosition($position, $unit['business_unit_name']);
+            foreach (array_reverse($initRoles) as $initRole) {
+                if (!in_array($initRole, $rawRoles, true)) {
+                    array_unshift($rawRoles, $initRole);
+                }
             }
         }
 
@@ -316,8 +353,16 @@ final class AdminAccountService
                     $errors['roles'] = "The role {$rObj['role_name']} can only be assigned in the Pet Store business unit.";
                     break;
                 }
+                if ($unit && $unit['business_unit_name'] !== Units::GROOMING && in_array($rObj['role_name'], self::GROOMING_WORKSPACE_ROLES, true)) {
+                    $errors['roles'] = "The role {$rObj['role_name']} can only be assigned in the Grooming Services business unit.";
+                    break;
+                }
                 if ($unit && $unit['business_unit_name'] === Units::VET_CLINIC && $rObj['role_name'] === 'DELIVERY_PERSONNEL') {
                     $errors['roles'] = "The DELIVERY_PERSONNEL role cannot be assigned in the Veterinary Clinic business unit.";
+                    break;
+                }
+                if ($unit && $unit['business_unit_name'] === Units::GROOMING && $rObj['role_name'] === 'DELIVERY_PERSONNEL') {
+                    $errors['roles'] = "The DELIVERY_PERSONNEL role cannot be assigned in the Grooming Services business unit.";
                     break;
                 }
                 $resolvedRoleIds[] = (int)$rObj['role_id'];

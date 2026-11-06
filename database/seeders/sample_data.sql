@@ -96,9 +96,11 @@ FROM (
   UNION ALL SELECT 'Veterinary Clinic', 'Receptionist', 'Clinical front-desk and appointment coordination'
   UNION ALL SELECT 'Grooming Services', 'System Administrator', 'Manages Grooming Services accounts, roles, and positions'
   UNION ALL SELECT 'Grooming Services', 'Business Manager — Grooming Services', 'Operational manager for Grooming Services'
-  UNION ALL SELECT 'Grooming Services', 'Master Pet Stylist & Reception Coordinator', 'Lead pet stylist and grooming appointment coordinator'
-  UNION ALL SELECT 'Grooming Services', 'Pet Groomer & Stylist', 'Performs baths, haircuts, and grooming treatments'
+  UNION ALL SELECT 'Grooming Services', 'Inventory Manager', 'Grooming stock oversight: tracks inventory levels, receiving, and supplies'
+  UNION ALL SELECT 'Grooming Services', 'Master Stylist', 'Advanced styling, breed standard cuts, and specialized grooming'
   UNION ALL SELECT 'Grooming Services', 'Receptionist', 'Grooming appointment intake and scheduling'
+  UNION ALL SELECT 'Grooming Services', 'Stylist', 'Pet styling, haircuts, and coat finishing'
+  UNION ALL SELECT 'Grooming Services', 'Bather', 'Bathing, brushing, ear cleaning, and nail trimming'
 ) pos
 JOIN business_unit bu ON bu.business_unit_name = pos.uname;
 
@@ -119,7 +121,7 @@ FROM (
   UNION ALL SELECT 'claire.dubois@staff.sample.vetgrpet', 'Veterinary Clinic', 'Claire', 'Dubois', 'Business Manager — Veterinary Clinic'
   UNION ALL SELECT 'david.reyes@staff.sample.vetgrpet', 'Pet Store', 'David', 'Reyes', 'Business Manager — Pet Store'
   UNION ALL SELECT 'hannah.kim@staff.sample.vetgrpet', 'Veterinary Clinic', 'Hannah', 'Kim', 'Veterinary Nurse'
-  UNION ALL SELECT 'owen.bennett@staff.sample.vetgrpet', 'Grooming Services', 'Owen', 'Bennett', 'Master Pet Stylist & Reception Coordinator'
+  UNION ALL SELECT 'owen.bennett@staff.sample.vetgrpet', 'Grooming Services', 'Owen', 'Bennett', 'Master Stylist'
 ) s
 JOIN user_account ua ON ua.email = s.email
 JOIN business_unit bu ON bu.business_unit_name = s.uname;
@@ -133,6 +135,8 @@ FROM (
   UNION ALL SELECT 'david.reyes@staff.sample.vetgrpet', 'BUSINESS_MANAGER', 'Pet Store'
   UNION ALL SELECT 'hannah.kim@staff.sample.vetgrpet', 'NURSE', 'Veterinary Clinic'
   UNION ALL SELECT 'owen.bennett@staff.sample.vetgrpet', 'RECEPTIONIST', 'Grooming Services'
+  UNION ALL SELECT 'owen.bennett@staff.sample.vetgrpet', 'STYLIST_WORKSPACE', 'Grooming Services'
+  UNION ALL SELECT 'owen.bennett@staff.sample.vetgrpet', 'BATHER_WORKSPACE', 'Grooming Services'
 ) m
 JOIN user_account ua ON ua.email = m.email
 JOIN role r ON r.role_name = m.rname

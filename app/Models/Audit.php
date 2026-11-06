@@ -59,6 +59,8 @@ final class Audit
         'invitation.accepted' => 'Invitation accepted',
         'invitation.expired' => 'Invitation expired',
         'invitation.revoked' => 'Invitation revoked',
+        'appointment.cancelled' => 'Appointment cancelled',
+        'appointment.reassigned' => 'Appointment reassigned',
     ];
 
     /** Filter-dropdown groups: key => [label, codes]. */

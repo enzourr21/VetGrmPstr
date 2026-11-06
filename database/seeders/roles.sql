@@ -12,4 +12,6 @@ INSERT IGNORE INTO role (role_name, description) VALUES
  ('DELIVERY_PERSONNEL', 'Pet Store order delivery: views assigned delivery orders and updates delivery progress'),
  ('VETERINARIAN_WORKSPACE', 'Veterinarian Workspace — for employees assigned veterinarian access.'),
  ('VETERINARY_NURSE_WORKSPACE', 'Veterinary Nurse Workspace — for employees assigned veterinary nurse access.'),
- ('VETERINARY_TECHNICIAN_WORKSPACE', 'Veterinary Technician Workspace — for employees assigned veterinary technician access.');
+ ('VETERINARY_TECHNICIAN_WORKSPACE', 'Veterinary Technician Workspace — for employees assigned veterinary technician access.'),
+ ('STYLIST_WORKSPACE', 'Stylist Workspace — for employees assigned pet stylist access.'),
+ ('BATHER_WORKSPACE', 'Bather Workspace — for employees assigned pet bather access.');

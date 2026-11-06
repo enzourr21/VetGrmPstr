@@ -675,24 +675,27 @@
     function updateAutoRole(isInitial) {
       if (!posSelect) return;
       var currentPos = posSelect.value;
-      var targetRole = posRoles[currentPos] || null;
-      var prevAutoChip = chips.querySelector('[data-role-auto="true"]');
-      var prevAutoRole = prevAutoChip ? prevAutoChip.getAttribute('data-role-chip') : null;
+      var rawTarget = posRoles[currentPos] || null;
+      var targetRoles = Array.isArray(rawTarget) ? rawTarget : (rawTarget ? [rawTarget] : []);
 
-      // If position changed, remove previous auto-assigned chip if different
-      if (prevAutoChip && prevAutoRole !== targetRole) {
-        prevAutoChip.remove();
-      }
+      // If position changed, remove previous auto-assigned chips that are not in targetRoles
+      var prevAutoChips = chips.querySelectorAll('[data-role-auto="true"]');
+      prevAutoChips.forEach(function (prevChip) {
+        var prevRole = prevChip.getAttribute('data-role-chip');
+        if (targetRoles.indexOf(prevRole) === -1) {
+          prevChip.remove();
+        }
+      });
 
-      // Add new auto-assigned role chip if defined
-      if (targetRole) {
-        var existing = chips.querySelector('[data-role-chip="' + targetRole + '"]');
+      // Add new auto-assigned role chips if defined
+      targetRoles.forEach(function (roleName) {
+        var existing = chips.querySelector('[data-role-chip="' + roleName + '"]');
         if (!existing) {
-          addChip(targetRole, true);
+          addChip(roleName, true);
         } else {
           existing.setAttribute('data-role-auto', 'true');
         }
-      }
+      });
       sync();
     }
 

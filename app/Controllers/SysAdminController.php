@@ -70,7 +70,7 @@ final class SysAdminController extends Controller
 
     private function isPetOrVet(string $unitName): bool
     {
-        return in_array($unitName, [Units::PET_STORE, Units::VET_CLINIC], true);
+        return in_array($unitName, [Units::PET_STORE, Units::VET_CLINIC, Units::GROOMING], true);
     }
 
     private function isPetStore(string $unitName): bool
@@ -226,11 +226,13 @@ final class SysAdminController extends Controller
         }
         $position = $this->post('position');
 
-        // Automatically assign initial role for position if not already present
+        // Automatically assign initial role(s) for position if not already present
         if ($position !== '') {
-            $initRole = AdminAccountService::initialRoleForPosition($position, $unitName);
-            if ($initRole !== null && !in_array($initRole, $rawRoles, true)) {
-                array_unshift($rawRoles, $initRole);
+            $initRoles = AdminAccountService::initialRolesForPosition($position, $unitName);
+            foreach (array_reverse($initRoles) as $initRole) {
+                if (!in_array($initRole, $rawRoles, true)) {
+                    array_unshift($rawRoles, $initRole);
+                }
             }
         }
 
