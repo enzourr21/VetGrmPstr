@@ -82,7 +82,38 @@ $r->post('/staff/appointments/{id}/complete-service', 'StaffController', 'comple
 
 // Business Manager Interface
 $r->get('/manager', 'ManagerController', 'dashboard');
+$r->get('/manager/overview', 'ManagerController', 'dashboard');
 $r->get('/manager/units/{id}', 'ManagerController', 'dashboard');
+$r->get('/manager/units/{id}/overview', 'ManagerController', 'dashboard');
+$r->get('/manager/sales', 'ManagerController', 'sales');
+$r->get('/manager/units/{id}/sales', 'ManagerController', 'sales');
+$r->get('/manager/products', 'ManagerController', 'products');
+$r->get('/manager/units/{id}/products', 'ManagerController', 'products');
+$r->post('/manager/products', 'ManagerController', 'storeProduct');
+$r->post('/manager/units/{id}/products', 'ManagerController', 'storeProduct');
+$r->post('/manager/products/{id}/update', 'ManagerController', 'updateProduct');
+$r->post('/manager/products/{id}/status', 'ManagerController', 'toggleProductStatus');
+$r->get('/manager/inventory', 'ManagerController', 'inventory');
+$r->get('/manager/units/{id}/inventory', 'ManagerController', 'inventory');
+$r->post('/manager/inventory/adjust', 'ManagerController', 'adjustStock');
+$r->post('/manager/units/{id}/inventory/adjust', 'ManagerController', 'adjustStock');
+$r->post('/manager/inventory/purchase-orders', 'ManagerController', 'storePurchaseOrder');
+$r->post('/manager/units/{id}/inventory/purchase-orders', 'ManagerController', 'storePurchaseOrder');
+$r->post('/manager/inventory/purchase-orders/{id}/receive', 'ManagerController', 'receiveStock');
+$r->get('/manager/employees', 'ManagerController', 'employees');
+$r->get('/manager/units/{id}/employees', 'ManagerController', 'employees');
+$r->get('/manager/settings', 'ManagerController', 'settings');
+$r->get('/manager/units/{id}/settings', 'ManagerController', 'settings');
+$r->post('/manager/settings/profile', 'ManagerController', 'updateProfile');
+$r->post('/manager/units/{id}/settings/profile', 'ManagerController', 'updateProfile');
+$r->post('/manager/settings/hours', 'ManagerController', 'updateOperatingHours');
+$r->post('/manager/units/{id}/settings/hours', 'ManagerController', 'updateOperatingHours');
+$r->post('/manager/settings/send-otp', 'ManagerController', 'sendOtp');
+$r->post('/manager/units/{id}/settings/send-otp', 'ManagerController', 'sendOtp');
+$r->post('/manager/settings/verify-otp', 'ManagerController', 'verifyOtp');
+$r->post('/manager/units/{id}/settings/verify-otp', 'ManagerController', 'verifyOtp');
+$r->post('/manager/settings/payment', 'ManagerController', 'updatePaymentSettings');
+$r->post('/manager/units/{id}/settings/payment', 'ManagerController', 'updatePaymentSettings');
 
 // System Administrator Interface (Business-Unit Scoped)
 $r->get('/sysadmin', 'SysAdminController', 'dashboard');

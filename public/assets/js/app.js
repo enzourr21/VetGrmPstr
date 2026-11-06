@@ -1653,4 +1653,290 @@
       { passive: true }
     );
   }
+
+  // ---- Pet Store Business Manager Interactions ----
+
+  // 1. Stock Adjustment Return Reason & Inspection Toggle
+  document.querySelectorAll('.stock-adj-form').forEach(function (form) {
+    var reasonSelect = form.querySelector('.inc-reason-select');
+    var inspectionWrap = form.querySelector('.return-inspection-wrap');
+    var inspectionCheck = form.querySelector('.inspection-checkbox');
+    var submitBtn = form.querySelector('button[type="submit"]');
+    if (!reasonSelect || !inspectionWrap) return;
+
+    function syncInspection() {
+      var val = reasonSelect.value;
+      var isReturn = val.indexOf('Returned product') !== -1;
+      if (isReturn) {
+        inspectionWrap.style.display = 'block';
+        if (inspectionCheck && !inspectionCheck.checked) {
+          submitBtn.disabled = true;
+        } else {
+          submitBtn.disabled = false;
+        }
+      } else {
+        inspectionWrap.style.display = 'none';
+        submitBtn.disabled = false;
+      }
+    }
+
+    reasonSelect.addEventListener('change', syncInspection);
+    if (inspectionCheck) {
+      inspectionCheck.addEventListener('change', syncInspection);
+    }
+  });
+
+  // 2. Operating Hours Day Toggle
+  document.querySelectorAll('.day-open-toggle').forEach(function (chk) {
+    chk.addEventListener('change', function () {
+      var day = chk.getAttribute('data-day');
+      var label = chk.closest('label').querySelector('.day-status-label');
+      var timeInputs = document.querySelectorAll('.day-time-input-' + day);
+      if (chk.checked) {
+        if (label) label.textContent = 'Open';
+        timeInputs.forEach(function (inp) { inp.disabled = false; });
+      } else {
+        if (label) label.textContent = 'Closed';
+        timeInputs.forEach(function (inp) { inp.disabled = true; });
+      }
+    });
+  });
+
+  // 3. Multi-Step Purchase Order Modal
+  var poModal = document.getElementById('po-create-modal');
+  if (poModal) {
+    var poStep1 = document.getElementById('po-step-1');
+    var poStep2 = document.getElementById('po-step-2');
+    var step1Ind = document.getElementById('step-1-indicator');
+    var step2Ind = document.getElementById('step-2-indicator');
+    var addProdBtn = document.getElementById('po-add-product-btn');
+    var itemsContainer = document.getElementById('po-items-container');
+    var continueBtn = document.getElementById('po-step-1-continue-btn');
+    var backBtn = document.getElementById('po-step-2-back-btn');
+    var confirmBtn = document.getElementById('po-confirm-order-btn');
+    var supplierNameInput = document.getElementById('po-supplier-name');
+    var contactPersonInput = document.getElementById('po-contact-person');
+    var supplierEmailInput = document.getElementById('po-supplier-email');
+    var supplierPhoneInput = document.getElementById('po-supplier-phone');
+    var optTpl = document.getElementById('po-product-options-template');
+
+    var poItemIndex = 0;
+
+    function checkStep1Validity() {
+      var itemRows = itemsContainer.querySelectorAll('.po-item-row');
+      var hasValidProduct = false;
+      itemRows.forEach(function (row) {
+        var sel = row.querySelector('select');
+        var qty = row.querySelector('input[type="number"]');
+        if (sel && sel.value !== '' && qty && parseInt(qty.value, 10) > 0) {
+          hasValidProduct = true;
+        }
+      });
+      if (continueBtn) {
+        continueBtn.disabled = !hasValidProduct;
+      }
+    }
+
+    function checkStep2Validity() {
+      var nameVal = supplierNameInput ? supplierNameInput.value.trim() : '';
+      var contactVal = contactPersonInput ? contactPersonInput.value.trim() : '';
+      var emailVal = supplierEmailInput ? supplierEmailInput.value.trim() : '';
+      var phoneVal = supplierPhoneInput ? supplierPhoneInput.value.trim() : '';
+
+      var hasContactMethod = emailVal.length > 0 || phoneVal.length > 0;
+      var isValid = nameVal.length > 0 && contactVal.length > 0 && hasContactMethod;
+      if (confirmBtn) {
+        confirmBtn.disabled = !isValid;
+      }
+    }
+
+    if (addProdBtn && optTpl) {
+      addProdBtn.addEventListener('click', function () {
+        var row = document.createElement('div');
+        row.className = 'po-item-row row';
+        row.style.gap = '0.75rem';
+        row.style.marginBottom = '0.75rem';
+        row.style.alignItems = 'center';
+
+        row.innerHTML =
+          '<div style="flex: 2;">' +
+            '<select name="items[' + poItemIndex + '][business_product_id]" required style="width: 100%;">' +
+              optTpl.innerHTML +
+            '</select>' +
+          '</div>' +
+          '<div style="width: 110px;">' +
+            '<input type="number" name="items[' + poItemIndex + '][quantity_ordered]" min="1" value="10" required style="width: 100%;" placeholder="Qty">' +
+          '</div>' +
+          '<div style="width: 130px;">' +
+            '<input type="number" step="0.01" name="items[' + poItemIndex + '][unit_cost]" min="0" value="0.00" style="width: 100%;" placeholder="Unit Cost">' +
+          '</div>' +
+          '<button type="button" class="btn ghost btn-sm po-remove-row-btn" style="color: var(--danger, #dc2626);" title="Remove row">&times;</button>';
+
+        itemsContainer.appendChild(row);
+        poItemIndex++;
+
+        row.querySelector('select').addEventListener('change', checkStep1Validity);
+        row.querySelector('input[type="number"]').addEventListener('input', checkStep1Validity);
+        row.querySelector('.po-remove-row-btn').addEventListener('click', function () {
+          row.remove();
+          checkStep1Validity();
+        });
+
+        checkStep1Validity();
+      });
+    }
+
+    if (continueBtn) {
+      continueBtn.addEventListener('click', function () {
+        poStep1.style.display = 'none';
+        poStep2.style.display = 'block';
+        if (step1Ind) step1Ind.style.color = 'var(--muted, #9ca3af)';
+        if (step2Ind) step2Ind.style.color = 'var(--primary, #0284c7)';
+        checkStep2Validity();
+      });
+    }
+
+    if (backBtn) {
+      backBtn.addEventListener('click', function () {
+        poStep2.style.display = 'none';
+        poStep1.style.display = 'block';
+        if (step1Ind) step1Ind.style.color = 'var(--primary, #0284c7)';
+        if (step2Ind) step2Ind.style.color = 'var(--muted, #9ca3af)';
+      });
+    }
+
+    [supplierNameInput, contactPersonInput, supplierEmailInput, supplierPhoneInput].forEach(function (inp) {
+      if (inp) {
+        inp.addEventListener('input', checkStep2Validity);
+      }
+    });
+  }
+
+  // 4. Payment Settings E-Wallet OTP Workflow (GCash & Maya)
+  function initEWalletOtp(service) {
+    var mobileInput = document.getElementById(service + '-mobile');
+    var sendBtn = document.getElementById(service + '-send-otp-btn');
+    var otpInput = document.getElementById(service + '-otp');
+    var verifyBtn = document.getElementById(service + '-verify-otp-btn');
+    var confirmBtn = document.getElementById(service + '-confirm-btn');
+    var isVerifiedInput = document.getElementById(service + '-is-verified');
+    var noticeEl = document.getElementById(service + '-otp-notice');
+    var statusEl = document.getElementById(service + '-verify-status');
+    var badgeEl = document.getElementById(service + '-badge');
+
+    if (!mobileInput || !sendBtn) return;
+
+    var csrfToken = '';
+    var csrfInput = document.querySelector('input[name="csrf_token"]') || document.querySelector('input[name="_csrf"]');
+    if (csrfInput) csrfToken = csrfInput.value;
+
+    function checkPhone() {
+      var val = mobileInput.value.replace(/[^0-9]/g, '');
+      sendBtn.disabled = !(val.length >= 10 && val.length <= 12);
+    }
+    mobileInput.addEventListener('input', checkPhone);
+    checkPhone();
+
+    sendBtn.addEventListener('click', function () {
+      sendBtn.disabled = true;
+      sendBtn.textContent = 'Sending...';
+      if (noticeEl) noticeEl.textContent = 'Contacting SMS gateway verification service...';
+
+      var body = new URLSearchParams();
+      body.append('service_type', service);
+      body.append('mobile_number', mobileInput.value.trim());
+      body.append('csrf_token', csrfToken);
+
+      fetch('/manager/settings/send-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body.toString()
+      })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        sendBtn.textContent = 'Send OTP';
+        sendBtn.disabled = false;
+        if (data.ok) {
+          if (noticeEl) {
+            noticeEl.style.color = 'var(--success, #16a34a)';
+            noticeEl.textContent = data.message;
+          }
+          if (otpInput) {
+            otpInput.disabled = false;
+            otpInput.focus();
+          }
+        } else {
+          if (noticeEl) {
+            noticeEl.style.color = 'var(--danger, #dc2626)';
+            noticeEl.textContent = data.message || 'Failed to dispatch verification code.';
+          }
+        }
+      })
+      .catch(function () {
+        sendBtn.textContent = 'Send OTP';
+        sendBtn.disabled = false;
+        if (noticeEl) {
+          noticeEl.style.color = 'var(--danger, #dc2626)';
+          noticeEl.textContent = 'Network error while contacting verification service.';
+        }
+      });
+    });
+
+    if (otpInput && verifyBtn) {
+      otpInput.addEventListener('input', function () {
+        var v = otpInput.value.trim();
+        verifyBtn.disabled = !(v.length === 6 && /^\d+$/.test(v));
+      });
+
+      verifyBtn.addEventListener('click', function () {
+        verifyBtn.disabled = true;
+        verifyBtn.textContent = 'Verifying...';
+
+        var body = new URLSearchParams();
+        body.append('service_type', service);
+        body.append('mobile_number', mobileInput.value.trim());
+        body.append('otp', otpInput.value.trim());
+        body.append('csrf_token', csrfToken);
+
+        fetch('/manager/settings/verify-otp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: body.toString()
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          verifyBtn.textContent = 'Verify OTP';
+          if (data.ok) {
+            if (statusEl) {
+              statusEl.style.color = 'var(--success, #16a34a)';
+              statusEl.textContent = 'Verified: ' + data.message;
+            }
+            if (badgeEl) {
+              badgeEl.className = 'badge badge-success';
+              badgeEl.textContent = 'Verified';
+            }
+            if (isVerifiedInput) isVerifiedInput.value = '1';
+            if (confirmBtn) confirmBtn.disabled = false;
+          } else {
+            verifyBtn.disabled = false;
+            if (statusEl) {
+              statusEl.style.color = 'var(--danger, #dc2626)';
+              statusEl.textContent = data.message || 'OTP verification failed.';
+            }
+          }
+        })
+        .catch(function () {
+          verifyBtn.textContent = 'Verify OTP';
+          verifyBtn.disabled = false;
+          if (statusEl) {
+            statusEl.style.color = 'var(--danger, #dc2626)';
+            statusEl.textContent = 'Verification server error.';
+          }
+        });
+      });
+    }
+  }
+
+  initEWalletOtp('gcash');
+  initEWalletOtp('maya');
 })();
