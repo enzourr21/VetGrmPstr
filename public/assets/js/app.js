@@ -1686,18 +1686,54 @@
     }
   });
 
-  // 2. Operating Hours Day Toggle
+  // 2. Operating Hours Day Toggle & Custom Time Picker Sync
+  function syncCustomTimePicker(picker) {
+    var hrSel = picker.querySelector('.time-hour');
+    var minSel = picker.querySelector('.time-minute');
+    var ampmSel = picker.querySelector('.time-ampm');
+    var hiddenInp = picker.querySelector('.time-hidden-val');
+    if (!hrSel || !minSel || !ampmSel || !hiddenInp) return;
+
+    var h = parseInt(hrSel.value, 10);
+    var m = minSel.value;
+    var ap = ampmSel.value;
+
+    if (ap === 'PM' && h < 12) h += 12;
+    if (ap === 'AM' && h === 12) h = 0;
+
+    var formatted = (h < 10 ? '0' : '') + h + ':' + m + ':00';
+    hiddenInp.value = formatted;
+  }
+
+  document.querySelectorAll('.custom-time-picker').forEach(function (picker) {
+    picker.querySelectorAll('.time-select').forEach(function (sel) {
+      sel.addEventListener('change', function () {
+        syncCustomTimePicker(picker);
+      });
+    });
+  });
+
   document.querySelectorAll('.day-open-toggle').forEach(function (chk) {
     chk.addEventListener('change', function () {
       var day = chk.getAttribute('data-day');
       var label = chk.closest('label').querySelector('.day-status-label');
-      var timeInputs = document.querySelectorAll('.day-time-input-' + day);
+      var pickers = document.querySelectorAll('.custom-time-picker[data-day="' + day + '"]');
       if (chk.checked) {
         if (label) label.textContent = 'Open';
-        timeInputs.forEach(function (inp) { inp.disabled = false; });
+        pickers.forEach(function (p) {
+          p.classList.remove('is-disabled');
+          p.querySelectorAll('select').forEach(function (s) { s.disabled = false; });
+          var hidden = p.querySelector('.time-hidden-val');
+          if (hidden) hidden.disabled = false;
+        });
       } else {
         if (label) label.textContent = 'Closed';
-        timeInputs.forEach(function (inp) { inp.disabled = true; });
+        pickers.forEach(function (p) {
+          p.classList.add('is-disabled');
+          p.querySelectorAll('select').forEach(function (s) { s.disabled = true; });
+          var hidden = p.querySelector('.time-hidden-val');
+          if (hidden) hidden.disabled = true;
+        });
       }
     });
   });
@@ -1764,11 +1800,8 @@
               optTpl.innerHTML +
             '</select>' +
           '</div>' +
-          '<div style="width: 110px;">' +
-            '<input type="number" name="items[' + poItemIndex + '][quantity_ordered]" min="1" value="10" required style="width: 100%;" placeholder="Qty">' +
-          '</div>' +
           '<div style="width: 130px;">' +
-            '<input type="number" step="0.01" name="items[' + poItemIndex + '][unit_cost]" min="0" value="0.00" style="width: 100%;" placeholder="Unit Cost">' +
+            '<input type="number" name="items[' + poItemIndex + '][quantity_ordered]" min="1" value="10" required style="width: 100%;" placeholder="Quantity">' +
           '</div>' +
           '<button type="button" class="btn ghost btn-sm po-remove-row-btn" style="color: var(--danger, #dc2626);" title="Remove row">&times;</button>';
 

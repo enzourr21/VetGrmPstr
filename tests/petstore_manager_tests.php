@@ -610,6 +610,266 @@ check('No Notifications tab or section added to Business Manager', !str_contains
 check('No Branch Information tab or section added', !str_contains($settingsPage['body'], 'Branch Information'));
 
 // -------------------------------------------------------------
+// SECTION 17: Final UI Refinements Verification
+// -------------------------------------------------------------
+echo "\n--- 17. Final UI Refinements Verification ---\n";
+
+// 1 & 2: Overview Page Refinements
+$ovRefined = request('GET', '/manager', [], $bmCookies);
+check('Overview page card is renamed to "Recent Sales"', (bool)preg_match('/<h2[^>]*>\s*Recent Sales\s*<\/h2>/i', $ovRefined['body']) && !str_contains($ovRefined['body'], 'Recently Successful Sales'));
+check('Overview displays unified Recent Sales list', str_contains($ovRefined['body'], 'Sales Channel') && str_contains($ovRefined['body'], 'Ref / Receipt #'));
+check('Overview Confirmed Appointments card is removed', !str_contains($ovRefined['body'], 'Confirmed Appointments'));
+check('Overview displays Employees On Duty card', str_contains($ovRefined['body'], 'Employees On Duty'));
+check('Overview displays Pending Refund Requests card with real requests', str_contains($ovRefined['body'], 'Pending Refund Requests') && str_contains($ovRefined['body'], 'REF-REQ-1001'));
+
+// 3: Sales Page Selected Indicator & Filter Button Removal
+$salesRefined = request('GET', '/manager/sales?tab=walkin', [], $bmCookies);
+check('Sales page Walk-in indicator uses emerald color treatment', str_contains($salesRefined['body'], 'var(--brand-soft') || str_contains($salesRefined['body'], 'var(--brand'));
+check('Sales page does not contain green Filter button', !preg_match('/<button[^>]+class="btn secondary[^>]*>Filter<\/button>/i', $salesRefined['body']));
+
+// 4 & 5: Products Page Refinements (No separate add button in page-head, custom confirmation dialog)
+$prodRefined = request('GET', '/manager/products', [], $bmCookies);
+preg_match('/<div class="page-head">([\s\S]*?)<\/div>\s*<!--/i', $prodRefined['body'], $pageHeadMatch);
+$pageHeadHtml = $pageHeadMatch[1] ?? '';
+check('Products page-head does not contain separate Add Product button', !str_contains($pageHeadHtml, 'Add Product') && !str_contains($pageHeadHtml, '<button'));
+check('Products table does not use browser-native confirm() dialog', !str_contains($prodRefined['body'], 'onsubmit="return confirm('));
+check('Products page includes application-styled status confirmation dialogs', str_contains($prodRefined['body'], 'id="confirm-status-modal-'));
+check('Products page does not contain green Filter button', !preg_match('/<button[^>]+class="btn secondary[^>]*>Filter<\/button>/i', $prodRefined['body']));
+check('Products category and status filters auto-submit on change', str_contains($prodRefined['body'], 'onchange="this.form.submit()"'));
+
+// 6 & 7: Product Image Upload & Preservation on Edit
+// Test multipart product creation with image upload
+$csrf = extractCsrf($prodRefined['body']);
+$testSkuImg = 'SKU-IMG-' . rand(1000, 9999);
+$testImgPath = sys_get_temp_dir() . '/test_paw.png';
+// Create a 1x1 test PNG
+file_put_contents($testImgPath, base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='));
+
+// Multipart request helper
+$boundary = '---------------------------' . microtime(true);
+$multipartBody = "--$boundary\r\n" .
+    "Content-Disposition: form-data; name=\"csrf_token\"\r\n\r\n$csrf\r\n" .
+    "--$boundary\r\n" .
+    "Content-Disposition: form-data; name=\"product_name\"\r\n\r\nOrganic Catnip Ball\r\n" .
+    "--$boundary\r\n" .
+    "Content-Disposition: form-data; name=\"sku\"\r\n\r\n$testSkuImg\r\n" .
+    "--$boundary\r\n" .
+    "Content-Disposition: form-data; name=\"product_category\"\r\n\r\nToys & Enrichment\r\n" .
+    "--$boundary\r\n" .
+    "Content-Disposition: form-data; name=\"selling_price\"\r\n\r\n8.50\r\n" .
+    "--$boundary\r\n" .
+    "Content-Disposition: form-data; name=\"description\"\r\n\r\nNatural pressed catnip ball toy.\r\n" .
+    "--$boundary\r\n" .
+    "Content-Disposition: form-data; name=\"product_image\"; filename=\"test_paw.png\"\r\n" .
+    "Content-Type: image/png\r\n\r\n" . file_get_contents($testImgPath) . "\r\n" .
+    "--$boundary--\r\n";
+
+$headers = [
+    'Content-Type: multipart/form-data; boundary=' . $boundary,
+    'Accept: text/html',
+];
+$cookiePairs = [];
+foreach ($bmCookies as $k => $v) { $cookiePairs[] = "$k=$v"; }
+if ($cookiePairs) { $headers[] = 'Cookie: ' . implode('; ', $cookiePairs); }
+
+$ctx = stream_context_create([
+    'http' => [
+        'method' => 'POST',
+        'header' => implode("\r\n", $headers),
+        'content' => $multipartBody,
+        'follow_location' => 0,
+        'ignore_errors' => true,
+    ],
+]);
+$resp = @file_get_contents('http://127.0.0.1:8080/manager/products', false, $ctx);
+$status = 0;
+foreach ($http_response_header ?? [] as $h) {
+    if (preg_match('#^HTTP/\S+\s+(\d+)#', $h, $m)) { $status = (int)$m[1]; }
+}
+check('Product creation with image upload redirects (302)', $status === 302);
+
+$createdImgBp = $pdo->query("SELECT bp.business_product_id, p.image_url FROM business_product bp JOIN product p ON p.product_id = bp.product_id WHERE p.sku = '$testSkuImg'")->fetch(PDO::FETCH_ASSOC);
+check('Uploaded image was stored and saved to product.image_url', !empty($createdImgBp) && str_starts_with($createdImgBp['image_url'], '/uploads/products/'));
+$imgBpId = (int)($createdImgBp['business_product_id'] ?? 0);
+$originalImgUrl = $createdImgBp['image_url'] ?? '';
+
+// Edit product WITHOUT replacement image file
+$editNoImg = request('POST', "/manager/products/$imgBpId/update", [
+    'csrf_token' => $csrf,
+    'product_name' => 'Organic Catnip Ball (Deluxe)',
+    'sku' => $testSkuImg,
+    'product_category' => 'Toys & Enrichment',
+    'selling_price' => '9.50',
+    'description' => 'Updated description without changing image.',
+], $bmCookies);
+check('Product edit without file upload redirects (302)', $editNoImg['status'] === 302);
+
+$preservedBp = $pdo->query("SELECT p.image_url FROM business_product bp JOIN product p ON p.product_id = bp.product_id WHERE bp.business_product_id = $imgBpId")->fetch(PDO::FETCH_ASSOC);
+check('Editing product without replacement preserves current image_url', $preservedBp['image_url'] === $originalImgUrl);
+
+// 8 & 9: Inventory Page (PO product rows retain quantity input but no price field; supplier phone styling)
+$appJsContent = file_get_contents(__DIR__ . '/../public/assets/js/app.js');
+check('PO item creation in app.js does not contain unit_cost / price field', !str_contains($appJsContent, 'name="items[\' + poItemIndex + \'][unit_cost]"'));
+check('PO item creation in app.js retains quantity_ordered input', str_contains($appJsContent, 'name="items[\' + poItemIndex + \'][quantity_ordered]"'));
+
+$invPage = request('GET', '/manager/inventory?tab=orders', [], $bmCookies);
+check('Supplier Phone input field uses type="tel"', str_contains($invPage['body'], 'id="po-supplier-phone"') && str_contains($invPage['body'], 'type="tel"'));
+
+$appCssContent = file_get_contents(__DIR__ . '/../public/assets/css/app.css');
+check('CSS includes input[type=tel] and input[type=search] in standardized form control styles', str_contains($appCssContent, 'input[type=tel]') && str_contains($appCssContent, 'input[type=search]'));
+
+// 10: Employees Page (Search field appearance & no green filter button)
+$empPage = request('GET', '/manager/employees', [], $bmCookies);
+check('Employees search field uses .search-input-wrap with aligned search icon', str_contains($empPage['body'], 'class="search-input-wrap"') && str_contains($empPage['body'], 'class="search-icon"'));
+check('Employees page does not contain green Filter button', !preg_match('/<button[^>]+class="btn secondary[^>]*>Filter<\/button>/i', $empPage['body']));
+check('Employees position and work status dropdowns auto-submit on change', str_contains($empPage['body'], 'id="emp-pos" name="position" style="width: 100%;" onchange="this.form.submit()"'));
+
+// 11: Business Settings Operating Hours Custom Time Picker
+$settingsRefined = request('GET', '/manager/settings', [], $bmCookies);
+check('Business Settings uses custom time picker UI', str_contains($settingsRefined['body'], 'class="custom-time-picker') && str_contains($settingsRefined['body'], 'class="time-select time-hour"'));
+check('Business Settings does not use browser default input type="time"', !str_contains($settingsRefined['body'], 'type="time"'));
+check('Custom time picker includes hour, minute, and AM/PM select elements', str_contains($settingsRefined['body'], 'time-minute') && str_contains($settingsRefined['body'], 'time-ampm'));
+
+@unlink($testImgPath);
+
+echo "\n--- 18. Overview Page Corrections & Refund Requests Management ---\n";
+
+// 1. Overview Page Corrections
+$ov = request('GET', '/manager', [], $bmCookies);
+check('Overview contains Employees On Duty card', str_contains($ov['body'], 'Employees On Duty'));
+check('Overview excludes Confirmed Appointments card', !str_contains($ov['body'], 'Confirmed Appointments'));
+check('Overview Employees On Duty displays active on-duty/free staff', str_contains($ov['body'], 'David Reyes') && str_contains($ov['body'], 'Janricson Ompoy'));
+check('Overview Pending Refund Requests displays pending reference', str_contains($ov['body'], 'REF-REQ-1001') || str_contains($ov['body'], 'REF-REQ-1002'));
+check('Overview Pending Refund Requests links to Sales refunds view', str_contains($ov['body'], 'tab=refunds&amp;view=') || str_contains($ov['body'], 'tab=refunds&view='));
+check('Overview Recent Sales unified record is preserved', str_contains($ov['body'], 'Recent Sales') && str_contains($ov['body'], 'Sales Channel'));
+
+// 2. Sales Page Structure (3 Views: Walk-in, Online, Refund Requests)
+$salesWalk = request('GET', '/manager/sales?tab=walkin', [], $bmCookies);
+check('Sales page Walk-in tab has is-active class', (bool)preg_match('/tab=walkin[^>]*class="[^"]*segmented-pill[^"]*is-active/s', $salesWalk['body']));
+
+$salesOnline = request('GET', '/manager/sales?tab=online', [], $bmCookies);
+check('Sales page Online tab has is-active class', (bool)preg_match('/tab=online[^>]*class="[^"]*segmented-pill[^"]*is-active/s', $salesOnline['body']));
+
+$salesRefunds = request('GET', '/manager/sales?tab=refunds', [], $bmCookies);
+check('Sales page Refund Requests tab renders (200)', $salesRefunds['status'] === 200);
+check('Sales page Refund Requests tab has is-active class', (bool)preg_match('/tab=refunds[^>]*class="[^"]*segmented-pill[^"]*is-active/s', $salesRefunds['body']));
+check('Sales page Refund Requests active treatment uses emerald color', str_contains($salesRefunds['body'], 'var(--brand-soft') || str_contains($salesRefunds['body'], 'var(--brand'));
+check('Sales page Refund Requests has automatic status filter dropdown', str_contains($salesRefunds['body'], '<select name="status" onchange="this.form.submit()"'));
+check('Sales page Refund Requests has search input', str_contains($salesRefunds['body'], 'type="search"') && str_contains($salesRefunds['body'], 'name="q"'));
+check('Sales page does not contain green Apply Filter button', !preg_match('/<button[^>]+class="btn secondary[^>]*>Filter<\/button>/i', $salesRefunds['body']));
+
+// 3. Refund Requests List & Details
+check('Refund requests list displays pending request REF-REQ-1001', str_contains($salesRefunds['body'], 'REF-REQ-1001'));
+check('Refund requests list displays pending request REF-REQ-1002', str_contains($salesRefunds['body'], 'REF-REQ-1002'));
+check('Refund details modal contains customer reason', str_contains($salesRefunds['body'], 'Wrong formulation received'));
+check('Refund details modal contains supporting evidence', str_contains($salesRefunds['body'], 'Unopened bag with intact factory seal'));
+check('Refund details modal provides link to view original transaction', str_contains($salesRefunds['body'], 'View Original Transaction &rarr;'));
+check('Refund details modal contains purchased products table', str_contains($salesRefunds['body'], 'Purchased Products in Original Transaction'));
+
+// 4. Refund Request Actions (Backend decisions, separate payment & inventory)
+// Create test refund requests for approval and rejection tests
+$pdo->exec("INSERT INTO refund_request (refund_reference, business_unit_id, customer_id, order_id, sale_id, payment_id, channel, requested_amount, customer_reason, request_status)
+            VALUES ('REF-TEST-APP', 1, 1, 9002, NULL, 9002, 'online', 15.00, 'Test approval request', 'pending')
+            ON DUPLICATE KEY UPDATE request_status = 'pending'");
+$appTestId = (int)$pdo->query("SELECT refund_request_id FROM refund_request WHERE refund_reference = 'REF-TEST-APP'")->fetchColumn();
+
+$pdo->exec("INSERT INTO refund_request (refund_reference, business_unit_id, customer_id, order_id, sale_id, payment_id, channel, requested_amount, customer_reason, request_status)
+            VALUES ('REF-TEST-REJ', 1, 1, NULL, 9001, 9001, 'walkin', 10.00, 'Test rejection request', 'pending')
+            ON DUPLICATE KEY UPDATE request_status = 'pending'");
+$rejTestId = (int)$pdo->query("SELECT refund_request_id FROM refund_request WHERE refund_reference = 'REF-TEST-REJ'")->fetchColumn();
+
+// Get fresh CSRF token
+$csrfSales = extractCsrf($salesRefunds['body']);
+
+// Test Rejection: rejection without reason is rejected
+$rejNoReason = request('POST', "/manager/sales/refunds/$rejTestId/reject", [
+    'csrf_token' => $csrfSales,
+    'rejection_reason' => '',
+], $bmCookies);
+$rejCheck1 = $pdo->query("SELECT request_status FROM refund_request WHERE refund_request_id = $rejTestId")->fetchColumn();
+check('Rejection without reason is rejected by backend (status remains pending)', $rejCheck1 === 'pending');
+
+// Test Rejection with reason
+$rejWithReason = request('POST', "/manager/sales/refunds/$rejTestId/reject", [
+    'csrf_token' => $csrfSales,
+    'rejection_reason' => 'Product was opened and used beyond policy limit.',
+], $bmCookies);
+check('Rejection with reason redirects (302)', $rejWithReason['status'] === 302);
+
+$rejCheck2 = $pdo->query("SELECT * FROM refund_request WHERE refund_request_id = $rejTestId")->fetch(PDO::FETCH_ASSOC);
+check('Refund request status is now rejected', $rejCheck2['request_status'] === 'rejected');
+check('Rejection reason saved in database', $rejCheck2['rejection_reason'] === 'Product was opened and used beyond policy limit.');
+check('Deciding employee recorded for rejection', (int)$rejCheck2['decided_by_employee_id'] === 5);
+check('Decision timestamp recorded for rejection', !empty($rejCheck2['decided_at']));
+
+// Verify original transaction is preserved
+$origSale = $pdo->query("SELECT sale_status FROM sale WHERE sale_id = 9001")->fetchColumn();
+check('Original sale transaction is preserved intact (completed)', $origSale === 'completed');
+
+// Test Duplicate Rejection / Finalized modification prevention
+$dupRej = request('POST', "/manager/sales/refunds/$rejTestId/reject", [
+    'csrf_token' => $csrfSales,
+    'rejection_reason' => 'Second attempt',
+], $bmCookies);
+check('Duplicate rejection on finalized request redirected with error', $dupRej['status'] === 302);
+
+// Test Approval:
+$beforeStock = (int)$pdo->query("SELECT on_hand FROM inventory WHERE business_product_id = 6")->fetchColumn();
+$beforePayment = $pdo->query("SELECT payment_status FROM payment WHERE payment_id = 9002")->fetchColumn();
+
+$appReq = request('POST', "/manager/sales/refunds/$appTestId/approve", [
+    'csrf_token' => $csrfSales,
+    'approved_amount' => '15.00',
+], $bmCookies);
+check('Approval redirects (302)', $appReq['status'] === 302);
+
+$appCheck = $pdo->query("SELECT * FROM refund_request WHERE refund_request_id = $appTestId")->fetch(PDO::FETCH_ASSOC);
+check('Refund request status is now approved', $appCheck['request_status'] === 'approved');
+check('Approved amount is recorded', (float)$appCheck['approved_amount'] === 15.00);
+check('Deciding employee recorded for approval', (int)$appCheck['decided_by_employee_id'] === 5);
+check('Decision timestamp recorded for approval', !empty($appCheck['decided_at']));
+
+// Verify important payment and inventory rules
+$afterStock = (int)$pdo->query("SELECT on_hand FROM inventory WHERE business_product_id = 6")->fetchColumn();
+$afterPayment = $pdo->query("SELECT payment_status FROM payment WHERE payment_id = 9002")->fetchColumn();
+$origOrder = $pdo->query("SELECT order_status FROM customer_order WHERE order_id = 9002")->fetchColumn();
+
+check('Approving refund request does NOT automatically mark payment as refunded (remains completed)', $afterPayment === 'completed' && $afterPayment === $beforePayment);
+check('Approving refund request does NOT automatically increase sellable inventory stock', $afterStock === $beforeStock);
+check('Original order transaction is preserved intact (completed)', $origOrder === 'completed');
+
+// Test Duplicate Approval prevention
+$dupApp = request('POST', "/manager/sales/refunds/$appTestId/approve", [
+    'csrf_token' => $csrfSales,
+], $bmCookies);
+check('Duplicate decision on already-finalized approved request is blocked', $dupApp['status'] === 302);
+
+// Clean up test refund requests
+$pdo->exec("DELETE FROM refund_request WHERE refund_reference IN ('REF-TEST-APP', 'REF-TEST-REJ')");
+
+echo "\n--- 19. Overview Buttons Removal & Employees Page Refinements ---\n";
+
+// Overview Buttons Removal
+$ovFresh = request('GET', '/manager', [], $bmCookies);
+check('Overview page does NOT contain Full Roster button', !str_contains($ovFresh['body'], 'Full Roster'));
+check('Overview page does NOT contain View All Refunds button', !str_contains($ovFresh['body'], 'View All Refunds'));
+check('Overview page does NOT contain Review Request button', !str_contains($ovFresh['body'], 'Review Request'));
+
+// Employees Page Table Columns & Modal
+$empFresh = request('GET', '/manager/employees', [], $bmCookies);
+check('Employees table header does not contain Contact #', !str_contains($empFresh['body'], '<th>Contact #</th>'));
+check('Employees table header does not contain Date Hired', !str_contains($empFresh['body'], '<th>Date Hired</th>'));
+// Ensure table wrapper enforces vertical scroll and suppresses horizontal scroll
+check('Employees table wrapper has vertical scroll and suppresses horizontal scroll', str_contains($empFresh['body'], 'overflow-y: auto') && str_contains($empFresh['body'], 'overflow-x: hidden'));
+// Ensure View Profile modal contains Contact Number and Date Hired
+check('Employee profile modal displays Contact Number', str_contains($empFresh['body'], 'Contact Number:'));
+check('Employee profile modal displays Date Hired', str_contains($empFresh['body'], 'Date Hired:'));
+// Ensure pagination controls are present
+check('Employees page includes pagination navigation', str_contains($empFresh['body'], 'pagination-centered'));
+check('Employees page pagination includes Previous and Next controls', str_contains($empFresh['body'], 'pagination-prev') && str_contains($empFresh['body'], 'pagination-next'));
+check('Employees page pagination displays Page status', (bool)preg_match('/Page \d+ of \d+/', $empFresh['body']));
+
+// -------------------------------------------------------------
 // SUMMARY
 // -------------------------------------------------------------
 echo "\n====================================================================\n";

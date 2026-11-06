@@ -34,8 +34,13 @@ $isInvManager = !empty($isInventoryManagerOnly);
           <input type="hidden" name="unit_id" value="<?= (int)$unitId ?>">
         <?php endif; ?>
         <input type="hidden" name="tab" value="stock">
-        <input type="search" name="q" value="<?= e($q) ?>" placeholder="Search stock by name or SKU..." style="width: 240px; padding: 0.4rem 0.75rem; border-radius: 6px; border: 1px solid var(--border, #d1d5db);">
-        <button type="submit" class="btn secondary btn-sm">Search</button>
+        <div class="search-input-wrap" style="width: 260px;">
+          <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          </svg>
+          <input type="search" name="q" value="<?= e($q) ?>" placeholder="Search stock or SKU... (Enter)" class="search-input">
+        </div>
         <?php if ($q !== ''): ?>
           <a href="/manager/inventory<?= $unitQuery ?>" class="btn ghost btn-sm">Reset</a>
         <?php endif; ?>
@@ -538,29 +543,29 @@ $isInvManager = !empty($isInventoryManagerOnly);
           Enter supplier details. Supplier Name and Contact Person are required. At least one contact method (Email or Phone) is required.
         </p>
 
-        <div class="grid grid-2">
-          <div class="field">
+        <div class="grid grid-2" style="gap: 1rem; margin-bottom: 1rem;">
+          <div class="field" style="margin-bottom: 0;">
             <label for="po-supplier-name">Supplier Name *</label>
             <input id="po-supplier-name" name="supplier_name" type="text" required placeholder="e.g. Metro Pet Distribution Corp.">
           </div>
-          <div class="field">
+          <div class="field" style="margin-bottom: 0;">
             <label for="po-contact-person">Contact Person *</label>
             <input id="po-contact-person" name="contact_person" type="text" required placeholder="e.g. Maria Santos">
           </div>
         </div>
 
-        <div class="grid grid-2">
-          <div class="field">
+        <div class="grid grid-2" style="gap: 1rem; margin-bottom: 1rem;">
+          <div class="field" style="margin-bottom: 0;">
             <label for="po-supplier-email">Supplier Email (Email OR Phone required)</label>
             <input id="po-supplier-email" name="supplier_email" type="email" placeholder="e.g. orders@metropet.ph">
           </div>
-          <div class="field">
+          <div class="field" style="margin-bottom: 0;">
             <label for="po-supplier-phone">Supplier Phone (Email OR Phone required)</label>
             <input id="po-supplier-phone" name="supplier_phone" type="tel" placeholder="e.g. 0917-123-4567 or 8123-4567">
           </div>
         </div>
 
-        <div class="field">
+        <div class="field" style="margin-bottom: 1rem;">
           <label for="po-notes">Order Notes (Optional)</label>
           <input id="po-notes" name="notes" type="text" placeholder="e.g. Routine monthly replenishment shipment">
         </div>
@@ -599,3 +604,4 @@ $isInvManager = !empty($isInventoryManagerOnly);
     </option>
   <?php endforeach; ?>
 </template>
+

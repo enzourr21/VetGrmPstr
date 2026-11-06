@@ -11,14 +11,9 @@ $statusFilter = $statusFilter ?? '';
     <h1>Products</h1>
     <p class="muted">Manage Pet Store retail catalog items, product codes, descriptions, and pricing.</p>
   </div>
-  <div>
-    <button type="button" class="btn primary" data-modal-open="add-product-modal">
-      + Add Product
-    </button>
-  </div>
 </div>
 
-<!-- Search & Filtering Bar -->
+<!-- Search & Filtering Bar (Automatic Filtering on Selection; No Green Filter Button) -->
 <section class="card" style="margin-bottom: 1.5rem; padding: 1rem 1.25rem;">
   <form method="get" action="/manager/products" class="row" style="gap: 1rem; align-items: flex-end; flex-wrap: wrap;">
     <?php if (!empty($isSuper)): ?>
@@ -27,12 +22,18 @@ $statusFilter = $statusFilter ?? '';
 
     <div class="field" style="margin: 0; min-width: 220px; flex: 1;">
       <label for="prod-search" class="caption" style="display: block; margin-bottom: 0.25rem;">Search Name or SKU</label>
-      <input id="prod-search" type="search" name="q" value="<?= e($q) ?>" placeholder="e.g. Kibble, SKU-PS-001..." style="width: 100%;">
+      <div class="search-input-wrap">
+        <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="11" cy="11" r="8"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <input id="prod-search" type="search" name="q" value="<?= e($q) ?>" placeholder="Search Name or SKU... (Press Enter)" class="search-input">
+      </div>
     </div>
 
     <div class="field" style="margin: 0; width: 180px;">
       <label for="prod-cat" class="caption" style="display: block; margin-bottom: 0.25rem;">Category</label>
-      <select id="prod-cat" name="category" style="width: 100%;">
+      <select id="prod-cat" name="category" style="width: 100%;" onchange="this.form.submit()">
         <option value="">All Categories</option>
         <?php foreach ($categories as $cat): ?>
           <option value="<?= e($cat) ?>" <?= $catFilter === $cat ? 'selected' : '' ?>><?= e($cat) ?></option>
@@ -42,27 +43,33 @@ $statusFilter = $statusFilter ?? '';
 
     <div class="field" style="margin: 0; width: 150px;">
       <label for="prod-status" class="caption" style="display: block; margin-bottom: 0.25rem;">Status</label>
-      <select id="prod-status" name="status" style="width: 100%;">
+      <select id="prod-status" name="status" style="width: 100%;" onchange="this.form.submit()">
         <option value="">All Statuses</option>
         <option value="active" <?= $statusFilter === 'active' ? 'selected' : '' ?>>Active Only</option>
         <option value="inactive" <?= $statusFilter === 'inactive' ? 'selected' : '' ?>>Inactive Only</option>
       </select>
     </div>
 
-    <div class="row" style="gap: 0.5rem; align-items: center;">
-      <button type="submit" class="btn secondary">Filter</button>
-      <?php if ($q !== '' || $catFilter !== '' || $statusFilter !== ''): ?>
+    <?php if ($q !== '' || $catFilter !== '' || $statusFilter !== ''): ?>
+      <div class="row" style="align-items: center;">
         <a href="/manager/products<?= $unitQuery ?>" class="btn ghost">Reset</a>
-      <?php endif; ?>
-    </div>
+      </div>
+    <?php endif; ?>
   </form>
 </section>
 
 <!-- Product Catalog Table -->
 <section class="card">
   <div class="row" style="justify-content: space-between; align-items: baseline; margin-bottom: 1rem;">
-    <h2 style="margin: 0;">Product Catalog (<?= count($products) ?>)</h2>
-    <span class="caption">Inventory quantities and stock operations are managed on the separate <a href="/manager/inventory<?= $unitQuery ?>">Inventory</a> page.</span>
+    <div>
+      <h2 style="margin: 0;">Product Catalog (<?= count($products) ?>)</h2>
+      <span class="caption">Inventory quantities and stock operations are managed on the separate <a href="/manager/inventory<?= $unitQuery ?>">Inventory</a> page.</span>
+    </div>
+    <div>
+      <button type="button" class="btn secondary btn-sm" data-modal-open="add-product-modal">
+        + Add Product
+      </button>
+    </div>
   </div>
 
   <?php if (empty($products)): ?>
@@ -117,13 +124,9 @@ $statusFilter = $statusFilter ?? '';
                   <button type="button" class="btn secondary btn-sm" data-modal-open="edit-prod-<?= (int)$p['business_product_id'] ?>">
                     Edit
                   </button>
-                  <form method="post" action="/manager/products/<?= (int)$p['business_product_id'] ?>/status<?= $unitQuery ?>" style="display: inline;" onsubmit="return confirm('<?= $p['product_status'] === 'active' ? 'Deactivate this product? Historical sales and inventory records will be preserved.' : 'Re-activate this product for retail sales?' ?>');">
-                    <?= \App\Core\CSRF::field() ?>
-                    <input type="hidden" name="status" value="<?= $p['product_status'] === 'active' ? 'inactive' : 'active' ?>">
-                    <button type="submit" class="btn <?= $p['product_status'] === 'active' ? 'danger' : 'ghost' ?> btn-sm">
-                      <?= $p['product_status'] === 'active' ? 'Deactivate' : 'Activate' ?>
-                    </button>
-                  </form>
+                  <button type="button" class="btn <?= $p['product_status'] === 'active' ? 'danger' : 'ghost' ?> btn-sm" data-modal-open="confirm-status-modal-<?= (int)$p['business_product_id'] ?>">
+                    <?= $p['product_status'] === 'active' ? 'Deactivate' : 'Activate' ?>
+                  </button>
                 </div>
               </td>
             </tr>
@@ -141,7 +144,7 @@ $statusFilter = $statusFilter ?? '';
     <button type="button" class="btn ghost btn-sm" data-modal-close>&times; Close</button>
   </div>
   <div class="modal-body">
-    <form method="post" action="/manager/products<?= $unitQuery ?>">
+    <form method="post" action="/manager/products<?= $unitQuery ?>" enctype="multipart/form-data">
       <?= \App\Core\CSRF::field() ?>
 
       <div class="grid grid-2">
@@ -181,8 +184,9 @@ $statusFilter = $statusFilter ?? '';
       </div>
 
       <div class="field">
-        <label for="new-prod-img">Product Image URL (Optional)</label>
-        <input id="new-prod-img" name="image_url" type="url" placeholder="https://... or /assets/img/...">
+        <label for="new-prod-img">Product Image File (Optional)</label>
+        <input id="new-prod-img" name="product_image" type="file" accept="image/png, image/jpeg, image/jpg, image/webp, image/gif">
+        <span class="caption">Supported formats: PNG, JPG, WebP, GIF (Max 5MB).</span>
       </div>
 
       <div class="modal-foot" style="margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--border, #e5e7eb); display: flex; justify-content: flex-end; gap: 0.5rem;">
@@ -254,7 +258,7 @@ $statusFilter = $statusFilter ?? '';
       <button type="button" class="btn ghost btn-sm" data-modal-close>&times; Close</button>
     </div>
     <div class="modal-body">
-      <form method="post" action="/manager/products/<?= (int)$p['business_product_id'] ?>/update<?= $unitQuery ?>">
+      <form method="post" action="/manager/products/<?= (int)$p['business_product_id'] ?>/update<?= $unitQuery ?>" enctype="multipart/form-data">
         <?= \App\Core\CSRF::field() ?>
 
         <div class="grid grid-2">
@@ -287,8 +291,15 @@ $statusFilter = $statusFilter ?? '';
         </div>
 
         <div class="field">
-          <label for="edit-img-<?= (int)$p['business_product_id'] ?>">Product Image URL (Optional)</label>
-          <input id="edit-img-<?= (int)$p['business_product_id'] ?>" name="image_url" type="url" value="<?= e($p['image_url'] ?? '') ?>">
+          <label for="edit-img-<?= (int)$p['business_product_id'] ?>">Product Image</label>
+          <?php if (!empty($p['image_url'])): ?>
+            <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem; background: var(--bg-subtle, #f9fafb); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid var(--border, #e5e7eb);">
+              <img src="<?= e($p['image_url']) ?>" alt="Current image" style="width: 36px; height: 36px; object-fit: cover; border-radius: 4px;">
+              <span class="caption">Current image is preserved unless a replacement file is selected.</span>
+            </div>
+          <?php endif; ?>
+          <input id="edit-img-<?= (int)$p['business_product_id'] ?>" name="product_image" type="file" accept="image/png, image/jpeg, image/jpg, image/webp, image/gif">
+          <span class="caption">Upload a replacement image file (PNG, JPG, WebP, GIF - Max 5MB).</span>
         </div>
 
         <div class="modal-foot" style="margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--border, #e5e7eb); display: flex; justify-content: flex-end; gap: 0.5rem;">
@@ -298,4 +309,43 @@ $statusFilter = $statusFilter ?? '';
       </form>
     </div>
   </dialog>
+
+  <!-- Product Activation / Deactivation Confirmation Modal -->
+  <dialog class="modal" id="confirm-status-modal-<?= (int)$p['business_product_id'] ?>" aria-labelledby="status-title-<?= (int)$p['business_product_id'] ?>">
+    <div class="modal-head">
+      <h3 id="status-title-<?= (int)$p['business_product_id'] ?>"><?= $p['product_status'] === 'active' ? 'Deactivate Product' : 'Activate Product' ?></h3>
+      <button type="button" class="btn ghost btn-sm" data-modal-close>&times; Close</button>
+    </div>
+    <div class="modal-body">
+      <div style="margin-bottom: 1rem;">
+        <p style="font-size: 1rem; margin: 0 0 0.75rem 0;">
+          Are you sure you want to <strong><?= $p['product_status'] === 'active' ? 'deactivate' : 'activate' ?></strong> this catalog product?
+        </p>
+        <div style="background: var(--bg-subtle, #f9fafb); padding: 0.85rem 1rem; border-radius: 6px; border: 1px solid var(--border, #e5e7eb);">
+          <div><strong>Product:</strong> <?= e($p['product_name']) ?></div>
+          <div style="margin-top: 0.25rem;"><strong>SKU / Code:</strong> <code><?= e($p['sku'] ?: '—') ?></code></div>
+          <div style="margin-top: 0.25rem;"><strong>Category:</strong> <?= e($p['product_category']) ?></div>
+          <div style="margin-top: 0.25rem;"><strong>Selling Price:</strong> <?= peso((float)$p['selling_price']) ?></div>
+        </div>
+      </div>
+      <p class="caption" style="line-height: 1.45; margin: 0;">
+        <?php if ($p['product_status'] === 'active'): ?>
+          Deactivating this product removes it from customer catalog listings and shopping carts. All historical sales, order lines, receiving batches, and inventory adjustment records are safely preserved.
+        <?php else: ?>
+          Activating this product restores it to the retail storefront and allows customers to add it to their carts.
+        <?php endif; ?>
+      </p>
+    </div>
+    <div class="modal-foot" style="display: flex; justify-content: flex-end; gap: 0.5rem; padding-top: 1rem; border-top: 1px solid var(--border, #e5e7eb);">
+      <button type="button" class="btn ghost" data-modal-close>Cancel</button>
+      <form method="post" action="/manager/products/<?= (int)$p['business_product_id'] ?>/status<?= $unitQuery ?>" style="display: inline;">
+        <?= \App\Core\CSRF::field() ?>
+        <input type="hidden" name="status" value="<?= $p['product_status'] === 'active' ? 'inactive' : 'active' ?>">
+        <button type="submit" class="btn <?= $p['product_status'] === 'active' ? 'danger' : 'primary' ?>">
+          Confirm <?= $p['product_status'] === 'active' ? 'Deactivation' : 'Activation' ?>
+        </button>
+      </form>
+    </div>
+  </dialog>
 <?php endforeach; ?>
+

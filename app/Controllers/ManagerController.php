@@ -104,44 +104,43 @@ final class ManagerController extends Controller
         }
 
         // Pet Store Overview Queries
-        // 1. Confirmed Appointments
-        $apptsStmt = $this->db->prepare(
-            "SELECT a.appointment_id, a.preferred_date, a.preferred_time, a.appointment_type,
-                    CONCAT(c.first_name, ' ', c.last_name) AS customer_name,
-                    c.phone AS contact_number, ua.email, st.status_name
-             FROM appointment a
-             JOIN appointment_status st ON st.appointment_status_id = a.appointment_status_id
-             JOIN customer c ON c.customer_id = a.customer_id
-             LEFT JOIN user_account ua ON ua.user_account_id = c.user_account_id
-             WHERE a.business_unit_id = ? AND st.status_name = 'Confirmed'
-             ORDER BY a.preferred_date ASC, a.preferred_time ASC
-             LIMIT 15"
+        // 1. Employees On Duty (work_status IN ('On Duty', 'Free'), exclude 'Not Present')
+        $dutyStmt = $this->db->prepare(
+            "SELECT e.employee_id, e.first_name, e.last_name, e.position,
+                    COALESCE(ews.work_status, 'Free') AS work_status,
+                    ua.email
+             FROM employee e
+             JOIN user_account ua ON ua.user_account_id = e.user_account_id
+             LEFT JOIN employee_work_status ews ON ews.employee_id = e.employee_id
+             WHERE e.business_unit_id = ?
+               AND e.employee_status = 'active'
+               AND COALESCE(ews.work_status, 'Free') IN ('On Duty', 'Free')
+             ORDER BY CASE WHEN COALESCE(ews.work_status, 'Free') = 'On Duty' THEN 0 ELSE 1 END,
+                      e.last_name ASC, e.first_name ASC"
         );
-        $apptsStmt->execute([$unitId]);
-        $confirmedAppointments = $apptsStmt->fetchAll();
+        $dutyStmt->execute([$unitId]);
+        $employeesOnDuty = $dutyStmt->fetchAll();
 
         // 2. Pending Refund Requests
         $refundsStmt = $this->db->prepare(
-            "SELECT p.payment_id, p.amount, p.payment_method, p.payment_date, p.created_at,
-                    p.order_id, p.sale_id,
-                    CASE WHEN p.order_id IS NOT NULL THEN 'Online Order' ELSE 'Walk-in Sale' END AS channel,
-                    COALESCE(co.order_id, s.sale_id) AS ref_id,
-                    COALESCE(CONCAT(c1.first_name, ' ', c1.last_name), CONCAT(c2.first_name, ' ', c2.last_name), 'Walk-in Customer') AS customer_name
-             FROM payment p
-             LEFT JOIN customer_order co ON co.order_id = p.order_id
-             LEFT JOIN customer c1 ON c1.customer_id = co.customer_id
-             LEFT JOIN sale s ON s.sale_id = p.sale_id
-             LEFT JOIN customer c2 ON c2.customer_id = s.customer_id
-             WHERE p.payment_type = 'refund'
-               AND p.payment_status = 'pending'
-               AND (co.business_unit_id = ? OR s.business_unit_id = ?)
-             ORDER BY p.created_at DESC
-             LIMIT 15"
+            "SELECT rr.refund_request_id, rr.refund_reference, rr.business_unit_id,
+                    rr.customer_id, rr.order_id, rr.sale_id, rr.channel,
+                    rr.requested_amount, rr.request_status, rr.created_at,
+                    CONCAT(c.first_name, ' ', c.last_name) AS customer_name,
+                    c.phone AS customer_phone,
+                    CASE WHEN rr.channel = 'online' THEN CONCAT('#ORD-', rr.order_id)
+                         ELSE CONCAT('#REC-S-', rr.sale_id) END AS transaction_ref,
+                    CASE WHEN rr.channel = 'online' THEN 'Online Order' ELSE 'Walk-in Sale' END AS channel_label
+             FROM refund_request rr
+             JOIN customer c ON c.customer_id = rr.customer_id
+             WHERE rr.business_unit_id = ?
+               AND rr.request_status = 'pending'
+             ORDER BY rr.created_at DESC"
         );
-        $refundsStmt->execute([$unitId, $unitId]);
+        $refundsStmt->execute([$unitId]);
         $pendingRefunds = $refundsStmt->fetchAll();
 
-        // 3. Recently Successful Sales: Walk-in Sales
+        // 3. Recent Sales: Unified List of Walk-in Sales & Online Orders
         $walkInStmt = $this->db->prepare(
             "SELECT s.sale_id, s.sale_date, s.total_amount, s.sale_status,
                     COALESCE(CONCAT(c.first_name, ' ', c.last_name), 'Walk-in Customer') AS customer_name,
@@ -150,12 +149,11 @@ final class ManagerController extends Controller
              LEFT JOIN customer c ON c.customer_id = s.customer_id
              WHERE s.business_unit_id = ? AND s.sale_status = 'completed'
              ORDER BY s.sale_date DESC, s.sale_id DESC
-             LIMIT 8"
+             LIMIT 10"
         );
         $walkInStmt->execute([$unitId]);
         $recentWalkInSales = $walkInStmt->fetchAll();
 
-        // 3. Recently Successful Sales: Online Orders
         $onlineStmt = $this->db->prepare(
             "SELECT co.order_id, co.order_date, co.total_amount, co.order_status, co.fulfillment_method,
                     CONCAT(c.first_name, ' ', c.last_name) AS customer_name,
@@ -164,10 +162,44 @@ final class ManagerController extends Controller
              JOIN customer c ON c.customer_id = co.customer_id
              WHERE co.business_unit_id = ? AND co.order_status IN ('completed', 'confirmed', 'processing', 'ready_for_pickup', 'out_for_delivery')
              ORDER BY co.order_date DESC, co.order_id DESC
-             LIMIT 8"
+             LIMIT 10"
         );
         $onlineStmt->execute([$unitId]);
         $recentOnlineOrders = $onlineStmt->fetchAll();
+
+        // Build unified Recent Sales list (one row per sale, newest first)
+        $recentSales = [];
+        foreach ($recentWalkInSales as $ws) {
+            $recentSales[] = [
+                'channel' => 'Walk-in',
+                'ref_code' => '#REC-S-' . $ws['sale_id'],
+                'ref_id' => (int)$ws['sale_id'],
+                'tab' => 'walkin',
+                'customer_name' => $ws['customer_name'],
+                'item_count' => (int)$ws['item_count'],
+                'total_amount' => (float)$ws['total_amount'],
+                'date' => $ws['sale_date'],
+                'status' => $ws['sale_status'],
+            ];
+        }
+        foreach ($recentOnlineOrders as $oo) {
+            $recentSales[] = [
+                'channel' => 'Online',
+                'ref_code' => '#ORD-' . $oo['order_id'],
+                'ref_id' => (int)$oo['order_id'],
+                'tab' => 'online',
+                'customer_name' => $oo['customer_name'],
+                'item_count' => (int)$oo['item_count'],
+                'total_amount' => (float)$oo['total_amount'],
+                'date' => $oo['order_date'],
+                'status' => $oo['order_status'],
+            ];
+        }
+
+        // Sort unified list newest first
+        usort($recentSales, function ($a, $b) {
+            return strcmp($b['date'], $a['date']);
+        });
 
         $this->render('manager/overview', [
             'title' => "$unitName · Business Manager Overview",
@@ -176,10 +208,11 @@ final class ManagerController extends Controller
             'unitName' => $unitName,
             'isSuper' => $isSuper,
             'allUnits' => $isSuper ? Units::all() : [],
-            'confirmedAppointments' => $confirmedAppointments,
+            'employeesOnDuty' => $employeesOnDuty,
             'pendingRefunds' => $pendingRefunds,
             'recentWalkInSales' => $recentWalkInSales,
             'recentOnlineOrders' => $recentOnlineOrders,
+            'recentSales' => $recentSales,
         ]);
     }
 
@@ -257,14 +290,15 @@ final class ManagerController extends Controller
     }
 
     // ==========================================
-    // 2. SALES PAGE
+    // 2. SALES PAGE & REFUND MANAGEMENT
     // ==========================================
     public function sales(?int $routeUnitId = null): void
     {
         [, , $unitId, $unitName, $isSuper] = $this->checkBusinessManager($routeUnitId);
 
-        $tab = isset($_GET['tab']) && $_GET['tab'] === 'online' ? 'online' : 'walkin';
+        $tab = isset($_GET['tab']) && in_array($_GET['tab'], ['online', 'refunds'], true) ? $_GET['tab'] : 'walkin';
         $q = trim((string)($_GET['q'] ?? ''));
+        $statusFilter = trim((string)($_GET['status'] ?? ''));
         $viewId = isset($_GET['view']) && ctype_digit((string)$_GET['view']) ? (int)$_GET['view'] : null;
 
         // Fetch Walk-in Sales
@@ -278,7 +312,7 @@ final class ManagerController extends Controller
                     LEFT JOIN payment p ON p.sale_id = s.sale_id
                     WHERE s.business_unit_id = ?";
         $walkParams = [$unitId];
-        if ($q !== '') {
+        if ($tab === 'walkin' && $q !== '') {
             $walkSql .= " AND (s.sale_id = ? OR c.first_name LIKE ? OR c.last_name LIKE ?)";
             $walkParams[] = ctype_digit($q) ? (int)$q : 0;
             $walkParams[] = "%$q%";
@@ -316,7 +350,7 @@ final class ManagerController extends Controller
                   LEFT JOIN payment p ON p.order_id = co.order_id
                   WHERE co.business_unit_id = ?";
         $onParams = [$unitId];
-        if ($q !== '') {
+        if ($tab === 'online' && $q !== '') {
             $onSql .= " AND (co.order_id = ? OR c.first_name LIKE ? OR c.last_name LIKE ? OR ua.email LIKE ?)";
             $onParams[] = ctype_digit($q) ? (int)$q : 0;
             $onParams[] = "%$q%";
@@ -344,6 +378,81 @@ final class ManagerController extends Controller
         }
         unset($oo);
 
+        // Fetch Refund Requests
+        $refundRequests = [];
+        $refSql = "SELECT rr.*,
+                          CONCAT(c.first_name, ' ', c.last_name) AS customer_name,
+                          c.phone AS customer_phone,
+                          ua.email AS customer_email,
+                          CONCAT(emp.first_name, ' ', emp.last_name) AS decided_by_name,
+                          emp.position AS decided_by_position,
+                          CASE WHEN rr.channel = 'online' THEN CONCAT('#ORD-', rr.order_id)
+                               ELSE CONCAT('#REC-S-', rr.sale_id) END AS transaction_ref,
+                          CASE WHEN rr.channel = 'online' THEN co.total_amount
+                               ELSE s.total_amount END AS original_total_amount,
+                          CASE WHEN rr.channel = 'online' THEN co.order_date
+                               ELSE s.sale_date END AS original_transaction_date,
+                          CASE WHEN rr.channel = 'online' THEN 'Online Order' ELSE 'Walk-in Sale' END AS channel_label
+                   FROM refund_request rr
+                   JOIN customer c ON c.customer_id = rr.customer_id
+                   LEFT JOIN user_account ua ON ua.user_account_id = c.user_account_id
+                   LEFT JOIN employee emp ON emp.employee_id = rr.decided_by_employee_id
+                   LEFT JOIN customer_order co ON co.order_id = rr.order_id
+                   LEFT JOIN sale s ON s.sale_id = rr.sale_id
+                   WHERE rr.business_unit_id = ?";
+        $refParams = [$unitId];
+        if ($tab === 'refunds' && $q !== '') {
+            $refSql .= " AND (rr.refund_reference LIKE ? OR c.first_name LIKE ? OR c.last_name LIKE ? OR rr.order_id = ? OR rr.sale_id = ?)";
+            $refParams[] = "%$q%";
+            $refParams[] = "%$q%";
+            $refParams[] = "%$q%";
+            $refParams[] = ctype_digit($q) ? (int)$q : 0;
+            $refParams[] = ctype_digit($q) ? (int)$q : 0;
+        }
+        if ($tab === 'refunds' && $statusFilter !== '' && in_array($statusFilter, ['pending', 'approved', 'rejected'], true)) {
+            $refSql .= " AND rr.request_status = ?";
+            $refParams[] = $statusFilter;
+        }
+        $refSql .= " ORDER BY CASE WHEN rr.request_status = 'pending' THEN 0 ELSE 1 END, rr.created_at DESC, rr.refund_request_id DESC";
+        $rStmt = $this->db->prepare($refSql);
+        $rStmt->execute($refParams);
+        $refundRequests = $rStmt->fetchAll();
+
+        // Attach line items to refund requests
+        foreach ($refundRequests as &$rf) {
+            $rf['items'] = [];
+            if (!empty($rf['order_id'])) {
+                $itStmt = $this->db->prepare(
+                    "SELECT oi.order_item_id AS line_item_id, oi.quantity, oi.unit_price,
+                            p.product_name, p.sku
+                     FROM order_item oi
+                     JOIN business_product bp ON bp.business_product_id = oi.business_product_id
+                     JOIN product p ON p.product_id = bp.product_id
+                     WHERE oi.order_id = ?
+                     ORDER BY oi.order_item_id"
+                );
+                $itStmt->execute([(int)$rf['order_id']]);
+                $rf['items'] = $itStmt->fetchAll();
+            } elseif (!empty($rf['sale_id'])) {
+                $itStmt = $this->db->prepare(
+                    "SELECT si.sale_item_id AS line_item_id, si.quantity, si.unit_price,
+                            p.product_name, p.sku
+                     FROM sale_item si
+                     JOIN business_product bp ON bp.business_product_id = si.business_product_id
+                     JOIN product p ON p.product_id = bp.product_id
+                     WHERE si.sale_id = ?
+                     ORDER BY si.sale_item_id"
+                );
+                $itStmt->execute([(int)$rf['sale_id']]);
+                $rf['items'] = $itStmt->fetchAll();
+            }
+        }
+        unset($rf);
+
+        $pendingCntStmt = $this->db->prepare("SELECT COUNT(*) FROM refund_request WHERE business_unit_id = ? AND request_status = 'pending'");
+        $pendingCntStmt->execute([$unitId]);
+        $pendingRefundsCount = (int)$pendingCntStmt->fetchColumn();
+
         $this->render('manager/sales', [
             'title' => "Sales · $unitName",
             'activeTab' => 'sales',
@@ -354,9 +463,100 @@ final class ManagerController extends Controller
             'allUnits' => $isSuper ? Units::all() : [],
             'walkInSales' => $walkInSales,
             'onlineOrders' => $onlineOrders,
+            'refundRequests' => $refundRequests,
+            'pendingRefundsCount' => $pendingRefundsCount,
             'searchQuery' => $q,
+            'statusFilter' => $statusFilter,
             'viewId' => $viewId,
         ]);
+    }
+
+    public function approveRefund(int $id): void
+    {
+        $this->handleRefundDecision($id, 'approved');
+    }
+
+    public function approveRefundUnit(int $unitId, int $id): void
+    {
+        $this->handleRefundDecision($id, 'approved', $unitId);
+    }
+
+    public function rejectRefund(int $id): void
+    {
+        $this->handleRefundDecision($id, 'rejected');
+    }
+
+    public function rejectRefundUnit(int $unitId, int $id): void
+    {
+        $this->handleRefundDecision($id, 'rejected', $unitId);
+    }
+
+    private function handleRefundDecision(int $id, string $decision, ?int $routeUnitId = null): void
+    {
+        [$uid, $employeeId, $unitId] = $this->checkBusinessManager($routeUnitId);
+        CSRF::check();
+
+        $stmt = $this->db->prepare(
+            "SELECT * FROM refund_request WHERE refund_request_id = ? AND business_unit_id = ?"
+        );
+        $stmt->execute([$id, $unitId]);
+        $req = $stmt->fetch();
+
+        $redirectQuery = !empty($routeUnitId) ? "?unit_id=$routeUnitId&tab=refunds" : "?tab=refunds";
+
+        if (!$req) {
+            $this->flash('error', 'Refund request not found or does not belong to your business unit.');
+            $this->redirect("/manager/sales" . $redirectQuery);
+        }
+
+        // Prevent duplicate approval/rejection or modification of already finalized decisions
+        if ($req['request_status'] !== 'pending') {
+            $this->flash('error', "This refund request has already been finalized as " . ucfirst((string)$req['request_status']) . ".");
+            $this->redirect("/manager/sales{$redirectQuery}&view=$id");
+        }
+
+        if ($decision === 'approved') {
+            $approvedAmount = (float)$req['requested_amount'];
+            if (isset($_POST['approved_amount']) && is_numeric($_POST['approved_amount']) && (float)$_POST['approved_amount'] > 0) {
+                $approvedAmount = min((float)$_POST['approved_amount'], (float)$req['requested_amount']);
+            }
+
+            $upd = $this->db->prepare(
+                "UPDATE refund_request
+                 SET request_status = 'approved',
+                     approved_amount = ?,
+                     decided_by_employee_id = ?,
+                     decided_at = NOW()
+                 WHERE refund_request_id = ? AND request_status = 'pending'"
+            );
+            $upd->execute([$approvedAmount, $employeeId ?: null, $id]);
+
+            Audit::log('refund_request.approve', "Approved refund request {$req['refund_reference']} for amount " . number_format($approvedAmount, 2), $unitId, null, null, $uid);
+
+            $this->flash('success', "Refund request {$req['refund_reference']} has been approved for " . peso($approvedAmount) . ". Original transaction is preserved. Payment reversal and stock inspection follow separate workflows.");
+        } elseif ($decision === 'rejected') {
+            $reason = trim((string)($_POST['rejection_reason'] ?? ''));
+            if ($reason === '') {
+                $this->flash('error', 'A rejection reason is required before rejecting a refund request.');
+                $this->redirect("/manager/sales{$redirectQuery}&view=$id");
+            }
+
+            $upd = $this->db->prepare(
+                "UPDATE refund_request
+                 SET request_status = 'rejected',
+                     rejection_reason = ?,
+                     decided_by_employee_id = ?,
+                     decided_at = NOW()
+                 WHERE refund_request_id = ? AND request_status = 'pending'"
+            );
+            $upd->execute([$reason, $employeeId ?: null, $id]);
+
+            Audit::log('refund_request.reject', "Rejected refund request {$req['refund_reference']}. Reason: $reason", $unitId, null, null, $uid);
+
+            $this->flash('success', "Refund request {$req['refund_reference']} has been rejected.");
+        }
+
+        $this->redirect("/manager/sales{$redirectQuery}&view=$id");
     }
 
     // ==========================================
@@ -422,6 +622,58 @@ final class ManagerController extends Controller
         ]);
     }
 
+    /**
+     * Handle uploaded product image with size and MIME validation.
+     * Preserves existing product image if no replacement is selected during editing.
+     */
+    private function handleUploadedProductImage(?string $currentUrl = null): ?string
+    {
+        if (empty($_FILES['product_image']['name']) || ($_FILES['product_image']['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) {
+            // If fallback image_url passed in POST (e.g. from existing automated test calls), preserve or use it
+            $postUrl = trim((string)($_POST['image_url'] ?? ''));
+            return $postUrl !== '' ? $postUrl : $currentUrl;
+        }
+
+        $file = $_FILES['product_image'];
+        if ($file['error'] !== UPLOAD_ERR_OK) {
+            throw new \RuntimeException('File upload error code: ' . $file['error']);
+        }
+
+        $maxSize = 5 * 1024 * 1024; // 5 MB
+        if ($file['size'] > $maxSize) {
+            throw new \InvalidArgumentException('Uploaded image exceeds maximum allowed size of 5MB.');
+        }
+
+        $tmpPath = $file['tmp_name'];
+        $finfo = new \finfo(FILEINFO_MIME_TYPE);
+        $mime = $finfo->file($tmpPath);
+
+        $allowedMimes = [
+            'image/jpeg' => 'jpg',
+            'image/png'  => 'png',
+            'image/webp' => 'webp',
+            'image/gif'  => 'gif',
+        ];
+
+        if (!isset($allowedMimes[$mime])) {
+            throw new \InvalidArgumentException('Invalid image format. Allowed formats: PNG, JPG, WebP, GIF.');
+        }
+
+        $ext = $allowedMimes[$mime];
+        $filename = 'prod_' . date('Ymd_His') . '_' . bin2hex(random_bytes(4)) . '.' . $ext;
+        $uploadDir = dirname(__DIR__, 2) . '/public/uploads/products';
+        if (!is_dir($uploadDir)) {
+            mkdir($uploadDir, 0755, true);
+        }
+
+        $destPath = $uploadDir . '/' . $filename;
+        if (!move_uploaded_file($tmpPath, $destPath)) {
+            throw new \RuntimeException('Failed to save uploaded image file.');
+        }
+
+        return '/uploads/products/' . $filename;
+    }
+
     public function storeProduct(): void
     {
         [$uid, , $unitId] = $this->checkBusinessManager();
@@ -432,7 +684,6 @@ final class ManagerController extends Controller
         $category = trim((string)($_POST['product_category'] ?? ''));
         $price = (float)($_POST['selling_price'] ?? 0);
         $desc = trim((string)($_POST['description'] ?? ''));
-        $imageUrl = trim((string)($_POST['image_url'] ?? ''));
 
         if ($name === '' || $sku === '' || $category === '' || $price <= 0) {
             $this->flash('error', 'Product name, SKU, category, and a positive selling price are required.');
@@ -444,6 +695,13 @@ final class ManagerController extends Controller
         $chk->execute([$sku]);
         if ($chk->fetch()) {
             $this->flash('error', "SKU '$sku' is already assigned to another catalog product.");
+            $this->redirect('/manager/products');
+        }
+
+        try {
+            $imageUrl = $this->handleUploadedProductImage(null);
+        } catch (\Throwable $e) {
+            $this->flash('error', $e->getMessage());
             $this->redirect('/manager/products');
         }
 
@@ -494,26 +752,38 @@ final class ManagerController extends Controller
         $category = trim((string)($_POST['product_category'] ?? ''));
         $price = (float)($_POST['selling_price'] ?? 0);
         $desc = trim((string)($_POST['description'] ?? ''));
-        $imageUrl = trim((string)($_POST['image_url'] ?? ''));
 
         if ($name === '' || $sku === '' || $category === '' || $price <= 0) {
             $this->flash('error', 'Product name, SKU, category, and a positive selling price are required.');
             $this->redirect('/manager/products');
         }
 
-        $bpStmt = $this->db->prepare('SELECT product_id FROM business_product WHERE business_product_id = ? AND business_unit_id = ?');
+        $bpStmt = $this->db->prepare(
+            'SELECT bp.product_id, p.image_url
+             FROM business_product bp
+             JOIN product p ON p.product_id = bp.product_id
+             WHERE bp.business_product_id = ? AND bp.business_unit_id = ?'
+        );
         $bpStmt->execute([$businessProductId, $unitId]);
         $bp = $bpStmt->fetch();
         if (!$bp) {
             $this->notFound();
         }
         $productId = (int)$bp['product_id'];
+        $currentImageUrl = $bp['image_url'] ?? null;
 
         // Check SKU uniqueness on other products
         $chk = $this->db->prepare('SELECT product_id FROM product WHERE sku = ? AND product_id <> ?');
         $chk->execute([$sku, $productId]);
         if ($chk->fetch()) {
             $this->flash('error', "SKU '$sku' is already in use by another product.");
+            $this->redirect('/manager/products');
+        }
+
+        try {
+            $imageUrl = $this->handleUploadedProductImage($currentImageUrl);
+        } catch (\Throwable $e) {
+            $this->flash('error', $e->getMessage());
             $this->redirect('/manager/products');
         }
 
@@ -776,7 +1046,11 @@ final class ManagerController extends Controller
         $this->db->beginTransaction();
         try {
             // Auto-generated fields: PO Number, Order Date, Created By, Status = 'Ordered'
-            $poNumber = 'PO-PS-' . date('Ymd') . '-' . str_pad((string)random_int(100, 9999), 4, '0', STR_PAD_LEFT);
+            do {
+                $poNumber = 'PO-PS-' . date('Ymd') . '-' . str_pad((string)random_int(100, 99999), 5, '0', STR_PAD_LEFT);
+                $checkPo = $this->db->prepare('SELECT COUNT(*) FROM purchase_order WHERE po_number = ?');
+                $checkPo->execute([$poNumber]);
+            } while ((int)$checkPo->fetchColumn() > 0);
             $orderDate = date('Y-m-d H:i:s');
 
             $calcTotalCost = 0.0;
@@ -978,7 +1252,18 @@ final class ManagerController extends Controller
         $sql .= " ORDER BY e.last_name ASC, e.first_name ASC";
         $stmt = $this->db->prepare($sql);
         $stmt->execute($params);
-        $employees = $stmt->fetchAll();
+        $allEmployees = $stmt->fetchAll();
+
+        // Pagination
+        $totalEmployees = count($allEmployees);
+        $perPage = 6;
+        $totalPages = max(1, (int)ceil($totalEmployees / $perPage));
+        $currentPage = max(1, (int)($_GET['page'] ?? 1));
+        if ($currentPage > $totalPages) {
+            $currentPage = $totalPages;
+        }
+        $offset = ($currentPage - 1) * $perPage;
+        $employees = array_slice($allEmployees, $offset, $perPage);
 
         // Extract distinct positions
         $posStmt = $this->db->prepare('SELECT DISTINCT position FROM employee WHERE business_unit_id = ? ORDER BY position');
@@ -993,6 +1278,11 @@ final class ManagerController extends Controller
             'isSuper' => $isSuper,
             'allUnits' => $isSuper ? Units::all() : [],
             'employees' => $employees,
+            'allEmployees' => $allEmployees,
+            'totalEmployees' => $totalEmployees,
+            'totalPages' => $totalPages,
+            'currentPage' => $currentPage,
+            'perPage' => $perPage,
             'positions' => $positions,
             'searchQuery' => $q,
             'positionFilter' => $posFilter,

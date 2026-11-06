@@ -109,6 +109,18 @@ require __DIR__ . '/_nav.php';
           <?php foreach ($operatingHours as $h):
             $d = (int)$h['day_of_week'];
             $isOpen = !empty($h['is_open']);
+
+            $oParts = explode(':', (string)$h['open_time']);
+            $oH24 = (int)($oParts[0] ?? 8);
+            $oM = sprintf('%02d', (int)($oParts[1] ?? 0));
+            $oAmPm = $oH24 >= 12 ? 'PM' : 'AM';
+            $oH12 = $oH24 % 12 ?: 12;
+
+            $cParts = explode(':', (string)$h['close_time']);
+            $cH24 = (int)($cParts[0] ?? 19);
+            $cM = sprintf('%02d', (int)($cParts[1] ?? 0));
+            $cAmPm = $cH24 >= 12 ? 'PM' : 'AM';
+            $cH12 = $cH24 % 12 ?: 12;
           ?>
             <tr>
               <td>
@@ -123,10 +135,44 @@ require __DIR__ . '/_nav.php';
                 </label>
               </td>
               <td>
-                <input type="time" name="hours[<?= $d ?>][open_time]" value="<?= e(substr((string)$h['open_time'], 0, 5)) ?>" style="width: 140px;" class="day-time-input-<?= $d ?>" <?= !$isOpen ? 'disabled' : '' ?>>
+                <div class="custom-time-picker <?= !$isOpen ? 'is-disabled' : '' ?>" data-day="<?= $d ?>" data-type="open">
+                  <select class="time-select time-hour" aria-label="Opening hour for <?= e($h['day_name']) ?>" <?= !$isOpen ? 'disabled' : '' ?>>
+                    <?php for ($hr = 1; $hr <= 12; $hr++): ?>
+                      <option value="<?= $hr ?>" <?= $oH12 === $hr ? 'selected' : '' ?>><?= sprintf('%02d', $hr) ?></option>
+                    <?php endfor; ?>
+                  </select>
+                  <span class="time-colon">:</span>
+                  <select class="time-select time-minute" aria-label="Opening minute for <?= e($h['day_name']) ?>" <?= !$isOpen ? 'disabled' : '' ?>>
+                    <?php foreach (['00', '15', '30', '45'] as $min): ?>
+                      <option value="<?= $min ?>" <?= $oM === $min ? 'selected' : '' ?>><?= $min ?></option>
+                    <?php endforeach; ?>
+                  </select>
+                  <select class="time-select time-ampm" aria-label="Opening AM or PM for <?= e($h['day_name']) ?>" <?= !$isOpen ? 'disabled' : '' ?>>
+                    <option value="AM" <?= $oAmPm === 'AM' ? 'selected' : '' ?>>AM</option>
+                    <option value="PM" <?= $oAmPm === 'PM' ? 'selected' : '' ?>>PM</option>
+                  </select>
+                  <input type="hidden" name="hours[<?= $d ?>][open_time]" value="<?= e(substr((string)$h['open_time'], 0, 8)) ?>" class="day-time-input-<?= $d ?> time-hidden-val">
+                </div>
               </td>
               <td>
-                <input type="time" name="hours[<?= $d ?>][close_time]" value="<?= e(substr((string)$h['close_time'], 0, 5)) ?>" style="width: 140px;" class="day-time-input-<?= $d ?>" <?= !$isOpen ? 'disabled' : '' ?>>
+                <div class="custom-time-picker <?= !$isOpen ? 'is-disabled' : '' ?>" data-day="<?= $d ?>" data-type="close">
+                  <select class="time-select time-hour" aria-label="Closing hour for <?= e($h['day_name']) ?>" <?= !$isOpen ? 'disabled' : '' ?>>
+                    <?php for ($hr = 1; $hr <= 12; $hr++): ?>
+                      <option value="<?= $hr ?>" <?= $cH12 === $hr ? 'selected' : '' ?>><?= sprintf('%02d', $hr) ?></option>
+                    <?php endfor; ?>
+                  </select>
+                  <span class="time-colon">:</span>
+                  <select class="time-select time-minute" aria-label="Closing minute for <?= e($h['day_name']) ?>" <?= !$isOpen ? 'disabled' : '' ?>>
+                    <?php foreach (['00', '15', '30', '45'] as $min): ?>
+                      <option value="<?= $min ?>" <?= $cM === $min ? 'selected' : '' ?>><?= $min ?></option>
+                    <?php endforeach; ?>
+                  </select>
+                  <select class="time-select time-ampm" aria-label="Closing AM or PM for <?= e($h['day_name']) ?>" <?= !$isOpen ? 'disabled' : '' ?>>
+                    <option value="AM" <?= $cAmPm === 'AM' ? 'selected' : '' ?>>AM</option>
+                    <option value="PM" <?= $cAmPm === 'PM' ? 'selected' : '' ?>>PM</option>
+                  </select>
+                  <input type="hidden" name="hours[<?= $d ?>][close_time]" value="<?= e(substr((string)$h['close_time'], 0, 8)) ?>" class="day-time-input-<?= $d ?> time-hidden-val">
+                </div>
               </td>
             </tr>
           <?php endforeach; ?>
@@ -274,3 +320,4 @@ require __DIR__ . '/_nav.php';
     </div>
   </div>
 </section>
+
