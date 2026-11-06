@@ -91,7 +91,7 @@ FROM (
   UNION ALL SELECT 'Veterinary Clinic', 'Business Manager — Veterinary Clinic', 'Operational manager for Veterinary Clinic'
   UNION ALL SELECT 'Veterinary Clinic', 'Lead Veterinarian', 'Senior veterinarian overseeing clinical consultations and records'
   UNION ALL SELECT 'Veterinary Clinic', 'Associate Veterinarian', 'Licensed veterinarian performing exams and treatments'
-  UNION ALL SELECT 'Veterinary Clinic', 'Senior Veterinary Nurse', 'Administers prescribed treatments and documents nursing care'
+  UNION ALL SELECT 'Veterinary Clinic', 'Veterinary Nurse', 'Administers prescribed treatments and documents nursing care'
   UNION ALL SELECT 'Veterinary Clinic', 'Veterinary Technician', 'Performs diagnostic and technical clinical procedures'
   UNION ALL SELECT 'Veterinary Clinic', 'Receptionist', 'Clinical front-desk and appointment coordination'
   UNION ALL SELECT 'Grooming Services', 'System Administrator', 'Manages Grooming Services accounts, roles, and positions'
@@ -118,7 +118,7 @@ FROM (
   UNION ALL SELECT 'marcus.chen@staff.sample.vetgrpet', 'Grooming Services', 'Marcus', 'Chen', 'Business Manager — Grooming Services'
   UNION ALL SELECT 'claire.dubois@staff.sample.vetgrpet', 'Veterinary Clinic', 'Claire', 'Dubois', 'Business Manager — Veterinary Clinic'
   UNION ALL SELECT 'david.reyes@staff.sample.vetgrpet', 'Pet Store', 'David', 'Reyes', 'Business Manager — Pet Store'
-  UNION ALL SELECT 'hannah.kim@staff.sample.vetgrpet', 'Veterinary Clinic', 'Hannah', 'Kim', 'Senior Veterinary Nurse'
+  UNION ALL SELECT 'hannah.kim@staff.sample.vetgrpet', 'Veterinary Clinic', 'Hannah', 'Kim', 'Veterinary Nurse'
   UNION ALL SELECT 'owen.bennett@staff.sample.vetgrpet', 'Grooming Services', 'Owen', 'Bennett', 'Master Pet Stylist & Reception Coordinator'
 ) s
 JOIN user_account ua ON ua.email = s.email

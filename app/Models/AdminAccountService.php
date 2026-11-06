@@ -43,7 +43,6 @@ final class AdminAccountService
         'Veterinary Receptionist' => 'RECEPTIONIST',
         'Lead Veterinarian' => 'VETERINARIAN_WORKSPACE',
         'Associate Veterinarian' => 'VETERINARIAN_WORKSPACE',
-        'Senior Veterinary Nurse' => 'VETERINARY_NURSE_WORKSPACE',
         'Business Manager — Veterinary Clinic' => 'BUSINESS_MANAGER',
         // Grooming Services
         'Master Pet Stylist & Reception Coordinator' => 'RECEPTIONIST',
