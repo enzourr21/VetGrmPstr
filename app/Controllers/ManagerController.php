@@ -7,12 +7,20 @@ use App\Core\Controller;
 use App\Core\CSRF;
 use App\Core\Session;
 use App\Models\Audit;
+use App\Models\InventoryAccessKey;
 use App\Models\OtpService;
 use App\Models\Units;
 use PDO;
 
 final class ManagerController extends Controller
 {
+    public const GROOMING_CATEGORIES = [
+        'Bathing & Brushing',
+        'Styling',
+        'Wellness',
+        'Specialized',
+    ];
+
     private function flash(string $type, string $message): void
     {
         Session::flash($type, $message);
@@ -27,8 +35,9 @@ final class ManagerController extends Controller
     }
 
     /**
-     * Helper for Inventory access: permits Business Manager, Inventory Manager, or Super Admin.
-     * Returns: [$uid, $employeeId, $unitId, $unitName, $isSuper, $isInventoryManagerOnly]
+     * Helper for Inventory access: permits Business Manager, Inventory Manager, Super Admin,
+     * or an active operational employee of the same unit holding a valid, unexpired Inventory Access Key.
+     * Returns: [$uid, $employeeId, $unitId, $unitName, $isSuper, $isInventoryManagerOnly, $isTempKeyAccess, $tempKeyGrant]
      */
     private function checkManagerOrInventoryManager(?int $routeUnitId = null): array
     {
@@ -46,11 +55,14 @@ final class ManagerController extends Controller
         }
 
         $queryUnitId = isset($_GET['unit_id']) && ctype_digit((string)$_GET['unit_id']) ? (int)$_GET['unit_id'] : null;
-        $targetUnitId = $routeUnitId ?? $queryUnitId;
+        $postUnitId = ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && isset($_POST['business_unit_id']) && ctype_digit((string)$_POST['business_unit_id'])
+            ? (int)$_POST['business_unit_id']
+            : null;
+        $targetUnitId = $routeUnitId ?? $postUnitId ?? $queryUnitId;
 
         if ($this->isSuperAdmin()) {
             $u = $targetUnitId !== null ? (Units::find($targetUnitId) ?: $this->notFound()) : (Units::find(Units::petStoreId()) ?: Units::all()[0]);
-            return [(int)$uid, (int)Session::get('employee_id', 0), (int)$u['business_unit_id'], (string)$u['business_unit_name'], true, false];
+            return [(int)$uid, (int)Session::get('employee_id', 0), (int)$u['business_unit_id'], (string)$u['business_unit_name'], true, false, false, null];
         }
 
         $s = $this->db->prepare(
@@ -66,28 +78,85 @@ final class ManagerController extends Controller
         $s->execute([(int)$uid]);
         $rows = $s->fetchAll();
 
-        if (!$rows) {
+        if ($rows) {
+            $byUnitId = [];
+            $rolesByUnit = [];
+            foreach ($rows as $r) {
+                $bId = (int)$r['business_unit_id'];
+                $byUnitId[$bId] = $r;
+                $rolesByUnit[$bId][] = (string)$r['role_name'];
+            }
+
+            foreach ([$routeUnitId, $queryUnitId, $postUnitId] as $chkUnit) {
+                if ($chkUnit !== null && !isset($byUnitId[$chkUnit])) {
+                    $this->forbidden('Access denied: you cannot access another business unit.');
+                }
+            }
+
+            $chosen = $targetUnitId !== null ? $byUnitId[$targetUnitId] : $rows[0];
+            $chosenUnitId = (int)$chosen['business_unit_id'];
+            $unitRoles = $rolesByUnit[$chosenUnitId] ?? [];
+            $isInvOnly = !in_array('BUSINESS_MANAGER', $unitRoles, true) && in_array('INVENTORY_MANAGER', $unitRoles, true);
+
+            return [(int)$uid, (int)$chosen['employee_id'], $chosenUnitId, (string)$chosen['business_unit_name'], false, $isInvOnly, false, null];
+        }
+
+        // Temporary Inventory Access Key check (must be an active operational employee of the exact same unit)
+        $empStmt = $this->db->prepare(
+            "SELECT e.employee_id, bu.business_unit_id, bu.business_unit_name
+             FROM user_account ua
+             JOIN employee e ON e.user_account_id = ua.user_account_id AND e.employee_status = 'active'
+             JOIN business_unit bu ON bu.business_unit_id = e.business_unit_id AND bu.business_unit_status = 'active'
+             WHERE ua.user_account_id = ? AND ua.account_status = 'active'
+             LIMIT 1"
+        );
+        $empStmt->execute([(int)$uid]);
+        $emp = $empStmt->fetch();
+        if (!$emp) {
             $this->forbidden('Business Manager or Inventory Manager privileges are required.');
         }
 
-        $byUnitId = [];
-        $rolesByUnit = [];
-        foreach ($rows as $r) {
-            $bId = (int)$r['business_unit_id'];
-            $byUnitId[$bId] = $r;
-            $rolesByUnit[$bId][] = (string)$r['role_name'];
+        $empUnitId = (int)$emp['business_unit_id'];
+        $empId = (int)$emp['employee_id'];
+
+        // Strict cross-unit guard before checking session grant
+        foreach ([$routeUnitId, $queryUnitId, $postUnitId] as $chkUnit) {
+            if ($chkUnit !== null && $chkUnit !== $empUnitId) {
+                $this->forbidden('Access denied: you cannot access another business unit.');
+            }
         }
 
-        if ($targetUnitId !== null && !isset($byUnitId[$targetUnitId])) {
-            $this->forbidden('Access denied: you cannot access another business unit.');
+        // System Administrators without operational roles are administrative-only
+        $roleChk = $this->db->prepare(
+            "SELECT r.role_name
+             FROM account_role ar
+             JOIN role r ON r.role_id = ar.role_id
+             WHERE ar.user_account_id = ? AND ar.business_unit_id = ?"
+        );
+        $roleChk->execute([(int)$uid, $empUnitId]);
+        $empRoles = $roleChk->fetchAll(PDO::FETCH_COLUMN);
+        if (!empty($empRoles) && count(array_diff($empRoles, ['SYSTEM_ADMINISTRATOR'])) === 0) {
+            $this->forbidden('System Administrators do not have operational inventory access.');
         }
 
-        $chosen = $targetUnitId !== null ? $byUnitId[$targetUnitId] : $rows[0];
-        $chosenUnitId = (int)$chosen['business_unit_id'];
-        $unitRoles = $rolesByUnit[$chosenUnitId] ?? [];
-        $isInvOnly = !in_array('BUSINESS_MANAGER', $unitRoles, true) && in_array('INVENTORY_MANAGER', $unitRoles, true);
+        $tempMap = Session::get('temp_inventory_access', []);
+        $grant = is_array($tempMap) ? ($tempMap[$empUnitId] ?? null) : null;
+        if (
+            !is_array($grant)
+            || (int)($grant['employee_id'] ?? 0) !== $empId
+            || (int)($grant['unit_id'] ?? 0) !== $empUnitId
+        ) {
+            $this->forbidden('Business Manager or Inventory Manager privileges are required.');
+        }
 
-        return [(int)$uid, (int)$chosen['employee_id'], $chosenUnitId, (string)$chosen['business_unit_name'], false, $isInvOnly];
+        $validGrant = InventoryAccessKey::validateSessionGrant($this->db, (int)($grant['key_id'] ?? 0), $empUnitId);
+        if ($validGrant === null) {
+            unset($tempMap[$empUnitId]);
+            Session::set('temp_inventory_access', $tempMap);
+            $this->forbidden('Your temporary Inventory Access Key has expired or is no longer valid.');
+        }
+
+        return [(int)$uid, $empId, $empUnitId, (string)$emp['business_unit_name'], false, true, true, $validGrant];
     }
 
     // ==========================================
@@ -97,29 +166,36 @@ final class ManagerController extends Controller
     {
         [, , $unitId, $unitName, $isSuper] = $this->checkBusinessManager($routeUnitId);
 
-        // If not Pet Store (e.g. Veterinary Clinic or Grooming Services), preserve existing legacy dashboard
+        // Grooming Services Business Manager Overview (business_unit_id = 3)
+        if ((int)$unitId === Units::groomingId()) {
+            $this->renderGroomingOverview($unitId, $unitName, $isSuper);
+            return;
+        }
+
+        // If not Pet Store (e.g. Veterinary Clinic), preserve existing legacy dashboard
         if ((int)$unitId !== 1) {
             $this->renderLegacyDashboard($unitId, $unitName, $isSuper);
             return;
         }
 
         // Pet Store Overview Queries
-        // 1. Employees On Duty (work_status IN ('On Duty', 'Free'), exclude 'Not Present')
-        $dutyStmt = $this->db->prepare(
-            "SELECT e.employee_id, e.first_name, e.last_name, e.position,
-                    COALESCE(ews.work_status, 'Free') AS work_status,
-                    ua.email
-             FROM employee e
-             JOIN user_account ua ON ua.user_account_id = e.user_account_id
-             LEFT JOIN employee_work_status ews ON ews.employee_id = e.employee_id
-             WHERE e.business_unit_id = ?
-               AND e.employee_status = 'active'
-               AND COALESCE(ews.work_status, 'Free') IN ('On Duty', 'Free')
-             ORDER BY CASE WHEN COALESCE(ews.work_status, 'Free') = 'On Duty' THEN 0 ELSE 1 END,
-                      e.last_name ASC, e.first_name ASC"
+        // 1. Stocks Running Low (available <= 10, Pet Store unit 1 inventory only)
+        $lowStockStmt = $this->db->prepare(
+            "SELECT bp.business_product_id, bp.product_status,
+                    p.product_name, p.product_category,
+                    COALESCE(i.on_hand, 0) AS on_hand,
+                    COALESCE(i.committed, 0) AS committed,
+                    GREATEST(COALESCE(i.on_hand, 0) - COALESCE(i.committed, 0), 0) AS available
+             FROM business_product bp
+             JOIN product p ON p.product_id = bp.product_id
+             LEFT JOIN inventory i ON i.business_product_id = bp.business_product_id
+             WHERE bp.business_unit_id = ?
+               AND bp.product_status = 'active'
+               AND GREATEST(COALESCE(i.on_hand, 0) - COALESCE(i.committed, 0), 0) <= 10
+             ORDER BY available ASC, p.product_name ASC"
         );
-        $dutyStmt->execute([$unitId]);
-        $employeesOnDuty = $dutyStmt->fetchAll();
+        $lowStockStmt->execute([$unitId]);
+        $lowStockProducts = $lowStockStmt->fetchAll();
 
         // 2. Pending Refund Requests
         $refundsStmt = $this->db->prepare(
@@ -208,7 +284,7 @@ final class ManagerController extends Controller
             'unitName' => $unitName,
             'isSuper' => $isSuper,
             'allUnits' => $isSuper ? Units::all() : [],
-            'employeesOnDuty' => $employeesOnDuty,
+            'lowStockProducts' => $lowStockProducts,
             'pendingRefunds' => $pendingRefunds,
             'recentWalkInSales' => $recentWalkInSales,
             'recentOnlineOrders' => $recentOnlineOrders,
@@ -287,6 +363,1263 @@ final class ManagerController extends Controller
             'appointments' => $appointments,
             'unitStaff' => $unitStaff,
         ]);
+    }
+
+    /**
+     * Grooming Services Business Manager Overview (business_unit_id = 3)
+     */
+    private function renderGroomingOverview(int $unitId, string $unitName, bool $isSuper): void
+    {
+        // 1. Top Section: Single Relevant Current or Upcoming Grooming Appointment (Wide Card)
+        $currentAppointment = $this->fetchSingleCurrentOrUpcomingGroomingAppointment($unitId);
+
+        // 2. Middle Section Left: Pending Refunds strictly for Grooming Services (business_unit_id = 3)
+        $refundsStmt = $this->db->prepare(
+            "SELECT rr.refund_request_id, rr.refund_reference, rr.business_unit_id,
+                    rr.customer_id, rr.order_id, rr.sale_id, rr.channel,
+                    rr.requested_amount, rr.customer_reason AS reason, rr.request_status, rr.created_at,
+                    CONCAT(c.first_name, ' ', c.last_name) AS customer_name,
+                    CASE WHEN rr.channel = 'online' THEN CONCAT('#ORD-', rr.order_id)
+                         ELSE CONCAT('#REC-S-', rr.sale_id) END AS transaction_ref,
+                    CASE WHEN rr.channel = 'online' THEN 'Online Order' ELSE 'Walk-in Sale' END AS channel_label
+             FROM refund_request rr
+             JOIN customer c ON c.customer_id = rr.customer_id
+             WHERE rr.business_unit_id = ?
+               AND rr.request_status = 'pending'
+             ORDER BY rr.created_at DESC"
+        );
+        $refundsStmt->execute([$unitId]);
+        $pendingRefunds = $refundsStmt->fetchAll();
+
+        $pendingRefundsTotal = 0.0;
+        foreach ($pendingRefunds as $rf) {
+            $pendingRefundsTotal += (float)$rf['requested_amount'];
+        }
+
+        // 3. Middle Section Right: Stock Alerts (Product Name & Current Quantity only, scoped to unit 3)
+        $stockAlertsStmt = $this->db->prepare(
+            "SELECT p.product_name, COALESCE(i.on_hand, 0) AS on_hand
+             FROM business_product bp
+             JOIN product p ON p.product_id = bp.product_id
+             LEFT JOIN inventory i ON i.business_product_id = bp.business_product_id
+             WHERE bp.business_unit_id = ?
+               AND bp.product_status = 'active'
+               AND COALESCE(i.on_hand, 0) <= 10
+             ORDER BY COALESCE(i.on_hand, 0) ASC, p.product_name ASC"
+        );
+        $stockAlertsStmt->execute([$unitId]);
+        $stockAlerts = $stockAlertsStmt->fetchAll();
+
+        // 4. Bottom Section: Employees Present (up to 3 employees, excluding Delivery Personnel,
+        //    ordered by established position & scheduling precedence, with individual status Free / Occupied / Not Present)
+        $employeesPresent = $this->fetchGroomingEmployeesPresent($unitId);
+
+        $this->render('manager/grooming_overview', [
+            'title' => "$unitName · Business Manager Overview",
+            'activeTab' => 'overview',
+            'unitId' => $unitId,
+            'unitName' => $unitName,
+            'isSuper' => $isSuper,
+            'allUnits' => $isSuper ? Units::all() : [],
+            'currentAppointment' => $currentAppointment,
+            'pendingRefunds' => $pendingRefunds,
+            'pendingRefundsTotal' => $pendingRefundsTotal,
+            'stockAlerts' => $stockAlerts,
+            'employeesPresent' => $employeesPresent,
+        ]);
+    }
+
+    /**
+     * Fetch only one relevant current or upcoming appointment for Grooming Services.
+     */
+    private function fetchSingleCurrentOrUpcomingGroomingAppointment(int $unitId): ?array
+    {
+        // Prioritize active In Progress or Confirmed appointments on or after today,
+        // falling back to the nearest Confirmed/In Progress/Pending appointment for Grooming Services.
+        $stmt = $this->db->prepare(
+            "SELECT a.appointment_id, a.business_unit_id, a.preferred_date, a.preferred_time,
+                    a.appointment_begin, a.appointment_end, a.notes,
+                    st.status_name,
+                    CONCAT(c.first_name, ' ', c.last_name) AS customer_name,
+                    c.phone AS customer_phone
+             FROM appointment a
+             JOIN appointment_status st ON st.appointment_status_id = a.appointment_status_id
+             JOIN customer c ON c.customer_id = a.customer_id
+             WHERE a.business_unit_id = ?
+               AND st.status_name NOT IN ('Cancelled', 'Rejected', 'No-Show')
+             ORDER BY
+               CASE
+                 WHEN st.status_name = 'In Progress' THEN 0
+                 WHEN st.status_name = 'Confirmed' AND a.preferred_date >= CURDATE() THEN 1
+                 WHEN st.status_name = 'Confirmed' THEN 2
+                 WHEN st.status_name IN ('Pending', 'Awaiting Customer Response') AND a.preferred_date >= CURDATE() THEN 3
+                 WHEN st.status_name IN ('Pending', 'Awaiting Customer Response') THEN 4
+                 ELSE 5
+               END ASC,
+               ABS(DATEDIFF(a.preferred_date, CURDATE())) ASC,
+               COALESCE(TIME(a.appointment_begin), a.preferred_time, '09:00:00') ASC,
+               a.appointment_id DESC
+             LIMIT 1"
+        );
+        $stmt->execute([$unitId]);
+        $row = $stmt->fetch();
+        if (!$row) {
+            return null;
+        }
+
+        return $this->hydrateGroomingAppointmentDetails($row);
+    }
+
+    /**
+     * Fetch up to 3 Grooming Services employees ordered by position & scheduling precedence,
+     * excluding Delivery Personnel, with individual status: Free, Occupied, or Not Present.
+     */
+    private function fetchGroomingEmployeesPresent(int $unitId): array
+    {
+        $empStmt = $this->db->prepare(
+            "SELECT e.employee_id, e.first_name, e.last_name, e.position,
+                    COALESCE(ews.work_status, 'Free') AS work_status
+             FROM employee e
+             JOIN user_account ua ON ua.user_account_id = e.user_account_id
+             LEFT JOIN employee_work_status ews ON ews.employee_id = e.employee_id
+             WHERE e.business_unit_id = ?
+               AND e.employee_status = 'active'
+               AND ua.account_status = 'active'
+               AND ua.is_super_admin = 0
+               AND e.position <> 'Delivery Personnel'
+               AND e.position NOT LIKE '%Delivery%'"
+        );
+        $empStmt->execute([$unitId]);
+        $employees = $empStmt->fetchAll();
+
+        // Check which employees are currently Occupied in Grooming Services appointments
+        $occStmt = $this->db->prepare(
+            "SELECT DISTINCT ps.performer_employee_id
+             FROM performed_service ps
+             JOIN appointment_pet ap ON ap.appointment_pet_id = ps.appointment_pet_id
+             JOIN appointment a ON a.appointment_id = ap.appointment_id
+             JOIN appointment_status st ON st.appointment_status_id = a.appointment_status_id
+             WHERE a.business_unit_id = ?
+               AND ps.performer_employee_id IS NOT NULL
+               AND (
+                 st.status_name = 'In Progress'
+                 OR (
+                   st.status_name = 'Confirmed'
+                   AND a.preferred_date = CURDATE()
+                   AND ps.performed_status = 'pending'
+                 )
+               )"
+        );
+        $occStmt->execute([$unitId]);
+        $occupiedIds = array_map('intval', $occStmt->fetchAll(PDO::FETCH_COLUMN));
+        $occupiedSet = array_flip($occupiedIds);
+
+        // Corrected Grooming Services role names:
+        // Common roles: Business Manager, Inventory Manager, Receptionist, System Administrator
+        // Grooming-specific roles: Lead Stylist, Stylist, Bather (no Assistant Stylist)
+        $roleNameMap = [
+            'Master Stylist' => 'Lead Stylist',
+            'Business Manager — Grooming Services' => 'Business Manager',
+        ];
+
+        // Position precedence for Grooming Services
+        $positionRank = [
+            'Lead Stylist' => 1,
+            'Master Stylist' => 1,
+            'Stylist' => 2,
+            'Bather' => 3,
+            'Receptionist' => 4,
+            'Business Manager' => 5,
+            'Business Manager — Grooming Services' => 5,
+            'Inventory Manager' => 6,
+            'System Administrator' => 7,
+        ];
+
+        // Scheduling precedence: Occupied / Free (present) before Not Present
+        $statusRank = [
+            'Occupied' => 1,
+            'Free' => 2,
+            'Not Present' => 3,
+        ];
+
+        foreach ($employees as &$emp) {
+            $empId = (int)$emp['employee_id'];
+            $ws = (string)$emp['work_status'];
+
+            if ($ws === 'Not Present') {
+                $indStatus = 'Not Present';
+            } elseif (isset($occupiedSet[$empId])) {
+                $indStatus = 'Occupied';
+            } else {
+                $indStatus = 'Free';
+            }
+
+            $rawPos = (string)$emp['position'];
+            $dispPos = $roleNameMap[$rawPos] ?? $rawPos;
+
+            $emp['raw_position'] = $rawPos;
+            $emp['display_position'] = $dispPos;
+            $emp['position'] = $dispPos;
+            $emp['individual_status'] = $indStatus;
+            $emp['_pos_rank'] = $positionRank[$dispPos] ?? ($positionRank[$rawPos] ?? 99);
+            $emp['_status_rank'] = $statusRank[$indStatus] ?? 9;
+        }
+        unset($emp);
+
+        usort($employees, static function (array $a, array $b): int {
+            // Present employees (Occupied / Free) take precedence over Not Present
+            $aAbsent = $a['individual_status'] === 'Not Present' ? 1 : 0;
+            $bAbsent = $b['individual_status'] === 'Not Present' ? 1 : 0;
+            if ($aAbsent !== $bAbsent) {
+                return $aAbsent <=> $bAbsent;
+            }
+            // Then established position precedence
+            if ($a['_pos_rank'] !== $b['_pos_rank']) {
+                return $a['_pos_rank'] <=> $b['_pos_rank'];
+            }
+            // Then scheduling precedence (Occupied before Free)
+            if ($a['_status_rank'] !== $b['_status_rank']) {
+                return $a['_status_rank'] <=> $b['_status_rank'];
+            }
+            return strcmp($a['last_name'] . ' ' . $a['first_name'], $b['last_name'] . ' ' . $b['first_name']);
+        });
+
+        return array_slice($employees, 0, 3);
+    }
+
+    /**
+     * Hydrate pet, service, assigned employee, and time coverage details for a Grooming appointment.
+     */
+    private function hydrateGroomingAppointmentDetails(array $appt): array
+    {
+        $apptId = (int)$appt['appointment_id'];
+
+        // Pets & breeds
+        $petStmt = $this->db->prepare(
+            "SELECT p.pet_id, p.pet_name, p.species, p.breed
+             FROM appointment_pet ap
+             JOIN pet p ON p.pet_id = ap.pet_id
+             WHERE ap.appointment_id = ?
+             ORDER BY ap.appointment_pet_id ASC"
+        );
+        $petStmt->execute([$apptId]);
+        $pets = $petStmt->fetchAll();
+
+        $petItems = [];
+        $petLabels = [];
+        foreach ($pets as $pt) {
+            $breed = trim((string)($pt['breed'] ?? ''));
+            $species = ucfirst((string)($pt['species'] ?? 'Pet'));
+            $breedDisplay = $breed !== '' ? $breed : $species;
+            $petItems[] = [
+                'pet_id' => (int)$pt['pet_id'],
+                'name' => $pt['pet_name'],
+                'species' => $species,
+                'breed' => $breedDisplay,
+                'display' => $pt['pet_name'] . ' (' . $breedDisplay . ')',
+            ];
+            $petLabels[] = $pt['pet_name'] . ' (' . $breedDisplay . ')';
+        }
+        $appt['pets'] = $pets;
+        $appt['pet_items'] = $petItems;
+        $appt['pet_summary'] = $petLabels ? implode(', ', $petLabels) : 'No pet recorded';
+
+        // Services & assigned employee (check performed_service first, fallback to requested_pet_service)
+        $psStmt = $this->db->prepare(
+            "SELECT ps.performed_service_id, ps.service_id, ps.performed_price, ps.performed_status,
+                    ps.performer_employee_id,
+                    s.service_name, s.estimated_duration_minutes,
+                    CONCAT(e.first_name, ' ', e.last_name) AS performer_name,
+                    e.position AS performer_position
+             FROM performed_service ps
+             JOIN appointment_pet ap ON ap.appointment_pet_id = ps.appointment_pet_id
+             JOIN service s ON s.service_id = ps.service_id
+             LEFT JOIN employee e ON e.employee_id = ps.performer_employee_id
+             WHERE ap.appointment_id = ?
+             ORDER BY ps.performed_service_id ASC"
+        );
+        $psStmt->execute([$apptId]);
+        $performedServices = $psStmt->fetchAll();
+
+        $serviceNames = [];
+        $totalDurationMinutes = 0;
+        $assignedEmployees = [];
+        $primaryPerformerId = null;
+
+        if (!empty($performedServices)) {
+            foreach ($performedServices as $ps) {
+                $name = trim((string)$ps['service_name']);
+                if ($name !== '' && !in_array($name, $serviceNames, true)) {
+                    $serviceNames[] = $name;
+                    $totalDurationMinutes += max(15, (int)($ps['estimated_duration_minutes'] ?? 30));
+                }
+                if (!empty($ps['performer_name'])) {
+                    $assignedEmployees[$ps['performer_name']] = $ps['performer_name'];
+                }
+                if ($primaryPerformerId === null && !empty($ps['performer_employee_id'])) {
+                    $primaryPerformerId = (int)$ps['performer_employee_id'];
+                }
+            }
+        }
+
+        // Also query requested_pet_service for any services not already in performed_service
+        $rpsStmt = $this->db->prepare(
+            "SELECT rps.requested_pet_service_id, rps.service_id, rps.requested_price, rps.request_status,
+                    s.service_name, s.estimated_duration_minutes
+             FROM requested_pet_service rps
+             JOIN appointment_pet ap ON ap.appointment_pet_id = rps.appointment_pet_id
+             JOIN service s ON s.service_id = rps.service_id
+             WHERE ap.appointment_id = ?
+               AND rps.request_status <> 'declined'
+             ORDER BY rps.requested_pet_service_id ASC"
+        );
+        $rpsStmt->execute([$apptId]);
+        foreach ($rpsStmt->fetchAll() as $rps) {
+            $name = trim((string)$rps['service_name']);
+            if ($name !== '' && !in_array($name, $serviceNames, true)) {
+                $serviceNames[] = $name;
+                $totalDurationMinutes += max(15, (int)($rps['estimated_duration_minutes'] ?? 30));
+            }
+        }
+
+        if ($totalDurationMinutes <= 0) {
+            $totalDurationMinutes = 60;
+        }
+
+        // Start & End time calculation
+        $startTimeStr = '09:00:00';
+        if (!empty($appt['appointment_begin'])) {
+            $ts = strtotime((string)$appt['appointment_begin']);
+            if ($ts !== false) {
+                $startTimeStr = date('H:i:s', $ts);
+            }
+        } elseif (!empty($appt['preferred_time'])) {
+            $startTimeStr = (string)$appt['preferred_time'];
+        }
+
+        [$startH, $startM] = array_map('intval', array_pad(explode(':', $startTimeStr), 2, 0));
+        $startMinutes = ($startH * 60) + $startM;
+
+        $endMinutes = $startMinutes + $totalDurationMinutes;
+        if (!empty($appt['appointment_end'])) {
+            $endTs = strtotime((string)$appt['appointment_end']);
+            if ($endTs !== false) {
+                $endH = (int)date('H', $endTs);
+                $endM = (int)date('i', $endTs);
+                $calcEnd = ($endH * 60) + $endM;
+                if ($calcEnd > $startMinutes) {
+                    $endMinutes = $calcEnd;
+                    $totalDurationMinutes = $endMinutes - $startMinutes;
+                }
+            }
+        }
+
+        $startFormatted = date('g:i A', mktime((int)floor($startMinutes / 60), $startMinutes % 60, 0));
+        $endFormatted = date('g:i A', mktime((int)floor($endMinutes / 60), $endMinutes % 60, 0));
+
+        $appt['service_list'] = $serviceNames;
+        $appt['services_summary'] = $serviceNames ? implode(', ', $serviceNames) : 'Standard Grooming';
+        $appt['assigned_employee'] = $assignedEmployees ? implode(', ', $assignedEmployees) : '';
+        $appt['performer_employee_id'] = $primaryPerformerId;
+        $appt['duration_minutes'] = $totalDurationMinutes;
+        $appt['start_minutes'] = $startMinutes;
+        $appt['end_minutes'] = $endMinutes;
+        $appt['formatted_date'] = date('M j, Y', strtotime((string)$appt['preferred_date']));
+        $appt['formatted_time'] = $startFormatted . ' - ' . $endFormatted;
+        $appt['time_coverage'] = $startFormatted . ' - ' . $endFormatted;
+
+        // Status color mapping (Red, Green, Yellow, Transparent)
+        $st = (string)$appt['status_name'];
+        if ($st === 'Confirmed') {
+            $appt['color_class'] = 'cal-status-green';
+            $appt['status_color_name'] = 'green';
+            $appt['badge_class'] = 'ok';
+        } elseif (in_array($st, ['Cancelled', 'Rejected'], true)) {
+            $appt['color_class'] = 'cal-status-red';
+            $appt['status_color_name'] = 'red';
+            $appt['badge_class'] = 'err';
+        } elseif (in_array($st, ['In Progress', 'Pending', 'Awaiting Customer Response'], true)) {
+            $appt['color_class'] = 'cal-status-yellow';
+            $appt['status_color_name'] = 'yellow';
+            $appt['badge_class'] = 'warn';
+        } else {
+            // Completed / No-Show -> Transparent
+            $appt['color_class'] = 'cal-status-transparent';
+            $appt['status_color_name'] = 'transparent';
+            $appt['badge_class'] = $st === 'Completed' ? 'ok' : '';
+        }
+
+        return $appt;
+    }
+
+    // ==========================================
+    // 1B. GROOMING APPOINTMENTS WEEKLY CALENDAR & ACTIONS
+    // ==========================================
+    public function appointments(?int $routeUnitId = null): void
+    {
+        [, , $unitId, $unitName, $isSuper] = $this->checkBusinessManager($routeUnitId);
+
+        $today = new \DateTimeImmutable('today');
+        // Current week start (Monday of the current week so Today & current week appointments are visible)
+        $dow = (int)$today->format('N'); // 1 (Mon) .. 7 (Sun)
+        $todayWeekStartObj = $today->modify('-' . ($dow - 1) . ' days');
+
+        $startParam = trim((string)($_GET['start'] ?? ''));
+        $monthParam = trim((string)($_GET['month'] ?? ''));
+
+        $startDate = $todayWeekStartObj;
+        if ($startParam !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $startParam)) {
+            try {
+                $parsed = new \DateTimeImmutable($startParam);
+                if ($parsed->format('Y-m-d') === $startParam) {
+                    $startDate = $parsed;
+                }
+            } catch (\Throwable $e) {
+                $startDate = $todayWeekStartObj;
+            }
+        } elseif ($monthParam !== '' && preg_match('/^\d{4}-\d{2}$/', $monthParam)) {
+            // Selecting a month starts the calendar at the first day of that selected month (YYYY-MM-01)
+            $firstOfMonthStr = $monthParam . '-01';
+            try {
+                $parsed = new \DateTimeImmutable($firstOfMonthStr);
+                if ($parsed->format('Y-m-d') === $firstOfMonthStr) {
+                    $startDate = $parsed;
+                }
+            } catch (\Throwable $e) {
+                $startDate = $todayWeekStartObj;
+            }
+        }
+
+        // Build the 7 chronological dates (never padded with unused calendar spaces)
+        $weekDays = [];
+        $dateIndexMap = [];
+        for ($i = 0; $i < 7; $i++) {
+            $d = $startDate->modify("+{$i} days");
+            $dStr = $d->format('Y-m-d');
+            $dateIndexMap[$dStr] = $i;
+            $weekDays[] = [
+                'date' => $dStr,
+                'day_short' => $d->format('D'),
+                'day_label' => $d->format('M j'),
+                'day_num' => $d->format('j'),
+                'month_short' => $d->format('M'),
+                'is_today' => ($dStr === $today->format('Y-m-d')),
+            ];
+        }
+
+        $endDate = $startDate->modify('+6 days');
+        $startDateStr = $startDate->format('Y-m-d');
+        $endDateStr = $endDate->format('Y-m-d');
+
+        $prevWeekStart = $startDate->modify('-7 days')->format('Y-m-d');
+        $nextWeekStart = $startDate->modify('+7 days')->format('Y-m-d');
+        $todayWeekStart = $todayWeekStartObj->format('Y-m-d');
+        $isCurrentWeek = ($today->format('Y-m-d') >= $startDateStr && $today->format('Y-m-d') <= $endDateStr);
+
+        // Month picker value reflects the visible range's month (updates when navigation crosses month/year boundary)
+        $monthPickerValue = $startDate->format('Y-m');
+
+        // Human-readable range heading
+        if ($startDate->format('Y') !== $endDate->format('Y')) {
+            $rangeHeading = $startDate->format('M j, Y') . ' – ' . $endDate->format('M j, Y');
+        } elseif ($startDate->format('m') !== $endDate->format('m')) {
+            $rangeHeading = $startDate->format('M j') . ' – ' . $endDate->format('M j, Y');
+        } else {
+            $rangeHeading = $startDate->format('M j') . ' – ' . $endDate->format('j, Y');
+        }
+
+        // Query Grooming appointments within the visible 7-day range
+        $apptStmt = $this->db->prepare(
+            "SELECT a.appointment_id, a.business_unit_id, a.preferred_date, a.preferred_time,
+                    a.appointment_begin, a.appointment_end, a.notes,
+                    st.status_name,
+                    CONCAT(c.first_name, ' ', c.last_name) AS customer_name,
+                    c.phone AS customer_phone
+             FROM appointment a
+             JOIN appointment_status st ON st.appointment_status_id = a.appointment_status_id
+             JOIN customer c ON c.customer_id = a.customer_id
+             WHERE a.business_unit_id = ?
+               AND a.preferred_date BETWEEN ? AND ?
+             ORDER BY a.preferred_date ASC, COALESCE(TIME(a.appointment_begin), a.preferred_time, '09:00:00') ASC, a.appointment_id ASC"
+        );
+        $apptStmt->execute([$unitId, $startDateStr, $endDateStr]);
+        $rawAppts = $apptStmt->fetchAll();
+
+        $gridStartHour = 8;
+        $gridEndHour = 20;
+
+        $hydratedAppts = [];
+        foreach ($rawAppts as $ra) {
+            $h = $this->hydrateGroomingAppointmentDetails($ra);
+            $apptStartHour = (int)floor($h['start_minutes'] / 60);
+            $apptEndHour = (int)ceil($h['end_minutes'] / 60);
+            if ($apptStartHour < $gridStartHour) {
+                $gridStartHour = max(0, $apptStartHour);
+            }
+            if ($apptEndHour > $gridEndHour) {
+                $gridEndHour = min(24, $apptEndHour);
+            }
+            $hydratedAppts[] = $h;
+        }
+
+        $gridHeightPx = ($gridEndHour - $gridStartHour) * 60;
+
+        // Group by date and compute vertical positions + side-by-side overlap layout
+        $appointmentsByDate = [];
+        foreach ($weekDays as $wd) {
+            $appointmentsByDate[$wd['date']] = [];
+        }
+
+        foreach ($hydratedAppts as $ha) {
+            $dKey = (string)$ha['preferred_date'];
+            if (!isset($appointmentsByDate[$dKey])) {
+                continue;
+            }
+            $ha['day_index'] = $dateIndexMap[$dKey] ?? 0;
+            $ha['top_px'] = max(0, $ha['start_minutes'] - ($gridStartHour * 60));
+            $ha['height_px'] = max(38, $ha['end_minutes'] - $ha['start_minutes']);
+            $appointmentsByDate[$dKey][] = $ha;
+        }
+
+        $allVisibleAppointments = [];
+        foreach ($appointmentsByDate as $dKey => &$dayList) {
+            $dayList = $this->layoutDayOverlappingAppointments($dayList);
+            foreach ($dayList as $item) {
+                $allVisibleAppointments[] = $item;
+            }
+        }
+        unset($dayList);
+
+        // Active Grooming Stylists / Bathers eligible for appointment assignment
+        $stylistsStmt = $this->db->prepare(
+            "SELECT e.employee_id, e.first_name, e.last_name, e.position
+             FROM employee e
+             JOIN user_account ua ON ua.user_account_id = e.user_account_id
+             WHERE e.business_unit_id = ?
+               AND e.employee_status = 'active'
+               AND ua.account_status = 'active'
+               AND ua.is_super_admin = 0
+               AND e.position IN ('Master Stylist', 'Stylist', 'Bather')
+             ORDER BY e.last_name ASC, e.first_name ASC"
+        );
+        $stylistsStmt->execute([$unitId]);
+        $groomingStylists = $stylistsStmt->fetchAll();
+
+        $selectedApptId = isset($_GET['select']) && ctype_digit((string)$_GET['select'])
+            ? (int)$_GET['select']
+            : null;
+
+        $this->render('manager/appointments', [
+            'title' => "Appointments · $unitName",
+            'activeTab' => 'appointments',
+            'unitId' => $unitId,
+            'unitName' => $unitName,
+            'isSuper' => $isSuper,
+            'allUnits' => $isSuper ? Units::all() : [],
+            'weekDays' => $weekDays,
+            'startDateStr' => $startDateStr,
+            'endDateStr' => $endDateStr,
+            'prevWeekStart' => $prevWeekStart,
+            'nextWeekStart' => $nextWeekStart,
+            'todayWeekStart' => $todayWeekStart,
+            'isCurrentWeek' => $isCurrentWeek,
+            'monthPickerValue' => $monthPickerValue,
+            'rangeHeading' => $rangeHeading,
+            'gridStartHour' => $gridStartHour,
+            'gridEndHour' => $gridEndHour,
+            'gridHeightPx' => $gridHeightPx,
+            'appointmentsByDate' => $appointmentsByDate,
+            'allVisibleAppointments' => $allVisibleAppointments,
+            'groomingStylists' => $groomingStylists,
+            'selectedApptId' => $selectedApptId,
+        ]);
+    }
+
+    /**
+     * Compute side-by-side column indices for overlapping appointments on the same day.
+     */
+    private function layoutDayOverlappingAppointments(array $dayAppts): array
+    {
+        if (empty($dayAppts)) {
+            return [];
+        }
+
+        usort($dayAppts, static function (array $a, array $b): int {
+            if ($a['start_minutes'] !== $b['start_minutes']) {
+                return $a['start_minutes'] <=> $b['start_minutes'];
+            }
+            if ($a['end_minutes'] !== $b['end_minutes']) {
+                return $b['end_minutes'] <=> $a['end_minutes'];
+            }
+            return $a['appointment_id'] <=> $b['appointment_id'];
+        });
+
+        // Partition into connected overlap clusters
+        $clusters = [];
+        $currentCluster = [];
+        $clusterMaxEnd = -1;
+
+        foreach ($dayAppts as $appt) {
+            if (empty($currentCluster) || $appt['start_minutes'] < $clusterMaxEnd) {
+                $currentCluster[] = $appt;
+                $clusterMaxEnd = max($clusterMaxEnd, (int)$appt['end_minutes']);
+            } else {
+                $clusters[] = $currentCluster;
+                $currentCluster = [$appt];
+                $clusterMaxEnd = (int)$appt['end_minutes'];
+            }
+        }
+        if (!empty($currentCluster)) {
+            $clusters[] = $currentCluster;
+        }
+
+        $result = [];
+        foreach ($clusters as $cluster) {
+            $colEndTimes = []; // colIndex => endMinutes
+            foreach ($cluster as &$ev) {
+                $placedCol = null;
+                foreach ($colEndTimes as $cIdx => $cEnd) {
+                    if ($ev['start_minutes'] >= $cEnd) {
+                        $placedCol = $cIdx;
+                        $colEndTimes[$cIdx] = (int)$ev['end_minutes'];
+                        break;
+                    }
+                }
+                if ($placedCol === null) {
+                    $placedCol = count($colEndTimes);
+                    $colEndTimes[$placedCol] = (int)$ev['end_minutes'];
+                }
+                $ev['overlap_col_index'] = $placedCol;
+            }
+            unset($ev);
+
+            $totalCols = max(1, count($colEndTimes));
+            foreach ($cluster as $ev) {
+                $ev['overlap_total_cols'] = $totalCols;
+                $result[] = $ev;
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * Grooming Services Catalog Page (/manager/services)
+     */
+    public function services(?int $routeUnitId = null): void
+    {
+        [$uid, , $unitId, $unitName, $isSuper] = $this->checkBusinessManager(
+            $routeUnitId ?? (isset($_GET['unit_id']) && ctype_digit((string)$_GET['unit_id']) ? (int)$_GET['unit_id'] : Units::groomingId())
+        );
+
+        if ((int)$unitId !== Units::groomingId()) {
+            $this->forbidden('Services catalog management is exclusively available to Grooming Services.');
+        }
+
+        $selectedCategory = trim((string)($_GET['category'] ?? ''));
+        if (!in_array($selectedCategory, self::GROOMING_CATEGORIES, true)) {
+            $selectedCategory = '';
+        }
+
+        $selectedStatus = trim((string)($_GET['status'] ?? ''));
+        if (!in_array($selectedStatus, ['active', 'inactive'], true)) {
+            $selectedStatus = '';
+        }
+
+        $searchQuery = trim((string)($_GET['q'] ?? ''));
+
+        // Query grooming services with their catalog configurations
+        $sql = "SELECT service_id, service_name, service_category,
+                       COALESCE(grooming_category, 'Bathing & Brushing') AS grooming_category,
+                       description, base_price, estimated_duration_minutes,
+                       additional_duration_rate, additional_employee_fee,
+                       service_status, created_at, updated_at
+                FROM service
+                WHERE service_category = 'grooming'";
+        $params = [];
+
+        if ($selectedCategory !== '') {
+            $sql .= " AND grooming_category = ?";
+            $params[] = $selectedCategory;
+        }
+
+        if ($selectedStatus !== '') {
+            $sql .= " AND service_status = ?";
+            $params[] = $selectedStatus;
+        }
+
+        if ($searchQuery !== '') {
+            $sql .= " AND (service_name LIKE ? OR description LIKE ?)";
+            $params[] = "%$searchQuery%";
+            $params[] = "%$searchQuery%";
+        }
+
+        $sql .= " ORDER BY FIELD(COALESCE(grooming_category, 'Bathing & Brushing'), 'Bathing & Brushing', 'Styling', 'Wellness', 'Specialized'), service_name ASC";
+
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute($params);
+        $services = $stmt->fetchAll();
+
+        // Calculate category counts across all grooming services for quick filter badges
+        $countsStmt = $this->db->query(
+            "SELECT COALESCE(grooming_category, 'Bathing & Brushing') AS cat, COUNT(*) AS cnt
+             FROM service
+             WHERE service_category = 'grooming'
+             GROUP BY cat"
+        );
+        $categoryCounts = [
+            'total' => 0,
+            'Bathing & Brushing' => 0,
+            'Styling' => 0,
+            'Wellness' => 0,
+            'Specialized' => 0,
+        ];
+        foreach ($countsStmt->fetchAll() as $row) {
+            $cat = (string)$row['cat'];
+            $cnt = (int)$row['cnt'];
+            if (isset($categoryCounts[$cat])) {
+                $categoryCounts[$cat] = $cnt;
+            }
+            $categoryCounts['total'] += $cnt;
+        }
+
+        $errors = Session::get('service_errors', []);
+        Session::forget('service_errors');
+        $old = Session::get('old_service_input', []);
+        Session::forget('old_service_input');
+
+        $this->render('manager/services', [
+            'title' => "Services · $unitName",
+            'activeTab' => 'services',
+            'unitId' => $unitId,
+            'unitName' => $unitName,
+            'isSuper' => $isSuper,
+            'allUnits' => $isSuper ? Units::all() : [],
+            'services' => $services,
+            'categories' => self::GROOMING_CATEGORIES,
+            'selectedCategory' => $selectedCategory,
+            'selectedStatus' => $selectedStatus,
+            'searchQuery' => $searchQuery,
+            'categoryCounts' => $categoryCounts,
+            'errors' => $errors,
+            'old' => $old,
+        ]);
+    }
+
+    /**
+     * Create a new Grooming Service
+     */
+    public function storeService(?int $routeUnitId = null): void
+    {
+        [$uid, , $unitId, , $isSuper] = $this->checkBusinessManager(
+            $routeUnitId ?? (isset($_GET['unit_id']) && ctype_digit((string)$_GET['unit_id']) ? (int)$_GET['unit_id'] : Units::groomingId())
+        );
+        if ((int)$unitId !== Units::groomingId()) {
+            $this->forbidden('Services catalog management is exclusively available to Grooming Services.');
+        }
+        CSRF::check();
+
+        $name = trim((string)($_POST['service_name'] ?? ''));
+        $category = trim((string)($_POST['grooming_category'] ?? ($_POST['service_category'] ?? '')));
+        $desc = trim((string)($_POST['description'] ?? ''));
+        $basePriceRaw = trim((string)($_POST['base_price'] ?? ''));
+        $maxDurationRaw = trim((string)($_POST['estimated_duration_minutes'] ?? ($_POST['maximum_duration'] ?? '')));
+        $addDurationRateRaw = trim((string)($_POST['additional_duration_rate'] ?? '0.00'));
+        $addEmployeeFeeRaw = trim((string)($_POST['additional_employee_fee'] ?? '0.00'));
+
+        $redirectUrl = ($isSuper && $routeUnitId) ? "/manager/units/$unitId/services" : '/manager/services';
+
+        $errors = [];
+        if ($name === '') {
+            $errors['service_name'] = 'Service name is required.';
+        } elseif (mb_strlen($name) > 200) {
+            $errors['service_name'] = 'Service name cannot exceed 200 characters.';
+        }
+
+        if (!in_array($category, self::GROOMING_CATEGORIES, true)) {
+            $errors['grooming_category'] = 'Please select a valid service category.';
+        }
+
+        if ($basePriceRaw === '' || !is_numeric($basePriceRaw) || (float)$basePriceRaw < 0) {
+            $errors['base_price'] = 'Base price must be a valid non-negative number.';
+        }
+
+        if ($maxDurationRaw === '' || !ctype_digit((string)$maxDurationRaw) || (int)$maxDurationRaw <= 0) {
+            $errors['estimated_duration_minutes'] = 'Maximum duration must be a valid positive integer in minutes.';
+        }
+
+        if ($addDurationRateRaw === '' || !is_numeric($addDurationRateRaw) || (float)$addDurationRateRaw < 0) {
+            $errors['additional_duration_rate'] = 'Additional-duration rate must be a valid non-negative number.';
+        }
+
+        if ($addEmployeeFeeRaw === '' || !is_numeric($addEmployeeFeeRaw) || (float)$addEmployeeFeeRaw < 0) {
+            $errors['additional_employee_fee'] = 'Additional-employee fee must be a valid non-negative number.';
+        }
+
+        if ($name !== '' && !isset($errors['service_name'])) {
+            $chk = $this->db->prepare('SELECT service_id FROM service WHERE service_category = "grooming" AND LOWER(service_name) = LOWER(?)');
+            $chk->execute([$name]);
+            if ($chk->fetch()) {
+                $errors['service_name'] = "A grooming service named '$name' already exists.";
+            }
+        }
+
+        if (!empty($errors)) {
+            Session::set('service_errors', $errors);
+            Session::set('old_service_input', $_POST);
+            $this->flash('error', reset($errors));
+            $this->redirect($redirectUrl);
+        }
+
+        $ins = $this->db->prepare(
+            "INSERT INTO service (service_name, service_category, grooming_category, description,
+                                  base_price, estimated_duration_minutes, additional_duration_rate,
+                                  additional_employee_fee, service_status)
+             VALUES (?, 'grooming', ?, ?, ?, ?, ?, ?, 'active')"
+        );
+        $ins->execute([
+            $name,
+            $category,
+            $desc !== '' ? $desc : null,
+            number_format((float)$basePriceRaw, 2, '.', ''),
+            (int)$maxDurationRaw,
+            number_format((float)$addDurationRateRaw, 2, '.', ''),
+            number_format((float)$addEmployeeFeeRaw, 2, '.', ''),
+        ]);
+        $newId = (int)$this->db->lastInsertId();
+
+        Audit::log('service.create', "Created Grooming service '$name' (#$newId, Category: $category, Base Price: ₱$basePriceRaw, Max Duration: {$maxDurationRaw}m)", $unitId, 'service', $newId, $uid);
+
+        $this->flash('success', "Service '$name' created successfully.");
+        $this->redirect($redirectUrl);
+    }
+
+    /**
+     * Edit an existing Grooming Service
+     */
+    public function updateService(int $id, ?int $routeUnitId = null): void
+    {
+        [$uid, , $unitId, , $isSuper] = $this->checkBusinessManager(
+            $routeUnitId ?? (isset($_GET['unit_id']) && ctype_digit((string)$_GET['unit_id']) ? (int)$_GET['unit_id'] : Units::groomingId())
+        );
+        if ((int)$unitId !== Units::groomingId()) {
+            $this->forbidden('Services catalog management is exclusively available to Grooming Services.');
+        }
+        CSRF::check();
+
+        $redirectUrl = ($isSuper && $routeUnitId) ? "/manager/units/$unitId/services" : '/manager/services';
+
+        $srvStmt = $this->db->prepare('SELECT * FROM service WHERE service_id = ? AND service_category = "grooming"');
+        $srvStmt->execute([$id]);
+        $srv = $srvStmt->fetch();
+        if (!$srv) {
+            $this->flash('error', 'Grooming service not found.');
+            $this->redirect($redirectUrl);
+        }
+
+        $name = trim((string)($_POST['service_name'] ?? ''));
+        $category = trim((string)($_POST['grooming_category'] ?? ($_POST['service_category'] ?? '')));
+        $desc = trim((string)($_POST['description'] ?? ''));
+        $basePriceRaw = trim((string)($_POST['base_price'] ?? ''));
+        $maxDurationRaw = trim((string)($_POST['estimated_duration_minutes'] ?? ($_POST['maximum_duration'] ?? '')));
+        $addDurationRateRaw = trim((string)($_POST['additional_duration_rate'] ?? '0.00'));
+        $addEmployeeFeeRaw = trim((string)($_POST['additional_employee_fee'] ?? '0.00'));
+
+        $errors = [];
+        if ($name === '') {
+            $errors['service_name'] = 'Service name is required.';
+        } elseif (mb_strlen($name) > 200) {
+            $errors['service_name'] = 'Service name cannot exceed 200 characters.';
+        }
+
+        if (!in_array($category, self::GROOMING_CATEGORIES, true)) {
+            $errors['grooming_category'] = 'Please select a valid service category.';
+        }
+
+        if ($basePriceRaw === '' || !is_numeric($basePriceRaw) || (float)$basePriceRaw < 0) {
+            $errors['base_price'] = 'Base price must be a valid non-negative number.';
+        }
+
+        if ($maxDurationRaw === '' || !ctype_digit((string)$maxDurationRaw) || (int)$maxDurationRaw <= 0) {
+            $errors['estimated_duration_minutes'] = 'Maximum duration must be a valid positive integer in minutes.';
+        }
+
+        if ($addDurationRateRaw === '' || !is_numeric($addDurationRateRaw) || (float)$addDurationRateRaw < 0) {
+            $errors['additional_duration_rate'] = 'Additional-duration rate must be a valid non-negative number.';
+        }
+
+        if ($addEmployeeFeeRaw === '' || !is_numeric($addEmployeeFeeRaw) || (float)$addEmployeeFeeRaw < 0) {
+            $errors['additional_employee_fee'] = 'Additional-employee fee must be a valid non-negative number.';
+        }
+
+        if ($name !== '' && !isset($errors['service_name'])) {
+            $chk = $this->db->prepare('SELECT service_id FROM service WHERE service_category = "grooming" AND LOWER(service_name) = LOWER(?) AND service_id <> ?');
+            $chk->execute([$name, $id]);
+            if ($chk->fetch()) {
+                $errors['service_name'] = "Another grooming service named '$name' already exists.";
+            }
+        }
+
+        if (!empty($errors)) {
+            Session::set('service_errors', $errors);
+            Session::set('old_service_input', $_POST);
+            $this->flash('error', reset($errors));
+            $this->redirect($redirectUrl);
+        }
+
+        // Update service settings (existing confirmed appointments retain their original snapshots)
+        $upd = $this->db->prepare(
+            "UPDATE service SET
+                service_name = ?,
+                grooming_category = ?,
+                description = ?,
+                base_price = ?,
+                estimated_duration_minutes = ?,
+                additional_duration_rate = ?,
+                additional_employee_fee = ?,
+                updated_at = NOW()
+             WHERE service_id = ? AND service_category = 'grooming'"
+        );
+        $upd->execute([
+            $name,
+            $category,
+            $desc !== '' ? $desc : null,
+            number_format((float)$basePriceRaw, 2, '.', ''),
+            (int)$maxDurationRaw,
+            number_format((float)$addDurationRateRaw, 2, '.', ''),
+            number_format((float)$addEmployeeFeeRaw, 2, '.', ''),
+            $id,
+        ]);
+
+        Audit::log('service.update', "Updated Grooming service #$id '$name' (Category: $category, Base Price: ₱$basePriceRaw, Max Duration: {$maxDurationRaw}m). Existing confirmed appointment snapshots preserved.", $unitId, 'service', $id, $uid);
+
+        $this->flash('success', "Service '$name' updated successfully. Settings apply to future bookings.");
+        $this->redirect($redirectUrl);
+    }
+
+    public function updateServiceUnit(int $routeUnitId, int $id): void
+    {
+        $this->updateService($id, $routeUnitId);
+    }
+
+    /**
+     * Toggle Grooming Service Availability (Available / Unavailable)
+     */
+    public function toggleServiceStatus(int $id, ?int $routeUnitId = null): void
+    {
+        [$uid, , $unitId, , $isSuper] = $this->checkBusinessManager(
+            $routeUnitId ?? (isset($_GET['unit_id']) && ctype_digit((string)$_GET['unit_id']) ? (int)$_GET['unit_id'] : Units::groomingId())
+        );
+        if ((int)$unitId !== Units::groomingId()) {
+            $this->forbidden('Services catalog management is exclusively available to Grooming Services.');
+        }
+        CSRF::check();
+
+        $redirectUrl = ($isSuper && $routeUnitId) ? "/manager/units/$unitId/services" : '/manager/services';
+
+        $srvStmt = $this->db->prepare('SELECT service_id, service_name, service_status FROM service WHERE service_id = ? AND service_category = "grooming"');
+        $srvStmt->execute([$id]);
+        $srv = $srvStmt->fetch();
+        if (!$srv) {
+            $this->flash('error', 'Grooming service not found.');
+            $this->redirect($redirectUrl);
+        }
+
+        $newStatus = trim((string)($_POST['status'] ?? ''));
+        if (!in_array($newStatus, ['active', 'inactive'], true)) {
+            $newStatus = ($srv['service_status'] === 'active') ? 'inactive' : 'active';
+        }
+
+        $upd = $this->db->prepare('UPDATE service SET service_status = ?, updated_at = NOW() WHERE service_id = ? AND service_category = "grooming"');
+        $upd->execute([$newStatus, $id]);
+
+        $statusLabel = ($newStatus === 'active') ? 'Available' : 'Unavailable';
+        Audit::log('service.status_toggle', "Marked Grooming service #$id '{$srv['service_name']}' as $statusLabel ($newStatus). Existing appointment records preserved intact.", $unitId, 'service', $id, $uid);
+
+        $this->flash('success', "Service '{$srv['service_name']}' marked as $statusLabel. Existing booking history remains intact.");
+        $this->redirect($redirectUrl);
+    }
+
+    public function toggleServiceStatusUnit(int $routeUnitId, int $id): void
+    {
+        $this->toggleServiceStatus($id, $routeUnitId);
+    }
+
+    /**
+     * Verify that a Grooming appointment exists and belongs to the manager's unit.
+     */
+    private function verifyManagerAppointment(int $appointmentId, int $unitId): array
+    {
+        $stmt = $this->db->prepare(
+            "SELECT a.*, st.status_name
+             FROM appointment a
+             JOIN appointment_status st ON st.appointment_status_id = a.appointment_status_id
+             WHERE a.appointment_id = ? AND a.business_unit_id = ?"
+        );
+        $stmt->execute([$appointmentId, $unitId]);
+        $appt = $stmt->fetch();
+        if (!$appt) {
+            $this->notFound();
+        }
+        return $this->hydrateGroomingAppointmentDetails($appt);
+    }
+
+    private function appointmentsRedirectUrl(int $unitId, bool $isSuper, ?string $returnStart = null, ?int $selectId = null): string
+    {
+        $params = [];
+        if ($isSuper) {
+            $params['unit_id'] = $unitId;
+        }
+        if ($returnStart !== null && preg_match('/^\d{4}-\d{2}-\d{2}$/', $returnStart)) {
+            $params['start'] = $returnStart;
+        }
+        if ($selectId !== null && $selectId > 0) {
+            $params['select'] = $selectId;
+        }
+        return '/manager/appointments' . ($params ? '?' . http_build_query($params) : '');
+    }
+
+    /**
+     * Business Manager Reassign Grooming Appointment Employee (Confirmed/In Progress only, with conflict check).
+     */
+    public function reassignAppointment(int $id): void
+    {
+        [$uid, , $unitId, , $isSuper] = $this->checkBusinessManager();
+        CSRF::check();
+
+        $appt = $this->verifyManagerAppointment($id, $unitId);
+        $returnStart = trim((string)($_POST['return_start'] ?? $appt['preferred_date']));
+        $redirectUrl = $this->appointmentsRedirectUrl($unitId, $isSuper, $returnStart, $id);
+
+        if (!in_array($appt['status_name'], ['Confirmed', 'In Progress'], true)) {
+            $this->flash('error', 'Only confirmed grooming appointments can be reassigned by the Business Manager. Pending customer requests must first be processed by the Receptionist.');
+            $this->redirect($redirectUrl);
+        }
+
+        $targetEmpId = (int)($_POST['employee_id'] ?? 0);
+        if ($targetEmpId <= 0) {
+            $this->flash('error', 'Please select a valid Grooming Services employee.');
+            $this->redirect($redirectUrl);
+        }
+
+        $empStmt = $this->db->prepare(
+            "SELECT e.employee_id, e.first_name, e.last_name, e.position, e.employee_status, ua.account_status
+             FROM employee e
+             JOIN user_account ua ON ua.user_account_id = e.user_account_id
+             WHERE e.employee_id = ? AND e.business_unit_id = ?"
+        );
+        $empStmt->execute([$targetEmpId, $unitId]);
+        $targetEmp = $empStmt->fetch();
+
+        if (!$targetEmp || $targetEmp['employee_status'] !== 'active' || $targetEmp['account_status'] !== 'active') {
+            $this->flash('error', 'Selected employee is not an active Grooming Services staff member.');
+            $this->redirect($redirectUrl);
+        }
+
+        if (!in_array($targetEmp['position'], ['Master Stylist', 'Stylist', 'Bather'], true)) {
+            $this->flash('error', 'Appointments can only be assigned to active Grooming stylists or bathers.');
+            $this->redirect($redirectUrl);
+        }
+
+        // Check employee scheduling conflict on the same date & overlapping time range
+        $otherStmt = $this->db->prepare(
+            "SELECT DISTINCT a.appointment_id, a.preferred_date, a.preferred_time, a.appointment_begin, a.appointment_end, st.status_name
+             FROM appointment a
+             JOIN appointment_status st ON st.appointment_status_id = a.appointment_status_id
+             JOIN appointment_pet ap ON ap.appointment_id = a.appointment_id
+             JOIN performed_service ps ON ps.appointment_pet_id = ap.appointment_pet_id
+             WHERE a.business_unit_id = ?
+               AND a.preferred_date = ?
+               AND a.appointment_id <> ?
+               AND ps.performer_employee_id = ?
+               AND st.status_name IN ('Confirmed', 'In Progress')"
+        );
+        $otherStmt->execute([$unitId, $appt['preferred_date'], $id, $targetEmpId]);
+        foreach ($otherStmt->fetchAll() as $otherRow) {
+            $otherHydrated = $this->hydrateGroomingAppointmentDetails($otherRow);
+            if ($appt['start_minutes'] < $otherHydrated['end_minutes'] && $otherHydrated['start_minutes'] < $appt['end_minutes']) {
+                $this->flash('error', "Scheduling conflict: {$targetEmp['first_name']} {$targetEmp['last_name']} is already assigned to appointment #{$otherHydrated['appointment_id']} ({$otherHydrated['time_coverage']}) on {$appt['formatted_date']}.");
+                $this->redirect($redirectUrl);
+            }
+        }
+
+        $this->db->beginTransaction();
+        try {
+            // Ensure performed_service rows exist for the confirmed appointment
+            $psCountStmt = $this->db->prepare(
+                "SELECT COUNT(*) FROM performed_service ps
+                 JOIN appointment_pet ap ON ap.appointment_pet_id = ps.appointment_pet_id
+                 WHERE ap.appointment_id = ?"
+            );
+            $psCountStmt->execute([$id]);
+            if ((int)$psCountStmt->fetchColumn() === 0) {
+                $seedPs = $this->db->prepare(
+                    "INSERT INTO performed_service (requested_pet_service_id, appointment_pet_id, service_id, performed_price, quantity, performed_status, performer_employee_id)
+                     SELECT rps.requested_pet_service_id, rps.appointment_pet_id, rps.service_id, rps.requested_price, 1, 'pending', ?
+                     FROM requested_pet_service rps
+                     JOIN appointment_pet ap ON ap.appointment_pet_id = rps.appointment_pet_id
+                     WHERE ap.appointment_id = ?"
+                );
+                $seedPs->execute([$targetEmpId, $id]);
+            } else {
+                $upd = $this->db->prepare(
+                    "UPDATE performed_service ps
+                     JOIN appointment_pet ap ON ap.appointment_pet_id = ps.appointment_pet_id
+                     SET ps.performer_employee_id = ?
+                     WHERE ap.appointment_id = ?"
+                );
+                $upd->execute([$targetEmpId, $id]);
+            }
+
+            $empName = $targetEmp['first_name'] . ' ' . $targetEmp['last_name'];
+            Audit::log('appointment.reassign', "Appointment #$id reassigned to $empName (employee #$targetEmpId) by Business Manager", $unitId, 'appointment', $id, $uid);
+
+            $this->db->commit();
+            $this->flash('success', "Appointment #$id assigned to $empName.");
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            $this->flash('error', 'Failed to reassign appointment: ' . $e->getMessage());
+        }
+
+        $this->redirect($redirectUrl);
+    }
+
+    /**
+     * Business Manager Cancel Confirmed Grooming Appointment (Mandatory Reason).
+     */
+    public function cancelAppointment(int $id): void
+    {
+        [$uid, , $unitId, , $isSuper] = $this->checkBusinessManager();
+        CSRF::check();
+
+        $appt = $this->verifyManagerAppointment($id, $unitId);
+        $returnStart = trim((string)($_POST['return_start'] ?? $appt['preferred_date']));
+        $redirectUrl = $this->appointmentsRedirectUrl($unitId, $isSuper, $returnStart, $id);
+
+        $reason = trim((string)($_POST['cancellation_reason'] ?? $_POST['reason'] ?? ''));
+        if ($reason === '') {
+            $this->flash('error', 'A non-empty cancellation reason is required to cancel an appointment.');
+            $this->redirect($redirectUrl);
+        }
+
+        if (!in_array($appt['status_name'], ['Confirmed', 'In Progress'], true)) {
+            $this->flash('error', 'Only confirmed grooming appointments can be cancelled here. Pending requests are managed by the Receptionist.');
+            $this->redirect($redirectUrl);
+        }
+
+        $this->db->beginTransaction();
+        try {
+            $updatedNotes = trim((string)($appt['notes'] ?? '') . "\n[Cancelled by Business Manager: $reason]");
+            $upd = $this->db->prepare(
+                "UPDATE appointment
+                 SET appointment_status_id = (SELECT appointment_status_id FROM appointment_status WHERE status_name = 'Cancelled'),
+                     notes = ?
+                 WHERE appointment_id = ? AND business_unit_id = ?"
+            );
+            $upd->execute([$updatedNotes, $id, $unitId]);
+
+            $psUpd = $this->db->prepare(
+                "UPDATE performed_service ps
+                 JOIN appointment_pet ap ON ap.appointment_pet_id = ps.appointment_pet_id
+                 SET ps.performed_status = 'cancelled'
+                 WHERE ap.appointment_id = ?"
+            );
+            $psUpd->execute([$id]);
+
+            Audit::log('appointment.cancel', "Appointment #$id cancelled by Business Manager. Reason: $reason", $unitId, 'appointment', $id, $uid);
+
+            $this->db->commit();
+            $this->flash('success', "Appointment #$id has been cancelled.");
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            $this->flash('error', 'Failed to cancel appointment: ' . $e->getMessage());
+        }
+
+        $this->redirect($redirectUrl);
+    }
+
+    /**
+     * Business Manager Update Confirmed Appointment Status (In Progress / No-Show / Completed).
+     */
+    public function updateAppointmentStatus(int $id): void
+    {
+        [$uid, , $unitId, , $isSuper] = $this->checkBusinessManager();
+        CSRF::check();
+
+        $appt = $this->verifyManagerAppointment($id, $unitId);
+        $returnStart = trim((string)($_POST['return_start'] ?? $appt['preferred_date']));
+        $redirectUrl = $this->appointmentsRedirectUrl($unitId, $isSuper, $returnStart, $id);
+
+        $newStatus = trim((string)($_POST['status'] ?? ''));
+        $allowedTransitions = [
+            'Confirmed' => ['In Progress', 'Completed', 'No-Show'],
+            'In Progress' => ['Completed'],
+        ];
+
+        $currentStatus = (string)$appt['status_name'];
+        if (!isset($allowedTransitions[$currentStatus]) || !in_array($newStatus, $allowedTransitions[$currentStatus], true)) {
+            $this->flash('error', "Invalid status transition from '$currentStatus' to '$newStatus'.");
+            $this->redirect($redirectUrl);
+        }
+
+        $upd = $this->db->prepare(
+            "UPDATE appointment
+             SET appointment_status_id = (SELECT appointment_status_id FROM appointment_status WHERE status_name = ?)
+             WHERE appointment_id = ? AND business_unit_id = ?"
+        );
+        $upd->execute([$newStatus, $id, $unitId]);
+
+        Audit::log('appointment.status', "Appointment #$id status updated from $currentStatus to $newStatus by Business Manager", $unitId, 'appointment', $id, $uid);
+
+        $this->flash('success', "Appointment #$id status updated to $newStatus.");
+        $this->redirect($redirectUrl);
+    }
+
+    /**
+     * Business Manager Complete Confirmed/In-Progress Appointment.
+     */
+    public function completeAppointment(int $id): void
+    {
+        [$uid, , $unitId, , $isSuper] = $this->checkBusinessManager();
+        CSRF::check();
+
+        $appt = $this->verifyManagerAppointment($id, $unitId);
+        $returnStart = trim((string)($_POST['return_start'] ?? $appt['preferred_date']));
+        $redirectUrl = $this->appointmentsRedirectUrl($unitId, $isSuper, $returnStart, $id);
+
+        if (!in_array($appt['status_name'], ['Confirmed', 'In Progress'], true)) {
+            $this->flash('error', 'Only Confirmed or In Progress appointments can be marked as Completed.');
+            $this->redirect($redirectUrl);
+        }
+
+        $this->db->beginTransaction();
+        try {
+            $psUpd = $this->db->prepare(
+                "UPDATE performed_service ps
+                 JOIN appointment_pet ap ON ap.appointment_pet_id = ps.appointment_pet_id
+                 SET ps.performed_status = 'completed'
+                 WHERE ap.appointment_id = ?"
+            );
+            $psUpd->execute([$id]);
+
+            $apptUpd = $this->db->prepare(
+                "UPDATE appointment
+                 SET appointment_status_id = (SELECT appointment_status_id FROM appointment_status WHERE status_name = 'Completed'),
+                     appointment_end = COALESCE(appointment_end, NOW())
+                 WHERE appointment_id = ? AND business_unit_id = ?"
+            );
+            $apptUpd->execute([$id, $unitId]);
+
+            Audit::log('appointment.complete', "Appointment #$id marked Completed by Business Manager", $unitId, 'appointment', $id, $uid);
+
+            $this->db->commit();
+            $this->flash('success', "Appointment #$id marked as Completed.");
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            $this->flash('error', 'Failed to complete appointment: ' . $e->getMessage());
+        }
+
+        $this->redirect($redirectUrl);
     }
 
     // ==========================================
@@ -844,10 +2177,20 @@ final class ManagerController extends Controller
     // ==========================================
     public function inventory(?int $routeUnitId = null): void
     {
-        [, , $unitId, $unitName, $isSuper, $isInvOnly] = $this->checkManagerOrInventoryManager($routeUnitId);
+        [, , $unitId, $unitName, $isSuper, $isInvOnly, $isTempKeyAccess, $tempKeyGrant] = $this->checkManagerOrInventoryManager($routeUnitId);
 
         $tab = isset($_GET['tab']) && $_GET['tab'] === 'orders' ? 'orders' : 'stock';
         $q = trim((string)($_GET['q'] ?? ''));
+
+        $canManageInventoryKey = !$isInvOnly && !$isTempKeyAccess && InventoryAccessKey::isUnitSupported((int)$unitId);
+        $activeInventoryKey = $canManageInventoryKey ? InventoryAccessKey::getActiveForUnit($this->db, (int)$unitId) : null;
+
+        $autoOpenKeyModal = false;
+        $openForUnit = Session::get('open_inventory_key_modal_unit');
+        if ($openForUnit !== null && (int)$openForUnit === (int)$unitId) {
+            Session::forget('open_inventory_key_modal_unit');
+            $autoOpenKeyModal = ($activeInventoryKey !== null);
+        }
 
         // Stock list query: Prioritize out-of-stock items (A–Z), then in-stock items (A–Z)
         $stockSql = "SELECT bp.business_product_id, bp.selling_price, bp.product_status,
@@ -930,6 +2273,11 @@ final class ManagerController extends Controller
             'unitName' => $unitName,
             'isSuper' => $isSuper,
             'isInventoryManagerOnly' => $isInvOnly,
+            'isTempKeyAccess' => $isTempKeyAccess,
+            'tempKeyGrant' => $tempKeyGrant,
+            'canManageInventoryKey' => $canManageInventoryKey,
+            'activeInventoryKey' => $activeInventoryKey,
+            'autoOpenKeyModal' => $autoOpenKeyModal,
             'allUnits' => $isSuper ? Units::all() : [],
             'inventoryItems' => $inventoryItems,
             'catalogProducts' => $catalogProducts,
@@ -938,10 +2286,58 @@ final class ManagerController extends Controller
         ]);
     }
 
-    public function adjustStock(): void
+    public function generateInventoryKey(?int $routeUnitId = null): void
     {
-        [$uid, $employeeId, $unitId] = $this->checkManagerOrInventoryManager();
+        [$uid, $employeeId, $unitId, $unitName, $isSuper] = $this->checkBusinessManager($routeUnitId);
         CSRF::check();
+
+        if (!$isSuper && isset($_POST['business_unit_id']) && ctype_digit((string)$_POST['business_unit_id'])) {
+            if ((int)$_POST['business_unit_id'] !== (int)$unitId) {
+                $this->forbidden('Access denied: you cannot generate keys for another business unit.');
+            }
+        }
+
+        if (!InventoryAccessKey::isUnitSupported((int)$unitId)) {
+            $this->forbidden('Temporary Inventory Access Keys are only available for Pet Store and Grooming Services.');
+        }
+
+        $returnTab = (($_POST['return_tab'] ?? '') === 'orders') ? 'orders' : 'stock';
+        $params = [];
+        if ($isSuper) {
+            $params['unit_id'] = (int)$unitId;
+        }
+        if ($returnTab === 'orders') {
+            $params['tab'] = 'orders';
+        }
+        $redirectUrl = '/manager/inventory' . (!empty($params) ? ('?' . http_build_query($params)) : '');
+
+        try {
+            $result = InventoryAccessKey::generateIfNoneActive(
+                $this->db,
+                (int)$unitId,
+                $employeeId > 0 ? $employeeId : null,
+                (int)$uid
+            );
+            Session::set('open_inventory_key_modal_unit', (int)$unitId);
+
+            if (!empty($result['created'])) {
+                $this->flash('success', "Temporary Inventory Access Key generated for {$unitName}.");
+            } else {
+                $this->flash('info', "A valid Inventory Access Key already exists for {$unitName}. Displaying the active key.");
+            }
+        } catch (\Throwable $e) {
+            $this->flash('error', 'Failed to generate Inventory Access Key: ' . $e->getMessage());
+        }
+
+        $this->redirect($redirectUrl);
+    }
+
+    public function adjustStock(?int $routeUnitId = null): void
+    {
+        [$uid, $employeeId, $unitId, , $isSuper] = $this->checkManagerOrInventoryManager($routeUnitId);
+        CSRF::check();
+
+        $invRedirect = '/manager/inventory' . ($isSuper ? '?unit_id=' . (int)$unitId : '');
 
         $bpId = (int)($_POST['business_product_id'] ?? 0);
         $type = trim((string)($_POST['adjustment_type'] ?? ''));
@@ -952,14 +2348,14 @@ final class ManagerController extends Controller
 
         if ($bpId <= 0 || !in_array($type, ['increase', 'decrease'], true) || $qty <= 0 || $reason === '') {
             $this->flash('error', 'Valid product, adjustment direction, positive quantity, and mandatory reason are required.');
-            $this->redirect('/manager/inventory');
+            $this->redirect($invRedirect);
         }
 
         // Return reason requires inspection check
         $isReturn = str_contains($reason, 'Returned product');
         if ($type === 'increase' && $isReturn && !$inspectionConfirmed) {
             $this->flash('error', 'Returned products must only be added back to sellable inventory after inspection confirms that they are undamaged and suitable for resale.');
-            $this->redirect('/manager/inventory');
+            $this->redirect($invRedirect);
         }
 
         $this->db->beginTransaction();
@@ -986,12 +2382,12 @@ final class ManagerController extends Controller
                 if ($prevOnHand <= 0) {
                     $this->db->rollBack();
                     $this->flash('error', 'Cannot decrease stock when on-hand quantity is zero.');
-                    $this->redirect('/manager/inventory');
+                    $this->redirect($invRedirect);
                 }
                 if ($qty > $prevOnHand) {
                     $this->db->rollBack();
                     $this->flash('error', "Cannot deduct $qty units: current on-hand quantity is only $prevOnHand.");
-                    $this->redirect('/manager/inventory');
+                    $this->redirect($invRedirect);
                 }
                 $newOnHand = $prevOnHand - $qty;
             } else {
@@ -1018,18 +2414,20 @@ final class ManagerController extends Controller
             $this->flash('error', 'Stock adjustment failed: ' . $e->getMessage());
         }
 
-        $this->redirect('/manager/inventory');
+        $this->redirect($invRedirect);
     }
 
-    public function storePurchaseOrder(): void
+    public function storePurchaseOrder(?int $routeUnitId = null): void
     {
-        [$uid, $employeeId, $unitId] = $this->checkBusinessManager();
+        [$uid, $employeeId, $unitId, , $isSuper] = $this->checkBusinessManager($routeUnitId);
         CSRF::check();
+
+        $ordersRedirect = '/manager/inventory' . ($isSuper ? '?unit_id=' . (int)$unitId . '&tab=orders' : '?tab=orders');
 
         $items = $_POST['items'] ?? [];
         if (!is_array($items) || empty($items)) {
             $this->flash('error', 'At least one product must be added to create a purchase order.');
-            $this->redirect('/manager/inventory?tab=orders');
+            $this->redirect($ordersRedirect);
         }
 
         $supplierName = trim((string)($_POST['supplier_name'] ?? ''));
@@ -1040,14 +2438,15 @@ final class ManagerController extends Controller
 
         if ($supplierName === '' || $contactPerson === '' || ($supplierEmail === '' && $supplierPhone === '')) {
             $this->flash('error', 'Supplier name, contact person, and at least one contact method (email or phone) are required.');
-            $this->redirect('/manager/inventory?tab=orders');
+            $this->redirect($ordersRedirect);
         }
 
         $this->db->beginTransaction();
         try {
             // Auto-generated fields: PO Number, Order Date, Created By, Status = 'Ordered'
+            $poPrefix = (int)$unitId === Units::groomingId() ? 'PO-GS-' : 'PO-PS-';
             do {
-                $poNumber = 'PO-PS-' . date('Ymd') . '-' . str_pad((string)random_int(100, 99999), 5, '0', STR_PAD_LEFT);
+                $poNumber = $poPrefix . date('Ymd') . '-' . str_pad((string)random_int(100, 99999), 5, '0', STR_PAD_LEFT);
                 $checkPo = $this->db->prepare('SELECT COUNT(*) FROM purchase_order WHERE po_number = ?');
                 $checkPo->execute([$poNumber]);
             } while ((int)$checkPo->fetchColumn() > 0);
@@ -1072,7 +2471,7 @@ final class ManagerController extends Controller
             if (empty($validatedItems)) {
                 $this->db->rollBack();
                 $this->flash('error', 'At least one valid product with quantity > 0 must be included.');
-                $this->redirect('/manager/inventory?tab=orders');
+                $this->redirect($ordersRedirect);
             }
 
             $poIns = $this->db->prepare(
@@ -1110,12 +2509,12 @@ final class ManagerController extends Controller
             $this->flash('error', 'Failed to create purchase order: ' . $e->getMessage());
         }
 
-        $this->redirect('/manager/inventory?tab=orders');
+        $this->redirect($ordersRedirect);
     }
 
     public function receiveStock(int $purchaseOrderId): void
     {
-        [$uid, $employeeId, $unitId] = $this->checkBusinessManager();
+        [$uid, $employeeId, $unitId] = $this->checkManagerOrInventoryManager();
         CSRF::check();
 
         $poStmt = $this->db->prepare('SELECT * FROM purchase_order WHERE purchase_order_id = ? AND business_unit_id = ?');
@@ -1302,9 +2701,41 @@ final class ManagerController extends Controller
         $setStmt->execute([$unitId]);
         $settings = $setStmt->fetch() ?: [];
 
+        if (empty($settings)) {
+            $defaultEmail = strtolower(str_replace(' ', '', $unitName)) . '@vetgrpet.local';
+            $insSet = $this->db->prepare(
+                'INSERT IGNORE INTO business_settings (business_unit_id, business_name, business_email, contact_number, cod_enabled)
+                 VALUES (?, ?, ?, ?, 1)'
+            );
+            $insSet->execute([$unitId, 'VETGRPET ' . $unitName, $defaultEmail, '09175550100']);
+            $setStmt->execute([$unitId]);
+            $settings = $setStmt->fetch() ?: [];
+        }
+
         $hrsStmt = $this->db->prepare('SELECT * FROM operating_hours WHERE business_unit_id = ? ORDER BY day_of_week ASC');
         $hrsStmt->execute([$unitId]);
         $operatingHours = $hrsStmt->fetchAll();
+
+        if (empty($operatingHours)) {
+            $days = [
+                1 => ['Monday', '08:00:00', '19:00:00'],
+                2 => ['Tuesday', '08:00:00', '19:00:00'],
+                3 => ['Wednesday', '08:00:00', '19:00:00'],
+                4 => ['Thursday', '08:00:00', '19:00:00'],
+                5 => ['Friday', '08:00:00', '19:00:00'],
+                6 => ['Saturday', '09:00:00', '18:00:00'],
+                7 => ['Sunday', '09:00:00', '17:00:00'],
+            ];
+            $insHrs = $this->db->prepare(
+                'INSERT IGNORE INTO operating_hours (business_unit_id, day_of_week, day_name, is_open, open_time, close_time)
+                 VALUES (?, ?, ?, 1, ?, ?)'
+            );
+            foreach ($days as $dow => [$dName, $oTime, $cTime]) {
+                $insHrs->execute([$unitId, $dow, $dName, $oTime, $cTime]);
+            }
+            $hrsStmt->execute([$unitId]);
+            $operatingHours = $hrsStmt->fetchAll();
+        }
 
         $this->render('manager/settings', [
             'title' => "Business Settings · $unitName",

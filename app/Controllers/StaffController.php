@@ -7,6 +7,7 @@ use App\Core\Controller;
 use App\Core\CSRF;
 use App\Core\Session;
 use App\Models\Audit;
+use App\Models\InventoryAccessKey;
 use App\Models\Units;
 
 final class StaffController extends Controller
@@ -149,13 +150,153 @@ final class StaffController extends Controller
         $permsStmt->execute([(int)$uid]);
         $permissions = $permsStmt->fetchAll();
 
+        $empUnitId = (int)($emp['business_unit_id'] ?? 0);
+        $roleNames = array_column($roles, 'role_name');
+        $hasPermanentInventoryAccess = $isSuper
+            || in_array('BUSINESS_MANAGER', $roleNames, true)
+            || in_array('INVENTORY_MANAGER', $roleNames, true);
+        $isSysAdminOnly = !empty($roleNames) && count(array_diff($roleNames, ['SYSTEM_ADMINISTRATOR'])) === 0;
+        $supportsTempInventoryKey = !$hasPermanentInventoryAccess
+            && !$isSysAdminOnly
+            && $empUnitId > 0
+            && InventoryAccessKey::isUnitSupported($empUnitId);
+
+        $activeTempInventoryGrant = null;
+        if ($supportsTempInventoryKey) {
+            $tempMap = Session::get('temp_inventory_access', []);
+            $grant = is_array($tempMap) ? ($tempMap[$empUnitId] ?? null) : null;
+            if (is_array($grant) && (int)($grant['employee_id'] ?? 0) === (int)$emp['employee_id']) {
+                $activeTempInventoryGrant = InventoryAccessKey::validateSessionGrant(
+                    $this->db,
+                    (int)($grant['key_id'] ?? 0),
+                    $empUnitId
+                );
+                if ($activeTempInventoryGrant === null) {
+                    unset($tempMap[$empUnitId]);
+                    Session::set('temp_inventory_access', $tempMap);
+                }
+            }
+        }
+
         $this->render('staff/workspace', [
             'title' => 'Employee Workspace',
             'emp' => $emp,
             'roles' => $roles,
             'permissions' => $permissions,
             'isSuper' => $isSuper,
+            'hasPermanentInventoryAccess' => $hasPermanentInventoryAccess && InventoryAccessKey::isUnitSupported($empUnitId),
+            'supportsTempInventoryKey' => $supportsTempInventoryKey,
+            'activeTempInventoryGrant' => $activeTempInventoryGrant,
         ]);
+    }
+
+    public function redeemInventoryKey(): void
+    {
+        $uid = Session::get('user_id');
+        if (!$uid) {
+            $this->redirect('/staff/login');
+        }
+        $baseContext = Session::get('base_context', Session::get('employee_id') ? 'employee' : 'customer');
+        $activeContext = Session::get('active_context', $baseContext);
+        $authMethod = Session::get('auth_method', 'email');
+        if ($baseContext !== 'employee' || $activeContext === 'customer' || $authMethod === 'username') {
+            $this->forbidden('An email-authenticated employee session is required.');
+        }
+
+        CSRF::check();
+
+        $empStmt = $this->db->prepare(
+            "SELECT e.employee_id, bu.business_unit_id, bu.business_unit_name
+             FROM user_account ua
+             JOIN employee e ON e.user_account_id = ua.user_account_id AND e.employee_status = 'active'
+             JOIN business_unit bu ON bu.business_unit_id = e.business_unit_id AND bu.business_unit_status = 'active'
+             WHERE ua.user_account_id = ? AND ua.account_status = 'active'
+             LIMIT 1"
+        );
+        $empStmt->execute([(int)$uid]);
+        $emp = $empStmt->fetch();
+        if (!$emp) {
+            $this->forbidden('Active employee assignment is required.');
+        }
+
+        $empUnitId = (int)$emp['business_unit_id'];
+        $empId = (int)$emp['employee_id'];
+
+        $queryUnitId = isset($_GET['unit_id']) && ctype_digit((string)$_GET['unit_id']) ? (int)$_GET['unit_id'] : null;
+        $postUnitId = isset($_POST['business_unit_id']) && ctype_digit((string)$_POST['business_unit_id']) ? (int)$_POST['business_unit_id'] : null;
+        foreach ([$queryUnitId, $postUnitId] as $chkUnit) {
+            if ($chkUnit !== null && $chkUnit !== $empUnitId) {
+                $this->forbidden('Access denied: you cannot redeem an Inventory Access Key for another business unit.');
+            }
+        }
+
+        $empRoles = $this->getStaffRoles((int)$uid, $empUnitId);
+        if (!empty($empRoles) && count(array_diff($empRoles, ['SYSTEM_ADMINISTRATOR'])) === 0) {
+            $this->forbidden('System Administrators do not have operational inventory access.');
+        }
+
+        $keyInput = $this->post('inventory_key');
+        $verification = InventoryAccessKey::verifyKeyForUnit($this->db, $keyInput, $empUnitId);
+
+        if (empty($verification['ok'])) {
+            $reason = (string)($verification['reason'] ?? 'invalid');
+            $msg = (string)($verification['message'] ?? 'Invalid or expired Inventory Access Key.');
+
+            if ($reason === 'cross_unit') {
+                Audit::log(
+                    'inventory.temp_access_denied_cross_unit',
+                    "Rejected cross-business-unit Inventory Access Key attempt by employee #{$empId}",
+                    $empUnitId,
+                    'employee',
+                    $empId,
+                    (int)$uid
+                );
+                $this->forbidden($msg);
+            }
+
+            if ($reason === 'unsupported_unit') {
+                $this->forbidden($msg);
+            }
+
+            Session::flash('error', $msg);
+            $this->redirect('/staff/workspace');
+        }
+
+        $verifiedKey = $verification['key'];
+        $tempMap = Session::get('temp_inventory_access', []);
+        if (!is_array($tempMap)) {
+            $tempMap = [];
+        }
+        $tempMap[$empUnitId] = [
+            'key_id' => (int)$verifiedKey['key_id'],
+            'employee_id' => $empId,
+            'unit_id' => $empUnitId,
+        ];
+        Session::set('temp_inventory_access', $tempMap);
+
+        Audit::log(
+            'inventory.temp_access_granted',
+            "Granted temporary inventory access to employee #{$empId} via key #{$verifiedKey['key_id']}",
+            $empUnitId,
+            'inventory_access_key',
+            (int)$verifiedKey['key_id'],
+            (int)$uid
+        );
+
+        Session::flash('success', "Temporary Inventory Access unlocked for {$emp['business_unit_name']}.");
+        $this->redirect('/manager/inventory');
+    }
+
+    public function exitInventoryAccess(): void
+    {
+        $uid = Session::get('user_id');
+        if (!$uid) {
+            $this->redirect('/staff/login');
+        }
+        CSRF::check();
+        Session::forget('temp_inventory_access');
+        Session::flash('info', 'Temporary inventory access ended.');
+        $this->redirect('/staff/workspace');
     }
 
     private function getStaffRoles(int $userId, int $unitId): array

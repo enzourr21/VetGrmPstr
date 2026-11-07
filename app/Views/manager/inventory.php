@@ -27,14 +27,37 @@ $isInvManager = !empty($isInventoryManagerOnly);
   </div>
 
   <?php if ($invTab === 'stock'): ?>
-    <!-- Search Field and Purchase Order / Request Order Action -->
+    <!-- Inventory Key Action, Search Field, and Request Order Action -->
     <div class="row" style="gap: 0.75rem; align-items: center;">
-      <form method="get" action="/manager/inventory" class="row" style="gap: 0.5rem; align-items: center;">
+      <?php if (!empty($canManageInventoryKey)): ?>
+        <div class="inv-key-header-actions" style="display: inline-flex; align-items: center;">
+          <?php if (empty($activeInventoryKey)): ?>
+            <form method="post" action="/manager/inventory/generate-key<?= $unitQuery ?>" style="margin: 0; display: inline-flex;" id="generate-inv-key-form">
+              <?= \App\Core\CSRF::field() ?>
+              <input type="hidden" name="return_tab" value="<?= e($invTab) ?>">
+              <button type="submit" class="btn primary btn-sm" id="generate-inv-key-btn" style="white-space: nowrap;">
+                Generate Inventory Key
+              </button>
+            </form>
+          <?php else: ?>
+            <button type="button"
+                    class="btn primary btn-sm"
+                    id="view-inv-key-btn"
+                    style="white-space: nowrap;"
+                    data-modal-open="inventory-key-modal"
+                    data-key-seconds="<?= (int)($activeInventoryKey['seconds_remaining'] ?? 0) ?>">
+              View Key
+            </button>
+          <?php endif; ?>
+        </div>
+      <?php endif; ?>
+
+      <form method="get" action="/manager/inventory" class="row" style="gap: 0.5rem; align-items: center; margin: 0;">
         <?php if (!empty($isSuper)): ?>
           <input type="hidden" name="unit_id" value="<?= (int)$unitId ?>">
         <?php endif; ?>
         <input type="hidden" name="tab" value="stock">
-        <div class="search-input-wrap" style="width: 260px;">
+        <div class="search-input-wrap" style="width: 240px;">
           <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <circle cx="11" cy="11" r="8"></circle>
             <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
@@ -46,11 +69,7 @@ $isInvManager = !empty($isInventoryManagerOnly);
         <?php endif; ?>
       </form>
 
-      <?php if (!$isInvManager): ?>
-        <button type="button" class="btn primary btn-sm" data-modal-open="po-create-modal">
-          + Purchase Order
-        </button>
-      <?php else: ?>
+      <?php if ($isInvManager): ?>
         <button type="button" class="btn secondary btn-sm" disabled title="The Request Order workflow is managed via procurement and not configured for this interface.">
           Request Order
         </button>
@@ -64,7 +83,7 @@ $isInvManager = !empty($isInventoryManagerOnly);
   <section class="card">
     <div class="row" style="justify-content: space-between; align-items: baseline; margin-bottom: 1rem;">
       <div>
-        <h2 style="margin: 0;">Pet Store Stock Levels</h2>
+        <h2 style="margin: 0;"><?= e($unitName) ?> Stock Levels</h2>
         <p class="caption" style="margin: 0.2rem 0 0 0;">Prioritizing out-of-stock items (A–Z) followed by in-stock inventory. Stock adjustments require mandatory audit reasons.</p>
       </div>
       <span class="caption"><?= count($inventoryItems) ?> items</span>
@@ -263,7 +282,7 @@ $isInvManager = !empty($isInventoryManagerOnly);
       <div>
         <?php if (!$isInvManager): ?>
           <button type="button" class="btn primary btn-sm" data-modal-open="po-create-modal">
-            + Create Purchase Order
+            + Purchase Order
           </button>
         <?php endif; ?>
       </div>
@@ -604,4 +623,65 @@ $isInvManager = !empty($isInventoryManagerOnly);
     </option>
   <?php endforeach; ?>
 </template>
+
+<?php if (!empty($canManageInventoryKey) && !empty($activeInventoryKey)): ?>
+  <?php
+    $remSecs = max(0, (int)($activeInventoryKey['seconds_remaining'] ?? 0));
+    $remMins = intdiv($remSecs, 60);
+    $remSecPart = $remSecs % 60;
+    $remDisplay = $remMins > 0 ? "{$remMins}m {$remSecPart}s" : "{$remSecPart}s";
+  ?>
+  <dialog class="modal"
+          id="inventory-key-modal"
+          aria-labelledby="inv-key-modal-title"
+          <?= !empty($autoOpenKeyModal) ? 'data-open-on-load="true"' : '' ?>>
+    <div class="modal-head">
+      <div>
+        <span class="badge badge-success" style="margin-bottom: 0.25rem;">Active Temporary Key</span>
+        <h3 id="inv-key-modal-title" style="margin: 0;">Inventory Access Key</h3>
+      </div>
+      <button type="button" class="btn ghost btn-sm" data-modal-close>&times; Close</button>
+    </div>
+    <div class="modal-body">
+      <div class="inv-key-code-box">
+        <div>
+          <div class="caption" style="margin-bottom: 0.2rem;">Temporary Access Key</div>
+          <code id="inv-key-code-value" class="inv-key-code-text"><?= e($activeInventoryKey['key_code']) ?></code>
+        </div>
+        <button type="button"
+                class="btn secondary btn-sm"
+                id="copy-inv-key-btn"
+                data-copy-key="<?= e($activeInventoryKey['key_code']) ?>">
+          Copy Key
+        </button>
+      </div>
+
+      <div class="inv-key-details-grid">
+        <div class="inv-key-detail-row">
+          <span class="caption">Business Unit</span>
+          <strong><?= e($activeInventoryKey['business_unit_name'] ?? $unitName) ?></strong>
+        </div>
+        <div class="inv-key-detail-row">
+          <span class="caption">Generated By</span>
+          <strong><?= e($activeInventoryKey['created_by_name'] ?? 'Business Manager') ?></strong>
+        </div>
+        <div class="inv-key-detail-row">
+          <span class="caption">Generated At</span>
+          <span><?= e($activeInventoryKey['created_at_formatted'] ?? $activeInventoryKey['created_at']) ?></span>
+        </div>
+        <div class="inv-key-detail-row">
+          <span class="caption">Expires At</span>
+          <span><?= e($activeInventoryKey['expires_at_formatted'] ?? $activeInventoryKey['expires_at']) ?></span>
+        </div>
+        <div class="inv-key-detail-row">
+          <span class="caption">Remaining Validity</span>
+          <strong id="inv-key-countdown" data-seconds-remaining="<?= $remSecs ?>"><?= e($remDisplay) ?></strong>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot" style="display: flex; justify-content: flex-end; gap: 0.5rem;">
+      <button type="button" class="btn primary btn-sm" data-modal-close>Done</button>
+    </div>
+  </dialog>
+<?php endif; ?>
 

@@ -619,7 +619,7 @@ $ovRefined = request('GET', '/manager', [], $bmCookies);
 check('Overview page card is renamed to "Recent Sales"', (bool)preg_match('/<h2[^>]*>\s*Recent Sales\s*<\/h2>/i', $ovRefined['body']) && !str_contains($ovRefined['body'], 'Recently Successful Sales'));
 check('Overview displays unified Recent Sales list', str_contains($ovRefined['body'], 'Sales Channel') && str_contains($ovRefined['body'], 'Ref / Receipt #'));
 check('Overview Confirmed Appointments card is removed', !str_contains($ovRefined['body'], 'Confirmed Appointments'));
-check('Overview displays Employees On Duty card', str_contains($ovRefined['body'], 'Employees On Duty'));
+check('Overview displays Stocks Running Low card and removes Employees On Duty', str_contains($ovRefined['body'], 'Stocks Running Low') && !str_contains($ovRefined['body'], 'Employees On Duty'));
 check('Overview displays Pending Refund Requests card with real requests', str_contains($ovRefined['body'], 'Pending Refund Requests') && str_contains($ovRefined['body'], 'REF-REQ-1001'));
 
 // 3: Sales Page Selected Indicator & Filter Button Removal
@@ -736,9 +736,9 @@ echo "\n--- 18. Overview Page Corrections & Refund Requests Management ---\n";
 
 // 1. Overview Page Corrections
 $ov = request('GET', '/manager', [], $bmCookies);
-check('Overview contains Employees On Duty card', str_contains($ov['body'], 'Employees On Duty'));
+check('Overview contains Stocks Running Low card and removes Employees On Duty', str_contains($ov['body'], 'Stocks Running Low') && !str_contains($ov['body'], 'Employees On Duty'));
 check('Overview excludes Confirmed Appointments card', !str_contains($ov['body'], 'Confirmed Appointments'));
-check('Overview Employees On Duty displays active on-duty/free staff', str_contains($ov['body'], 'David Reyes') && str_contains($ov['body'], 'Janricson Ompoy'));
+check('Overview Stocks Running Low displays low stock items', str_contains($ov['body'], 'Organic Catnip Ball (Deluxe)') || str_contains($ov['body'], 'Premium Rubber Chew Bone (Large)'));
 check('Overview Pending Refund Requests displays pending reference', str_contains($ov['body'], 'REF-REQ-1001') || str_contains($ov['body'], 'REF-REQ-1002'));
 check('Overview Pending Refund Requests links to Sales refunds view', str_contains($ov['body'], 'tab=refunds&amp;view=') || str_contains($ov['body'], 'tab=refunds&view='));
 check('Overview Recent Sales unified record is preserved', str_contains($ov['body'], 'Recent Sales') && str_contains($ov['body'], 'Sales Channel'));
@@ -799,7 +799,7 @@ check('Rejection with reason redirects (302)', $rejWithReason['status'] === 302)
 $rejCheck2 = $pdo->query("SELECT * FROM refund_request WHERE refund_request_id = $rejTestId")->fetch(PDO::FETCH_ASSOC);
 check('Refund request status is now rejected', $rejCheck2['request_status'] === 'rejected');
 check('Rejection reason saved in database', $rejCheck2['rejection_reason'] === 'Product was opened and used beyond policy limit.');
-check('Deciding employee recorded for rejection', (int)$rejCheck2['decided_by_employee_id'] === 5);
+check('Deciding employee recorded for rejection', (int)$rejCheck2['decided_by_employee_id'] === 4);
 check('Decision timestamp recorded for rejection', !empty($rejCheck2['decided_at']));
 
 // Verify original transaction is preserved
@@ -826,7 +826,7 @@ check('Approval redirects (302)', $appReq['status'] === 302);
 $appCheck = $pdo->query("SELECT * FROM refund_request WHERE refund_request_id = $appTestId")->fetch(PDO::FETCH_ASSOC);
 check('Refund request status is now approved', $appCheck['request_status'] === 'approved');
 check('Approved amount is recorded', (float)$appCheck['approved_amount'] === 15.00);
-check('Deciding employee recorded for approval', (int)$appCheck['decided_by_employee_id'] === 5);
+check('Deciding employee recorded for approval', (int)$appCheck['decided_by_employee_id'] === 4);
 check('Decision timestamp recorded for approval', !empty($appCheck['decided_at']));
 
 // Verify important payment and inventory rules

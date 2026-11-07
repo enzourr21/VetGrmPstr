@@ -4,105 +4,72 @@ require __DIR__ . '/_nav.php';
 
 <div class="page-head">
   <div>
-    <p class="eyebrow">Business Administration</p>
+    <p class="eyebrow"><?= e($unitName) ?> Administration</p>
     <h1>Business Settings</h1>
-    <p class="muted">Exclusive business manager configuration for Pet Store profile, operating schedule, store policies, and payment transactions.</p>
+    <p class="muted">Exclusive business manager configuration for <?= e($unitName) ?> profile, operating schedule, store policies, and payment transactions.</p>
   </div>
 </div>
 
-<div class="grid grid-2" style="align-items: start; gap: 1.5rem; margin-bottom: 2rem;">
-  <!-- SECTION 1: BUSINESS PROFILE -->
-  <section class="card" id="business-profile-section">
-    <div class="row" style="justify-content: space-between; align-items: baseline; margin-bottom: 1rem;">
-      <h2 style="margin: 0;">1. Business Profile</h2>
-      <span class="caption">Store identity &amp; customer contact</span>
+<!-- SECTION 1: BUSINESS PROFILE -->
+<section class="card settings-section-card" id="business-profile-section">
+  <div class="settings-card-head">
+    <div>
+      <h2 class="settings-card-title">1. Business Profile</h2>
+      <p class="caption muted" style="margin: 0.15rem 0 0 0;">Store identity &amp; customer contact</p>
+    </div>
+    <span class="badge secondary" style="font-weight: 600;">Store Contact</span>
+  </div>
+
+  <form method="post" action="/manager/settings/profile<?= $unitQuery ?>">
+    <?= \App\Core\CSRF::field() ?>
+
+    <div class="settings-profile-grid">
+      <div class="field" style="margin: 0;">
+        <label for="prof-biz-name" style="display: block; font-weight: 600; font-size: 0.88rem; margin-bottom: 0.35rem;">Business Name *</label>
+        <input id="prof-biz-name" name="business_name" type="text" required value="<?= e($settings['business_name'] ?? ('VETGRPET ' . $unitName)) ?>" style="width: 100%; height: 40px;">
+      </div>
+
+      <div class="field" style="margin: 0;">
+        <label for="prof-biz-email" style="display: block; font-weight: 600; font-size: 0.88rem; margin-bottom: 0.35rem;">Business Email *</label>
+        <input id="prof-biz-email" name="business_email" type="email" required value="<?= e($settings['business_email'] ?? (strtolower(str_replace(' ', '', $unitName)) . '@vetgrpet.local')) ?>" style="width: 100%; height: 40px;">
+      </div>
+
+      <div class="field" style="margin: 0;">
+        <label for="prof-biz-phone" style="display: block; font-weight: 600; font-size: 0.88rem; margin-bottom: 0.35rem;">
+          Contact Number * <span class="caption muted" style="font-weight: normal;">(8-digit landline or 11-digit mobile)</span>
+        </label>
+        <input id="prof-biz-phone" name="contact_number" type="text" required value="<?= e($settings['contact_number'] ?? '09175550100') ?>" placeholder="e.g. 81234567 or 09175550100" style="width: 100%; height: 40px;">
+        <p class="caption" style="margin: 0.35rem 0 0 0; color: var(--muted); font-size: 0.78rem;">Accepts either an 8-digit Philippine landline (e.g. 81234567) or standard 11-digit phone number (e.g. 09175550100).</p>
+      </div>
     </div>
 
-    <form method="post" action="/manager/settings/profile<?= $unitQuery ?>">
-      <?= \App\Core\CSRF::field() ?>
-
-      <div class="field">
-        <label for="prof-biz-name">Business Name *</label>
-        <input id="prof-biz-name" name="business_name" type="text" required value="<?= e($settings['business_name'] ?? 'VETGRPET Pet Store') ?>">
-      </div>
-
-      <div class="field">
-        <label for="prof-biz-email">Business Email *</label>
-        <input id="prof-biz-email" name="business_email" type="email" required value="<?= e($settings['business_email'] ?? 'petstore@vetgrpet.local') ?>">
-      </div>
-
-      <div class="field">
-        <label for="prof-biz-phone">Contact Number * (Must be 8-digit landline or 11-digit mobile)</label>
-        <input id="prof-biz-phone" name="contact_number" type="text" required value="<?= e($settings['contact_number'] ?? '09175550100') ?>" placeholder="e.g. 81234567 or 09175550100">
-        <p class="caption" style="margin-top: 0.35rem;">Accepts either an 8-digit Philippine landline (e.g. 81234567) or standard 11-digit phone number (e.g. 09175550100).</p>
-      </div>
-
-      <div style="margin-top: 1.5rem;">
-        <button type="submit" class="btn primary">Save Profile Settings</button>
-      </div>
-    </form>
-  </section>
-
-  <!-- SECTION 3: BUSINESS POLICIES (READ-ONLY) -->
-  <section class="card" id="business-policies-section">
-    <div class="row" style="justify-content: space-between; align-items: baseline; margin-bottom: 1rem;">
-      <h2 style="margin: 0;">3. Business Policies</h2>
-      <span class="badge secondary">Read-Only</span>
+    <div style="margin-top: 1.25rem; display: flex; justify-content: flex-end;">
+      <button type="submit" class="btn primary" style="height: 40px; padding: 0 1.25rem; font-weight: 600;">Save Profile Settings</button>
     </div>
-
-    <div style="display: flex; flex-direction: column; gap: 1rem;">
-      <article style="background: var(--bg-subtle, #f9fafb); padding: 0.85rem 1rem; border-radius: 6px;">
-        <strong style="display: block; margin-bottom: 0.25rem;">Return &amp; Refund Policy</strong>
-        <p class="caption" style="margin: 0; line-height: 1.45;">
-          Pet retail items are eligible for refund or exchange within 7 days of purchase upon presentation of valid receipt. Returned items must be undamaged, unopened, and undergo physical inspection before being restored to sellable inventory.
-        </p>
-      </article>
-
-      <article style="background: var(--bg-subtle, #f9fafb); padding: 0.85rem 1rem; border-radius: 6px;">
-        <strong style="display: block; margin-bottom: 0.25rem;">Pet Safety &amp; Perishable Feeds Policy</strong>
-        <p class="caption" style="margin: 0; line-height: 1.45;">
-          Perishable animal feeds, prescription veterinary supplements, and opened treats cannot be returned for resale to prevent pet cross-contamination. Damaged or expired inventory must be processed via decrease stock adjustment.
-        </p>
-      </article>
-
-      <article style="background: var(--bg-subtle, #f9fafb); padding: 0.85rem 1rem; border-radius: 6px;">
-        <strong style="display: block; margin-bottom: 0.25rem;">Store Order &amp; Cancellation Policy</strong>
-        <p class="caption" style="margin: 0; line-height: 1.45;">
-          Online delivery and in-store pickup orders may be cancelled prior to dispatch. Cancelled orders automatically release reserved inventory allocations.
-        </p>
-      </article>
-
-      <article style="background: var(--bg-subtle, #f9fafb); padding: 0.85rem 1rem; border-radius: 6px;">
-        <strong style="display: block; margin-bottom: 0.25rem;">Payment &amp; Transaction Verification</strong>
-        <p class="caption" style="margin: 0; line-height: 1.45;">
-          Electronic e-wallet settlements (GCash and Maya) require two-factor phone number verification before merchant receiving channels are activated.
-        </p>
-      </article>
-    </div>
-  </section>
-</div>
+  </form>
+</section>
 
 <!-- SECTION 2: OPERATING HOURS -->
-<section class="card" id="operating-hours-section" style="margin-bottom: 2rem;">
-  <div class="row" style="justify-content: space-between; align-items: baseline; margin-bottom: 1rem;">
+<section class="card settings-section-card" id="operating-hours-section">
+  <div class="settings-card-head">
     <div>
-      <h2 style="margin: 0;">2. Operating Hours</h2>
-      <p class="caption" style="margin: 0.2rem 0 0 0;">Weekly schedule for 7 days (Monday through Sunday). Customers view these operating hours across store channels.</p>
+      <h2 class="settings-card-title">2. Operating Hours</h2>
+      <p class="caption muted" style="margin: 0.15rem 0 0 0;">Weekly schedule for 7 days (Monday through Sunday). Customers view these operating hours across store channels.</p>
     </div>
-    <span class="caption">7-Day Schedule</span>
+    <span class="badge secondary" style="font-weight: 600;">7-Day Schedule</span>
   </div>
 
   <form method="post" action="/manager/settings/hours<?= $unitQuery ?>">
     <?= \App\Core\CSRF::field() ?>
 
-    <div class="table-wrap" style="margin-bottom: 1.5rem;">
-      <table>
+    <div class="table-wrap" style="overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius-md, 8px); margin-bottom: 1.25rem;">
+      <table style="width: 100%; border-collapse: collapse; margin: 0; box-shadow: none; border: 0;">
         <thead>
-          <tr>
-            <th style="width: 140px;">Day of Week</th>
-            <th style="width: 120px;">Open / Closed</th>
-            <th>Opening Time</th>
-            <th>Closing Time</th>
+          <tr style="background: var(--surface-subtle, #f8fafc); border-bottom: 1px solid var(--line);">
+            <th style="padding: 0.75rem 1rem; width: 160px; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 650;">Day of Week</th>
+            <th style="padding: 0.75rem 1rem; width: 140px; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 650;">Open / Closed</th>
+            <th style="padding: 0.75rem 1rem; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 650;">Opening Time</th>
+            <th style="padding: 0.75rem 1rem; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 650;">Closing Time</th>
           </tr>
         </thead>
         <tbody>
@@ -122,19 +89,19 @@ require __DIR__ . '/_nav.php';
             $cAmPm = $cH24 >= 12 ? 'PM' : 'AM';
             $cH12 = $cH24 % 12 ?: 12;
           ?>
-            <tr>
-              <td>
-                <strong><?= e($h['day_name']) ?></strong>
+            <tr style="border-bottom: 1px solid var(--line);">
+              <td style="padding: 0.75rem 1rem; vertical-align: middle;">
+                <strong style="font-size: 0.92rem; color: var(--ink);"><?= e($h['day_name']) ?></strong>
                 <input type="hidden" name="hours[<?= $d ?>][day_of_week]" value="<?= $d ?>">
                 <input type="hidden" name="hours[<?= $d ?>][day_name]" value="<?= e($h['day_name']) ?>">
               </td>
-              <td>
-                <label style="display: inline-flex; align-items: center; gap: 0.4rem; cursor: pointer;">
-                  <input type="checkbox" name="hours[<?= $d ?>][is_open]" value="1" <?= $isOpen ? 'checked' : '' ?> class="day-open-toggle" data-day="<?= $d ?>">
-                  <span class="day-status-label" style="font-weight: 500; font-size: 0.9rem;"><?= $isOpen ? 'Open' : 'Closed' ?></span>
+              <td style="padding: 0.75rem 1rem; vertical-align: middle;">
+                <label style="display: inline-flex; align-items: center; gap: 0.5rem; cursor: pointer; user-select: none;">
+                  <input type="checkbox" name="hours[<?= $d ?>][is_open]" value="1" <?= $isOpen ? 'checked' : '' ?> class="day-open-toggle" data-day="<?= $d ?>" style="width: 17px; height: 17px; accent-color: var(--brand-emerald, #10b981); cursor: pointer;">
+                  <span class="day-status-label" style="font-weight: 650; font-size: 0.88rem; color: <?= $isOpen ? 'var(--ok, #059669)' : 'var(--muted, #6b7280)' ?>;"><?= $isOpen ? 'Open' : 'Closed' ?></span>
                 </label>
               </td>
-              <td>
+              <td style="padding: 0.75rem 1rem; vertical-align: middle;">
                 <div class="custom-time-picker <?= !$isOpen ? 'is-disabled' : '' ?>" data-day="<?= $d ?>" data-type="open">
                   <select class="time-select time-hour" aria-label="Opening hour for <?= e($h['day_name']) ?>" <?= !$isOpen ? 'disabled' : '' ?>>
                     <?php for ($hr = 1; $hr <= 12; $hr++): ?>
@@ -154,7 +121,7 @@ require __DIR__ . '/_nav.php';
                   <input type="hidden" name="hours[<?= $d ?>][open_time]" value="<?= e(substr((string)$h['open_time'], 0, 8)) ?>" class="day-time-input-<?= $d ?> time-hidden-val">
                 </div>
               </td>
-              <td>
+              <td style="padding: 0.75rem 1rem; vertical-align: middle;">
                 <div class="custom-time-picker <?= !$isOpen ? 'is-disabled' : '' ?>" data-day="<?= $d ?>" data-type="close">
                   <select class="time-select time-hour" aria-label="Closing hour for <?= e($h['day_name']) ?>" <?= !$isOpen ? 'disabled' : '' ?>>
                     <?php for ($hr = 1; $hr <= 12; $hr++): ?>
@@ -180,33 +147,94 @@ require __DIR__ . '/_nav.php';
       </table>
     </div>
 
-    <div>
-      <button type="submit" class="btn primary">Update Operating Hours</button>
+    <div style="display: flex; justify-content: flex-end;">
+      <button type="submit" class="btn primary" style="height: 40px; padding: 0 1.25rem; font-weight: 600;">Update Operating Hours</button>
     </div>
   </form>
 </section>
 
-<!-- SECTION 4: TRANSACTION SETTINGS -->
-<section class="card" id="transaction-settings-section" style="margin-bottom: 2rem;">
-  <div class="row" style="justify-content: space-between; align-items: baseline; margin-bottom: 1rem;">
+<!-- SECTION 3: BUSINESS POLICIES (READ-ONLY) -->
+<section class="card settings-section-card" id="business-policies-section">
+  <div class="settings-card-head">
     <div>
-      <h2 style="margin: 0;">4. Transaction Settings</h2>
-      <p class="caption" style="margin: 0.2rem 0 0 0;">Supported Pet Store payment gateways: GCash, Maya, and Cash on Delivery (COD). E-wallets require server-side OTP verification.</p>
+      <h2 class="settings-card-title">3. Business Policies</h2>
+      <p class="caption muted" style="margin: 0.15rem 0 0 0;">Established store rules, warranty terms, and operational guidelines</p>
     </div>
-    <span class="caption">3 Gateways</span>
+    <span class="badge secondary" style="font-weight: 600;">Read-Only</span>
   </div>
 
-  <div class="grid grid-3" style="gap: 1.5rem; align-items: stretch;">
+  <div class="settings-policies-grid">
+    <article style="background: var(--surface-subtle, #f8fafc); border: 1px solid var(--line, #e2e8f0); border-radius: var(--radius-md, 8px); padding: 1rem 1.15rem; display: flex; flex-direction: column; gap: 0.35rem;">
+      <strong style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.92rem; font-weight: 650; color: var(--ink, #1e293b);">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--brand-emerald, #059669); flex-shrink: 0;" aria-hidden="true">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+        </svg>
+        Return &amp; Refund Policy
+      </strong>
+      <p class="caption" style="margin: 0; line-height: 1.5; color: var(--muted, #475569); font-size: 0.84rem;">
+        Pet retail items are eligible for refund or exchange within 7 days of purchase upon presentation of valid receipt. Returned items must be undamaged, unopened, and undergo physical inspection before being restored to sellable inventory.
+      </p>
+    </article>
+
+    <article style="background: var(--surface-subtle, #f8fafc); border: 1px solid var(--line, #e2e8f0); border-radius: var(--radius-md, 8px); padding: 1rem 1.15rem; display: flex; flex-direction: column; gap: 0.35rem;">
+      <strong style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.92rem; font-weight: 650; color: var(--ink, #1e293b);">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--brand-emerald, #059669); flex-shrink: 0;" aria-hidden="true">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+        </svg>
+        Pet Safety &amp; Perishable Feeds Policy
+      </strong>
+      <p class="caption" style="margin: 0; line-height: 1.5; color: var(--muted, #475569); font-size: 0.84rem;">
+        Perishable animal feeds, prescription veterinary supplements, and opened treats cannot be returned for resale to prevent pet cross-contamination. Damaged or expired inventory must be processed via decrease stock adjustment.
+      </p>
+    </article>
+
+    <article style="background: var(--surface-subtle, #f8fafc); border: 1px solid var(--line, #e2e8f0); border-radius: var(--radius-md, 8px); padding: 1rem 1.15rem; display: flex; flex-direction: column; gap: 0.35rem;">
+      <strong style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.92rem; font-weight: 650; color: var(--ink, #1e293b);">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--brand-emerald, #059669); flex-shrink: 0;" aria-hidden="true">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+        </svg>
+        Store Order &amp; Cancellation Policy
+      </strong>
+      <p class="caption" style="margin: 0; line-height: 1.5; color: var(--muted, #475569); font-size: 0.84rem;">
+        Online delivery and in-store pickup orders may be cancelled prior to dispatch. Cancelled orders automatically release reserved inventory allocations.
+      </p>
+    </article>
+
+    <article style="background: var(--surface-subtle, #f8fafc); border: 1px solid var(--line, #e2e8f0); border-radius: var(--radius-md, 8px); padding: 1rem 1.15rem; display: flex; flex-direction: column; gap: 0.35rem;">
+      <strong style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.92rem; font-weight: 650; color: var(--ink, #1e293b);">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--brand-emerald, #059669); flex-shrink: 0;" aria-hidden="true">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+        </svg>
+        Payment &amp; Transaction Verification
+      </strong>
+      <p class="caption" style="margin: 0; line-height: 1.5; color: var(--muted, #475569); font-size: 0.84rem;">
+        Electronic e-wallet settlements (GCash and Maya) require two-factor phone number verification before merchant receiving channels are activated.
+      </p>
+    </article>
+  </div>
+</section>
+
+<!-- SECTION 4: TRANSACTION SETTINGS -->
+<section class="card settings-section-card" id="transaction-settings-section">
+  <div class="settings-card-head">
+    <div>
+      <h2 class="settings-card-title">4. Transaction Settings</h2>
+      <p class="caption muted" style="margin: 0.15rem 0 0 0;">Supported <?= e($unitName) ?> payment gateways: GCash, Maya, and Cash on Delivery (COD). E-wallets require server-side OTP verification.</p>
+    </div>
+    <span class="badge secondary" style="font-weight: 600;">3 Gateways</span>
+  </div>
+
+  <div class="settings-gateways-grid">
     <!-- GCASH SETUP FORM -->
-    <div style="background: var(--bg-subtle, #f9fafb); padding: 1.25rem; border-radius: 8px; border: 1px solid var(--border, #e5e7eb); display: flex; flex-direction: column; justify-content: space-between;">
+    <div class="settings-gateway-card">
       <div>
         <div class="row" style="justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
-          <h3 style="margin: 0; font-size: 1.1rem; color: #005ce6;">GCash Gateway</h3>
-          <span class="badge <?= !empty($settings['gcash_verified']) ? 'badge-success' : 'secondary' ?>" id="gcash-badge">
+          <h3 style="margin: 0; font-size: 1.05rem; font-weight: 700; color: #005ce6;">GCash Gateway</h3>
+          <span class="badge <?= !empty($settings['gcash_verified']) ? 'badge-success' : 'secondary' ?>" id="gcash-badge" style="font-weight: 600;">
             <?= !empty($settings['gcash_verified']) ? 'Verified' : 'Unverified' ?>
           </span>
         </div>
-        <p class="caption" style="margin-bottom: 1rem;">
+        <p class="caption muted" style="margin: 0 0 1rem 0; line-height: 1.45; font-size: 0.82rem;">
           Enter mobile number, request OTP, verify code, then confirm merchant configuration.
         </p>
 
@@ -214,29 +242,29 @@ require __DIR__ . '/_nav.php';
           <?= \App\Core\CSRF::field() ?>
           <input type="hidden" name="service_type" value="gcash">
 
-          <div class="field">
-            <label for="gcash-mobile">GCash Mobile Number *</label>
-            <div class="row" style="gap: 0.4rem;">
-              <input id="gcash-mobile" name="mobile_number" type="tel" value="<?= e($settings['gcash_mobile'] ?? '') ?>" placeholder="0917XXXXXXX" style="flex: 1;" required>
-              <button type="button" class="btn secondary btn-sm" id="gcash-send-otp-btn" disabled>Send OTP</button>
+          <div class="field" style="margin-bottom: 0.85rem;">
+            <label for="gcash-mobile" style="display: block; font-weight: 600; font-size: 0.84rem; margin-bottom: 0.3rem;">GCash Mobile Number *</label>
+            <div class="row" style="gap: 0.4rem; align-items: stretch; flex-wrap: nowrap;">
+              <input id="gcash-mobile" name="mobile_number" type="tel" value="<?= e($settings['gcash_mobile'] ?? '') ?>" placeholder="0917XXXXXXX" style="flex: 1 1 auto; min-width: 120px; height: 38px;" required>
+              <button type="button" class="btn secondary btn-sm" id="gcash-send-otp-btn" style="height: 38px; padding: 0 0.85rem; font-size: 0.82rem; font-weight: 600; white-space: nowrap; flex-shrink: 0;" disabled>Send OTP</button>
             </div>
-            <div id="gcash-otp-notice" class="caption" style="margin-top: 0.35rem; color: var(--primary, #0284c7);"></div>
+            <div id="gcash-otp-notice" class="caption" style="margin-top: 0.35rem; color: var(--primary, #0284c7); font-size: 0.78rem; min-height: 1.15rem;"></div>
           </div>
 
-          <div class="field" style="margin-top: 1rem;">
-            <label for="gcash-otp">6-Digit OTP *</label>
-            <div class="row" style="gap: 0.4rem;">
-              <input id="gcash-otp" name="otp" type="text" maxlength="6" placeholder="6-digit code" style="flex: 1;" disabled autocomplete="off">
-              <button type="button" class="btn secondary btn-sm" id="gcash-verify-otp-btn" disabled>Verify OTP</button>
+          <div class="field" style="margin-bottom: 0;">
+            <label for="gcash-otp" style="display: block; font-weight: 600; font-size: 0.84rem; margin-bottom: 0.3rem;">6-Digit OTP *</label>
+            <div class="row" style="gap: 0.4rem; align-items: stretch; flex-wrap: nowrap;">
+              <input id="gcash-otp" name="otp" type="text" maxlength="6" placeholder="6-digit code" style="flex: 1 1 auto; min-width: 120px; height: 38px;" disabled autocomplete="off">
+              <button type="button" class="btn secondary btn-sm" id="gcash-verify-otp-btn" style="height: 38px; padding: 0 0.85rem; font-size: 0.82rem; font-weight: 600; white-space: nowrap; flex-shrink: 0;" disabled>Verify OTP</button>
             </div>
-            <div id="gcash-verify-status" class="caption" style="margin-top: 0.35rem;"></div>
+            <div id="gcash-verify-status" class="caption" style="margin-top: 0.35rem; font-size: 0.78rem; min-height: 1.15rem;"></div>
           </div>
 
           <!-- Hidden confirmation flag (server checks OTP verification table regardless) -->
           <input type="hidden" id="gcash-is-verified" name="is_verified" value="<?= !empty($settings['gcash_verified']) ? '1' : '0' ?>">
 
-          <div style="margin-top: 1.5rem;">
-            <button type="submit" class="btn primary" id="gcash-confirm-btn" style="width: 100%;" <?= empty($settings['gcash_verified']) ? 'disabled' : '' ?>>
+          <div style="margin-top: 1.25rem;">
+            <button type="submit" class="btn primary" id="gcash-confirm-btn" style="width: 100%; height: 40px; font-weight: 600;" <?= empty($settings['gcash_verified']) ? 'disabled' : '' ?>>
               Confirm GCash Setup
             </button>
           </div>
@@ -245,15 +273,15 @@ require __DIR__ . '/_nav.php';
     </div>
 
     <!-- MAYA SETUP FORM -->
-    <div style="background: var(--bg-subtle, #f9fafb); padding: 1.25rem; border-radius: 8px; border: 1px solid var(--border, #e5e7eb); display: flex; flex-direction: column; justify-content: space-between;">
+    <div class="settings-gateway-card">
       <div>
         <div class="row" style="justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
-          <h3 style="margin: 0; font-size: 1.1rem; color: #16a34a;">Maya Gateway</h3>
-          <span class="badge <?= !empty($settings['maya_verified']) ? 'badge-success' : 'secondary' ?>" id="maya-badge">
+          <h3 style="margin: 0; font-size: 1.05rem; font-weight: 700; color: #16a34a;">Maya Gateway</h3>
+          <span class="badge <?= !empty($settings['maya_verified']) ? 'badge-success' : 'secondary' ?>" id="maya-badge" style="font-weight: 600;">
             <?= !empty($settings['maya_verified']) ? 'Verified' : 'Unverified' ?>
           </span>
         </div>
-        <p class="caption" style="margin-bottom: 1rem;">
+        <p class="caption muted" style="margin: 0 0 1rem 0; line-height: 1.45; font-size: 0.82rem;">
           Separate merchant account. Enter mobile number, request OTP, verify code, then confirm.
         </p>
 
@@ -261,28 +289,28 @@ require __DIR__ . '/_nav.php';
           <?= \App\Core\CSRF::field() ?>
           <input type="hidden" name="service_type" value="maya">
 
-          <div class="field">
-            <label for="maya-mobile">Maya Mobile Number *</label>
-            <div class="row" style="gap: 0.4rem;">
-              <input id="maya-mobile" name="mobile_number" type="tel" value="<?= e($settings['maya_mobile'] ?? '') ?>" placeholder="0918XXXXXXX" style="flex: 1;" required>
-              <button type="button" class="btn secondary btn-sm" id="maya-send-otp-btn" disabled>Send OTP</button>
+          <div class="field" style="margin-bottom: 0.85rem;">
+            <label for="maya-mobile" style="display: block; font-weight: 600; font-size: 0.84rem; margin-bottom: 0.3rem;">Maya Mobile Number *</label>
+            <div class="row" style="gap: 0.4rem; align-items: stretch; flex-wrap: nowrap;">
+              <input id="maya-mobile" name="mobile_number" type="tel" value="<?= e($settings['maya_mobile'] ?? '') ?>" placeholder="0918XXXXXXX" style="flex: 1 1 auto; min-width: 120px; height: 38px;" required>
+              <button type="button" class="btn secondary btn-sm" id="maya-send-otp-btn" style="height: 38px; padding: 0 0.85rem; font-size: 0.82rem; font-weight: 600; white-space: nowrap; flex-shrink: 0;" disabled>Send OTP</button>
             </div>
-            <div id="maya-otp-notice" class="caption" style="margin-top: 0.35rem; color: var(--primary, #0284c7);"></div>
+            <div id="maya-otp-notice" class="caption" style="margin-top: 0.35rem; color: var(--primary, #0284c7); font-size: 0.78rem; min-height: 1.15rem;"></div>
           </div>
 
-          <div class="field" style="margin-top: 1rem;">
-            <label for="maya-otp">6-Digit OTP *</label>
-            <div class="row" style="gap: 0.4rem;">
-              <input id="maya-otp" name="otp" type="text" maxlength="6" placeholder="6-digit code" style="flex: 1;" disabled autocomplete="off">
-              <button type="button" class="btn secondary btn-sm" id="maya-verify-otp-btn" disabled>Verify OTP</button>
+          <div class="field" style="margin-bottom: 0;">
+            <label for="maya-otp" style="display: block; font-weight: 600; font-size: 0.84rem; margin-bottom: 0.3rem;">6-Digit OTP *</label>
+            <div class="row" style="gap: 0.4rem; align-items: stretch; flex-wrap: nowrap;">
+              <input id="maya-otp" name="otp" type="text" maxlength="6" placeholder="6-digit code" style="flex: 1 1 auto; min-width: 120px; height: 38px;" disabled autocomplete="off">
+              <button type="button" class="btn secondary btn-sm" id="maya-verify-otp-btn" style="height: 38px; padding: 0 0.85rem; font-size: 0.82rem; font-weight: 600; white-space: nowrap; flex-shrink: 0;" disabled>Verify OTP</button>
             </div>
-            <div id="maya-verify-status" class="caption" style="margin-top: 0.35rem;"></div>
+            <div id="maya-verify-status" class="caption" style="margin-top: 0.35rem; font-size: 0.78rem; min-height: 1.15rem;"></div>
           </div>
 
           <input type="hidden" id="maya-is-verified" name="is_verified" value="<?= !empty($settings['maya_verified']) ? '1' : '0' ?>">
 
-          <div style="margin-top: 1.5rem;">
-            <button type="submit" class="btn primary" id="maya-confirm-btn" style="width: 100%;" <?= empty($settings['maya_verified']) ? 'disabled' : '' ?>>
+          <div style="margin-top: 1.25rem;">
+            <button type="submit" class="btn primary" id="maya-confirm-btn" style="width: 100%; height: 40px; font-weight: 600;" <?= empty($settings['maya_verified']) ? 'disabled' : '' ?>>
               Confirm Maya Setup
             </button>
           </div>
@@ -291,15 +319,15 @@ require __DIR__ . '/_nav.php';
     </div>
 
     <!-- CASH ON DELIVERY (COD) -->
-    <div style="background: var(--bg-subtle, #f9fafb); padding: 1.25rem; border-radius: 8px; border: 1px solid var(--border, #e5e7eb); display: flex; flex-direction: column; justify-content: space-between;">
+    <div class="settings-gateway-card">
       <div>
         <div class="row" style="justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
-          <h3 style="margin: 0; font-size: 1.1rem; color: var(--ink, #1f2937);">Cash on Delivery</h3>
-          <span class="badge <?= !empty($settings['cod_enabled']) ? 'badge-success' : 'secondary' ?>">
+          <h3 style="margin: 0; font-size: 1.05rem; font-weight: 700; color: var(--ink, #1f2937);">Cash on Delivery</h3>
+          <span class="badge <?= !empty($settings['cod_enabled']) ? 'badge-success' : 'secondary' ?>" style="font-weight: 600;">
             <?= !empty($settings['cod_enabled']) ? 'Enabled' : 'Disabled' ?>
           </span>
         </div>
-        <p class="caption" style="margin-bottom: 1rem;">
+        <p class="caption muted" style="margin: 0 0 1rem 0; line-height: 1.45; font-size: 0.82rem;">
           COD allows customers to pay in cash upon physical receipt. Does not require e-wallet mobile number or OTP verification.
         </p>
 
@@ -307,12 +335,12 @@ require __DIR__ . '/_nav.php';
           <?= \App\Core\CSRF::field() ?>
           <input type="hidden" name="service_type" value="cod">
 
-          <label style="display: flex; gap: 0.5rem; align-items: center; cursor: pointer; padding: 1rem; background: var(--surface, #fff); border: 1px solid var(--border, #e5e7eb); border-radius: 6px; margin-bottom: 1.5rem;">
-            <input type="checkbox" name="cod_enabled" value="1" <?= !empty($settings['cod_enabled']) ? 'checked' : '' ?> style="transform: scale(1.15);">
-            <span style="font-weight: 500;">Enable Cash on Delivery for Pet Store</span>
+          <label style="display: flex; gap: 0.65rem; align-items: center; cursor: pointer; padding: 0.85rem 1rem; background: var(--surface, #ffffff); border: 1px solid var(--line, #e2e8f0); border-radius: var(--radius-sm, 6px); margin-bottom: 1.5rem; user-select: none;">
+            <input type="checkbox" name="cod_enabled" value="1" <?= !empty($settings['cod_enabled']) ? 'checked' : '' ?> style="width: 18px; height: 18px; accent-color: var(--brand-emerald, #10b981); cursor: pointer;">
+            <span style="font-weight: 600; font-size: 0.88rem; color: var(--ink);">Enable Cash on Delivery for <?= e($unitName) ?></span>
           </label>
 
-          <button type="submit" class="btn primary" style="width: 100%;">
+          <button type="submit" class="btn primary" style="width: 100%; height: 40px; font-weight: 600;">
             Update COD Status
           </button>
         </form>
@@ -320,4 +348,3 @@ require __DIR__ . '/_nav.php';
     </div>
   </div>
 </section>
-

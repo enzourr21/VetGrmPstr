@@ -4,15 +4,17 @@
   <div>
     <p class="eyebrow">Operational Snapshot</p>
     <h1>Pet Store Overview</h1>
-    <p class="muted">Operational summary covering employees on duty, pending refund requests, and recent sales.</p>
+    <p class="muted">Operational summary covering stocks running low, pending refund requests, and recent sales.</p>
   </div>
 </div>
 
 <section class="grid grid-3" style="margin-bottom: 2rem;">
-  <article class="card stat-card">
-    <span class="eyebrow">Employees On Duty</span>
-    <strong class="stat-value"><?= count($employeesOnDuty) ?></strong>
-    <p class="caption">Staff present at workplace (On Duty or Free)</p>
+  <article class="card stat-card" id="petstore-stocks-running-low-stat">
+    <span class="eyebrow">Stocks Running Low</span>
+    <strong class="stat-value" style="<?= count($lowStockProducts) > 0 ? 'color: var(--danger, #dc2626);' : '' ?>">
+      <?= count($lowStockProducts) ?>
+    </strong>
+    <p class="caption">Products at or below low-stock threshold (≤ 10)</p>
   </article>
   <article class="card stat-card">
     <span class="eyebrow">Pending Refunds</span>
@@ -29,45 +31,46 @@
 </section>
 
 <div class="grid grid-2" style="align-items: start; gap: 1.5rem; margin-bottom: 2rem;">
-  <!-- 1. Employees On Duty -->
-  <section class="card" style="overflow-x: hidden;">
-    <div style="margin-bottom: 1rem;">
-      <h2 style="margin: 0;">Employees On Duty (<?= count($employeesOnDuty) ?>)</h2>
-      <p class="caption" style="margin: 0.2rem 0 0 0;">Staff members currently present at workplace (excluding absent)</p>
+  <!-- 1. Stocks Running Low -->
+  <section class="card" id="petstore-stocks-running-low" style="overflow-x: hidden;">
+    <div style="margin-bottom: 1rem; display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; flex-wrap: wrap;">
+      <div>
+        <h2 style="margin: 0;">Stocks Running Low (<?= count($lowStockProducts) ?>)</h2>
+        <p class="caption" style="margin: 0.2rem 0 0 0;">Pet Store products with available stock at or below threshold</p>
+      </div>
+      <span class="badge <?= count($lowStockProducts) > 0 ? 'badge-danger' : 'badge-success' ?>" style="font-weight: 600;">
+        <?= count($lowStockProducts) ?> Low Stock
+      </span>
     </div>
 
-    <?php if (empty($employeesOnDuty)): ?>
-      <div class="empty">No employees currently present at the store.</div>
+    <?php if (empty($lowStockProducts)): ?>
+      <div class="empty">No products currently low on stock. All items are sufficiently stocked.</div>
     <?php else: ?>
-      <div style="max-height: 420px; overflow-y: auto; overflow-x: hidden; padding-right: 0.25rem;">
-        <?php foreach ($employeesOnDuty as $emp): ?>
-          <div style="display: flex; align-items: center; justify-content: space-between; padding: 0.75rem 0.25rem; border-bottom: 1px solid var(--border, #e5e7eb); gap: 0.75rem;">
-            <div style="display: flex; align-items: center; gap: 0.75rem; min-width: 0;">
-              <div style="width: 38px; height: 38px; border-radius: 50%; background: var(--brand-soft, #e6f4f0); color: var(--brand, #0d6e57); font-weight: 700; font-size: 0.85rem; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border: 1px solid rgba(16, 185, 129, 0.25);">
-                <?= e(strtoupper(substr((string)$emp['first_name'], 0, 1) . substr((string)$emp['last_name'], 0, 1))) ?>
-              </div>
-              <div style="min-width: 0;">
-                <strong style="display: block; font-size: 0.95rem; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">
-                  <?= e($emp['first_name'] . ' ' . $emp['last_name']) ?>
-                </strong>
-                <span class="caption" style="display: block; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">
-                  <?= e($emp['position'] ?: 'Staff Member') ?>
-                </span>
-              </div>
-            </div>
-            <div style="flex-shrink: 0;">
-              <?php if ($emp['work_status'] === 'On Duty'): ?>
-                <span class="badge badge-success" style="font-weight: 600;">On Duty</span>
-              <?php else: ?>
-                <span class="badge secondary" style="font-weight: 600;">Free</span>
-              <?php endif; ?>
-            </div>
-          </div>
-        <?php endforeach; ?>
+      <div class="table-wrap" style="max-height: 420px; overflow-y: auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Product Name</th>
+              <th style="text-align: right; width: 140px;">Available Qty</th>
+            </tr>
+          </thead>
+          <tbody>
+            <?php foreach ($lowStockProducts as $prod): ?>
+              <tr>
+                <td><strong><?= e($prod['product_name']) ?></strong></td>
+                <td class="tabular" style="text-align: right;">
+                  <strong style="<?= (int)$prod['available'] === 0 ? 'color: var(--danger, #dc2626);' : 'color: var(--warn, #b45309);' ?>">
+                    <?= (int)$prod['available'] ?>
+                  </strong>
+                </td>
+              </tr>
+            <?php endforeach; ?>
+          </tbody>
+        </table>
       </div>
       <div style="margin-top: 1rem;">
-        <a href="/manager/employees<?= $unitQuery ?>" class="btn ghost btn-sm" style="width: 100%; text-align: center; justify-content: center;">
-          View Full Employees Page &rarr;
+        <a href="/manager/inventory<?= $unitQuery ?>" class="btn secondary btn-sm" style="width: 100%; text-align: center; justify-content: center;">
+          Open Inventory Workspace &rarr;
         </a>
       </div>
     <?php endif; ?>

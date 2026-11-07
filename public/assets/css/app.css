@@ -2774,3 +2774,678 @@ body.has-modal-open {
   user-select: none;
 }
 
+/* ==========================================
+   Grooming Services Business Manager Overview
+   ========================================== */
+.grooming-wide-appointment-card {
+  width: 100%;
+}
+
+.grooming-wide-appt-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.grooming-wide-appt-col {
+  padding: 0.85rem 1rem;
+  background: var(--surface-subtle);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  min-width: 0;
+}
+
+.grooming-overview-middle-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.5rem;
+  align-items: stretch;
+}
+
+.grooming-overview-equal-card {
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100% !important;
+}
+
+.grooming-overview-equal-card .grooming-refund-list,
+.grooming-overview-equal-card .table-wrap,
+.grooming-overview-equal-card .empty {
+  flex: 1 1 auto;
+}
+
+.grooming-employees-present-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.grooming-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.grooming-stock-alerts-card {
+  grid-column: span 2;
+}
+
+.grooming-employees-present-card {
+  grid-column: span 1;
+}
+
+.grooming-appt-summary-dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem 0.75rem;
+  font-size: 0.84rem;
+}
+
+.grooming-appt-summary-dl dt {
+  font-size: 0.72rem;
+  font-weight: 660;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin: 0 0 0.1rem 0;
+}
+
+.grooming-appt-summary-dl dd {
+  margin: 0;
+  font-weight: 600;
+  color: var(--ink);
+  word-break: break-word;
+}
+
+@media (max-width: 960px) {
+  .grooming-wide-appt-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .grooming-overview-middle-grid {
+    grid-template-columns: 1fr;
+  }
+  .grooming-employees-present-grid {
+    grid-template-columns: 1fr;
+  }
+  .grooming-overview-grid {
+    grid-template-columns: 1fr;
+  }
+  .grooming-stock-alerts-card,
+  .grooming-employees-present-card {
+    grid-column: span 1;
+  }
+}
+
+@media (max-width: 600px) {
+  .grooming-wide-appt-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ==========================================
+   Grooming Services Weekly Calendar & Speech-Bubble Dialogue
+   ========================================== */
+.grooming-cal-toolbar {
+  padding: 0.75rem 1.25rem;
+  margin-bottom: 0.85rem;
+}
+
+.grooming-cal-nav-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.grooming-cal-nav-btn {
+  width: 38px;
+  height: 38px;
+  min-width: 38px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  line-height: 1;
+  font-weight: 700;
+  border-radius: var(--radius-sm, 6px);
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.grooming-cal-nav-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+  flex: 1 1 auto;
+}
+
+.grooming-cal-today-btn {
+  height: 38px;
+  padding: 0 1rem;
+  font-size: 0.92rem;
+  font-weight: 650;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.grooming-cal-range-label {
+  font-size: 1.15rem;
+  font-weight: 750;
+  color: var(--ink);
+  letter-spacing: -0.01em;
+  text-align: center;
+  min-width: 190px;
+}
+
+.grooming-cal-month-form {
+  display: inline-flex;
+  align-items: center;
+  margin: 0;
+}
+
+.grooming-cal-month-input {
+  width: auto !important;
+  height: 38px !important;
+  padding: 0.35rem 0.75rem !important;
+  font-size: 0.92rem !important;
+  font-weight: 600 !important;
+  color: var(--ink) !important;
+  border: 1px solid var(--line-strong) !important;
+  border-radius: var(--radius-sm, 6px) !important;
+  background: var(--surface) !important;
+  cursor: pointer;
+}
+
+.grooming-cal-legend {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--line);
+}
+
+.grooming-cal-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.grooming-cal-swatch {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.grooming-cal-legend-label {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+@media (max-width: 768px) {
+  .grooming-cal-legend {
+    justify-content: flex-start;
+    gap: 0.85rem 1.5rem;
+  }
+}
+
+.grooming-weekly-calendar-card {
+  padding: 0;
+  overflow: visible;
+}
+
+.grooming-cal-header-grid {
+  display: grid;
+  grid-template-columns: 72px repeat(7, minmax(0, 1fr));
+  border-bottom: 1px solid var(--line-strong);
+  background: var(--surface-subtle);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+}
+
+.grooming-cal-time-gutter-head {
+  padding: 0.75rem 0.45rem;
+  font-size: 0.72rem;
+  font-weight: 660;
+  color: var(--muted);
+  text-align: right;
+  border-right: 1px solid var(--line);
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+}
+
+.grooming-cal-day-head {
+  padding: 0.65rem 0.5rem;
+  text-align: center;
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.grooming-cal-day-head:last-child {
+  border-right: 0;
+}
+
+.grooming-cal-day-head.is-today {
+  background: var(--brand-soft);
+}
+
+.grooming-cal-day-name {
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.grooming-cal-day-num {
+  font-size: 0.94rem;
+  font-weight: 700;
+  color: var(--ink);
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+}
+
+.grooming-cal-day-num.is-today-pill {
+  background: var(--brand);
+  color: #ffffff;
+}
+
+.grooming-cal-body-wrap {
+  position: relative;
+}
+
+.grooming-cal-body-grid {
+  display: grid;
+  grid-template-columns: 72px repeat(7, minmax(0, 1fr));
+  position: relative;
+}
+
+.grooming-cal-time-gutter {
+  position: relative;
+  border-right: 1px solid var(--line);
+  background: var(--surface-subtle);
+}
+
+.grooming-cal-time-label {
+  position: absolute;
+  left: 0;
+  right: 0;
+  padding-right: 0.5rem;
+  text-align: right;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--muted);
+  transform: translateY(-0.45rem);
+  pointer-events: none;
+}
+
+.grooming-cal-day-col {
+  position: relative;
+  border-right: 1px solid var(--line);
+  background: #ffffff;
+}
+
+.grooming-cal-day-col:last-child {
+  border-right: 0;
+}
+
+.grooming-cal-day-col.is-today-col {
+  background: rgba(232, 244, 240, 0.28);
+}
+
+.grooming-cal-hour-cell {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-bottom: 1px solid var(--line);
+  pointer-events: none;
+}
+
+/* Appointment Blocks */
+.grooming-cal-appt-block {
+  position: absolute;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding: 0.3rem 0.45rem;
+  border-radius: 6px;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  box-shadow: var(--shadow-xs);
+  transition: transform var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+  font-family: inherit;
+}
+
+.grooming-cal-appt-block:hover,
+.grooming-cal-appt-block.is-selected {
+  z-index: 5;
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+.grooming-cal-appt-block.is-selected {
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+}
+
+.grooming-cal-block-id {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 800;
+  line-height: 1.15;
+}
+
+.grooming-cal-block-time {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.2;
+  margin-top: 0.1rem;
+  opacity: 0.92;
+}
+
+/* 4 Established Appointment Status Colors: Red, Green, Yellow, Transparent */
+.cal-status-green {
+  background: #d1fae5;
+  border: 1px solid #059669;
+  border-left: 4px solid #047857;
+  color: #065f46;
+}
+
+.cal-status-yellow {
+  background: #fef3c7;
+  border: 1px solid #d97706;
+  border-left: 4px solid #b45309;
+  color: #92400e;
+}
+
+.cal-status-red {
+  background: #fee2e2;
+  border: 1px solid #dc2626;
+  border-left: 4px solid #b91c1c;
+  color: #991b1b;
+}
+
+.cal-status-transparent {
+  background: transparent;
+  border: 1.5px dashed var(--ink-secondary);
+  border-left: 4px solid var(--ink-secondary);
+  color: var(--ink);
+}
+
+/* Speech-Bubble Dialogue Box with Pointer / Tail */
+.grooming-speech-bubble {
+  position: absolute;
+  z-index: 30;
+  width: 360px;
+  max-width: calc(100vw - 2rem);
+  background: #ffffff;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  padding: 1rem 1.1rem;
+  top: 24px;
+  left: 96px;
+}
+
+.grooming-speech-bubble[hidden] {
+  display: none !important;
+}
+
+.grooming-speech-bubble-tail {
+  position: absolute;
+  top: 22px;
+  width: 14px;
+  height: 14px;
+  background: #ffffff;
+  transform: rotate(45deg);
+}
+
+.grooming-speech-bubble.tail-left .grooming-speech-bubble-tail {
+  left: -8px;
+  border-left: 1px solid var(--line-strong);
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.grooming-speech-bubble.tail-right .grooming-speech-bubble-tail {
+  right: -8px;
+  border-right: 1px solid var(--line-strong);
+  border-top: 1px solid var(--line-strong);
+}
+
+.grooming-speech-bubble-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-bottom: 0.65rem;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 0.75rem;
+}
+
+.grooming-bubble-close {
+  border: 0;
+  background: transparent;
+  font-size: 1.35rem;
+  line-height: 1;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+}
+
+.grooming-bubble-close:hover {
+  background: var(--surface-subtle);
+  color: var(--ink);
+}
+
+.grooming-bubble-dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem 0.75rem;
+  font-size: 0.83rem;
+}
+
+.grooming-bubble-dl > div:nth-child(4),
+.grooming-bubble-dl > div:nth-child(5),
+.grooming-bubble-dl > div:nth-child(7) {
+  grid-column: span 2;
+}
+
+.grooming-bubble-dl dt {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-bottom: 0.1rem;
+}
+
+.grooming-bubble-dl dd {
+  margin: 0;
+  color: var(--ink);
+}
+
+.grooming-bubble-actions {
+  margin-top: 0.85rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--line);
+}
+
+.grooming-bubble-notice {
+  font-size: 0.8rem;
+  color: var(--ink-secondary);
+  background: var(--surface-subtle);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 0.55rem 0.7rem;
+  line-height: 1.4;
+}
+
+/* Grooming Services Catalog Table (Horizontal Overflow Prevention) */
+.grooming-services-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.grooming-services-table th,
+.grooming-services-table td {
+  padding: 0.6rem 0.5rem;
+}
+
+.grooming-services-table th {
+  font-size: 0.75rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  background: #f8fafb;
+}
+
+.grooming-services-table td {
+  font-size: 0.85rem;
+  line-height: 1.35;
+}
+
+/* ==========================================
+   Shared Business Settings Refinements
+   ========================================== */
+.settings-section-card {
+  margin-bottom: 1.75rem;
+  padding: 1.5rem;
+}
+
+.settings-section-card:last-child {
+  margin-bottom: 0;
+}
+
+.settings-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+
+.settings-card-title {
+  margin: 0;
+  font-size: 1.2rem;
+  font-weight: 750;
+  color: var(--ink);
+  letter-spacing: -0.01em;
+}
+
+.settings-profile-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1.25rem;
+  align-items: start;
+}
+
+@media (max-width: 860px) {
+  .settings-profile-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.settings-policies-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+@media (max-width: 768px) {
+  .settings-policies-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.settings-gateways-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1.25rem;
+  align-items: stretch;
+}
+
+@media (max-width: 900px) {
+  .settings-gateways-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.settings-gateway-card {
+  background: var(--surface-subtle, #f8fafc);
+  padding: 1.25rem;
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid var(--line, #e2e8f0);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 100%;
+}
+
+/* Inventory Access Key Modal */
+.inv-key-code-box {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.95rem 1.1rem;
+  background: var(--brand-soft, #ecfdf5);
+  border: 1px solid rgba(16, 185, 129, 0.28);
+  border-radius: 0.65rem;
+  margin-bottom: 1.1rem;
+}
+
+.inv-key-code-text {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 1.2rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--ink, #111827);
+  background: transparent;
+  padding: 0;
+}
+
+.inv-key-details-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  background: var(--surface-subtle, #f8fafc);
+  border: 1px solid var(--line, #e5e7eb);
+  border-radius: 0.65rem;
+  padding: 0.85rem 1.05rem;
+}
+
+.inv-key-detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  font-size: 0.9rem;
+}
+
+
+
+
+

@@ -1972,4 +1972,179 @@
 
   initEWalletOtp('gcash');
   initEWalletOtp('maya');
+
+  // ==========================================
+  // Grooming Weekly Calendar & Speech-Bubble Dialogue
+  // ==========================================
+  var monthPicker = document.getElementById('grooming-cal-month-picker');
+  if (monthPicker) {
+    monthPicker.addEventListener('change', function () {
+      var val = (monthPicker.value || '').trim();
+      if (/^\d{4}-\d{2}$/.test(val)) {
+        var url = new URL(window.location.href);
+        url.searchParams.set('start', val + '-01');
+        url.searchParams.delete('month');
+        url.searchParams.delete('select');
+        window.location.href = url.toString();
+      }
+    });
+  }
+
+  var calBodyWrap = document.getElementById('grooming-cal-body-wrap');
+  if (calBodyWrap) {
+    function closeAllSpeechBubbles() {
+      calBodyWrap.querySelectorAll('.grooming-speech-bubble').forEach(function (b) {
+        b.classList.remove('is-open');
+        b.setAttribute('hidden', 'hidden');
+      });
+      calBodyWrap.querySelectorAll('.grooming-cal-appt-block').forEach(function (blk) {
+        blk.classList.remove('is-selected');
+        blk.setAttribute('aria-expanded', 'false');
+      });
+    }
+
+    function openSpeechBubbleForBlock(block) {
+      if (!block) return;
+      var apptId = block.getAttribute('data-appt-id');
+      var bubble = document.getElementById('grooming-speech-bubble-' + apptId);
+      if (!bubble) return;
+
+      closeAllSpeechBubbles();
+
+      block.classList.add('is-selected');
+      block.setAttribute('aria-expanded', 'true');
+      bubble.removeAttribute('hidden');
+      bubble.classList.add('is-open');
+
+      var wrapRect = calBodyWrap.getBoundingClientRect();
+      var blockRect = block.getBoundingClientRect();
+      var dayIdx = parseInt(block.getAttribute('data-day-index') || '0', 10);
+
+      var relTop = blockRect.top - wrapRect.top;
+      var relLeft = blockRect.left - wrapRect.left;
+      var relRight = blockRect.right - wrapRect.left;
+
+      var bubbleWidth = bubble.offsetWidth || 360;
+      var bubbleTop = Math.max(8, relTop - 10);
+      var tailOffsetTop = Math.max(16, Math.min(48, (blockRect.top - wrapRect.top) - bubbleTop + 12));
+
+      var tailEl = bubble.querySelector('.grooming-speech-bubble-tail');
+      if (tailEl) {
+        tailEl.style.top = tailOffsetTop + 'px';
+      }
+
+      if (dayIdx >= 4 && (relLeft - bubbleWidth - 14) >= 8) {
+        bubble.classList.remove('tail-left');
+        bubble.classList.add('tail-right');
+        bubble.style.left = Math.max(8, relLeft - bubbleWidth - 12) + 'px';
+      } else {
+        bubble.classList.remove('tail-right');
+        bubble.classList.add('tail-left');
+        var targetLeft = relRight + 12;
+        if (targetLeft + bubbleWidth > wrapRect.width - 8) {
+          targetLeft = Math.max(8, wrapRect.width - bubbleWidth - 8);
+        }
+        bubble.style.left = targetLeft + 'px';
+      }
+      bubble.style.top = bubbleTop + 'px';
+    }
+
+    calBodyWrap.addEventListener('click', function (ev) {
+      var closeBtn = ev.target.closest('[data-close-bubble]');
+      if (closeBtn) {
+        ev.preventDefault();
+        closeAllSpeechBubbles();
+        return;
+      }
+
+      var apptBlock = ev.target.closest('.grooming-cal-appt-block');
+      if (apptBlock) {
+        ev.preventDefault();
+        if (apptBlock.classList.contains('is-selected')) {
+          closeAllSpeechBubbles();
+        } else {
+          openSpeechBubbleForBlock(apptBlock);
+        }
+        return;
+      }
+
+      if (!ev.target.closest('.grooming-speech-bubble')) {
+        closeAllSpeechBubbles();
+      }
+    });
+
+    document.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Escape') {
+        closeAllSpeechBubbles();
+      }
+    });
+
+    // Position pre-selected appointment bubble on initial load
+    var initialSelectedBlock = calBodyWrap.querySelector('.grooming-cal-appt-block.is-selected');
+    if (initialSelectedBlock) {
+      openSpeechBubbleForBlock(initialSelectedBlock);
+    }
+  }
+
+  // ==========================================
+  // Temporary Inventory Access Key (Generate / View / Live Expiry)
+  // ==========================================
+  var genInvKeyForm = document.getElementById('generate-inv-key-form');
+  if (genInvKeyForm) {
+    genInvKeyForm.addEventListener('submit', function (ev) {
+      if (genInvKeyForm._submitting) {
+        ev.preventDefault();
+        return;
+      }
+      genInvKeyForm._submitting = true;
+      var btn = document.getElementById('generate-inv-key-btn');
+      if (btn) {
+        btn.disabled = true;
+      }
+    });
+  }
+
+  var copyKeyBtn = document.getElementById('copy-inv-key-btn');
+  if (copyKeyBtn) {
+    copyKeyBtn.addEventListener('click', function () {
+      var keyText = copyKeyBtn.getAttribute('data-copy-key') || '';
+      if (!keyText) return;
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        navigator.clipboard.writeText(keyText).then(function () {
+          copyKeyBtn.textContent = 'Copied!';
+          setTimeout(function () {
+            copyKeyBtn.textContent = 'Copy Key';
+          }, 1600);
+        }).catch(function () {});
+      }
+    });
+  }
+
+  var viewInvKeyBtn = document.getElementById('view-inv-key-btn');
+  var invKeyCountdown = document.getElementById('inv-key-countdown');
+  if (viewInvKeyBtn) {
+    var initSecs = parseInt(
+      (invKeyCountdown && invKeyCountdown.getAttribute('data-seconds-remaining')) ||
+      viewInvKeyBtn.getAttribute('data-key-seconds') ||
+      '0',
+      10
+    );
+    if (!isNaN(initSecs) && initSecs > 0) {
+      var startedAtMs = Date.now();
+      var expiryTimer = setInterval(function () {
+        var elapsed = Math.floor((Date.now() - startedAtMs) / 1000);
+        var rem = initSecs - elapsed;
+        if (rem <= 0) {
+          clearInterval(expiryTimer);
+          window.location.reload();
+          return;
+        }
+        if (invKeyCountdown) {
+          var mins = Math.floor(rem / 60);
+          var secs = rem % 60;
+          invKeyCountdown.textContent = mins > 0 ? (mins + 'm ' + secs + 's') : (secs + 's');
+        }
+      }, 1000);
+    }
+  }
 })();
