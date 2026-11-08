@@ -31,6 +31,9 @@ final class ManagerController extends Controller
      */
     private function checkBusinessManager(?int $routeUnitId = null): array
     {
+        if ($this->isSuperAdmin() && Session::get('inventory_manager_mode')) {
+            $this->forbidden('Access denied: Business Manager privileges are required.');
+        }
         return $this->requireBusinessManager($routeUnitId);
     }
 
@@ -62,7 +65,8 @@ final class ManagerController extends Controller
 
         if ($this->isSuperAdmin()) {
             $u = $targetUnitId !== null ? (Units::find($targetUnitId) ?: $this->notFound()) : (Units::find(Units::petStoreId()) ?: Units::all()[0]);
-            return [(int)$uid, (int)Session::get('employee_id', 0), (int)$u['business_unit_id'], (string)$u['business_unit_name'], true, false, false, null];
+            $isInvOnly = (bool)Session::get('inventory_manager_mode', false);
+            return [(int)$uid, (int)Session::get('employee_id', 0), (int)$u['business_unit_id'], (string)$u['business_unit_name'], true, $isInvOnly, false, null];
         }
 
         $s = $this->db->prepare(
@@ -164,6 +168,30 @@ final class ManagerController extends Controller
     // ==========================================
     public function dashboard(?int $routeUnitId = null): void
     {
+        $uid = Session::get('user_id');
+        if ($uid) {
+            $isInvMode = (bool)Session::get('inventory_manager_mode', false);
+            if ($isInvMode) {
+                $targetUnit = $routeUnitId ?? (isset($_GET['unit_id']) && ctype_digit((string)$_GET['unit_id']) ? (int)$_GET['unit_id'] : 1);
+                $uQ = ($this->isSuperAdmin() && $targetUnit) ? '?unit_id=' . $targetUnit : '';
+                if ($targetUnit === 1) {
+                    $this->redirect('/manager/orders' . $uQ);
+                } else {
+                    $this->redirect('/manager/inventory' . $uQ);
+                }
+                return;
+            }
+            $chkRole = $this->db->prepare(
+                "SELECT r.role_name FROM account_role ar JOIN role r ON r.role_id = ar.role_id WHERE ar.user_account_id = ? AND r.role_name IN ('BUSINESS_MANAGER', 'INVENTORY_MANAGER')"
+            );
+            $chkRole->execute([(int)$uid]);
+            $userRoles = $chkRole->fetchAll(PDO::FETCH_COLUMN);
+            if (in_array('INVENTORY_MANAGER', $userRoles, true) && !in_array('BUSINESS_MANAGER', $userRoles, true)) {
+                $this->redirect('/manager/orders');
+                return;
+            }
+        }
+
         [, , $unitId, $unitName, $isSuper] = $this->checkBusinessManager($routeUnitId);
 
         // Grooming Services Business Manager Overview (business_unit_id = 3)
@@ -3374,7 +3402,7 @@ final class ManagerController extends Controller
     // ==========================================
     public function inventory(?int $routeUnitId = null): void
     {
-        [, , $unitId, $unitName, $isSuper, $isInvOnly, $isTempKeyAccess, $tempKeyGrant] = $this->checkManagerOrInventoryManager($routeUnitId);
+        [$uid, $employeeId, $unitId, $unitName, $isSuper, $isInvOnly, $isTempKeyAccess, $tempKeyGrant] = $this->checkManagerOrInventoryManager($routeUnitId);
 
         $tab = isset($_GET['tab']) && $_GET['tab'] === 'orders' ? 'orders' : 'stock';
         $q = trim((string)($_GET['q'] ?? ''));
@@ -3430,11 +3458,15 @@ final class ManagerController extends Controller
         }
         unset($item);
 
-        // Catalog products for PO dropdown
+        // Catalog products for PO and PO Request dropdowns (including live stock counts)
         $catStmt = $this->db->prepare(
-            "SELECT bp.business_product_id, bp.selling_price, p.product_name, p.sku
+            "SELECT bp.business_product_id, bp.selling_price, p.product_name, p.sku,
+                    COALESCE(i.on_hand, 0) AS on_hand,
+                    COALESCE(i.committed, 0) AS committed,
+                    GREATEST(COALESCE(i.on_hand, 0) - COALESCE(i.committed, 0), 0) AS available
              FROM business_product bp
              JOIN product p ON p.product_id = bp.product_id
+             LEFT JOIN inventory i ON i.business_product_id = bp.business_product_id
              WHERE bp.business_unit_id = ? AND bp.product_status = 'active'
              ORDER BY p.product_name ASC"
         );
@@ -3482,6 +3514,55 @@ final class ManagerController extends Controller
         }
         unset($po);
 
+        // Purchase Order Requests (Requisitions submitted by Inventory Manager or BM)
+        $porStmt = $this->db->prepare(
+            "SELECT por.*, CONCAT(e.first_name, ' ', e.last_name) AS requester_name,
+                    CONCAT(rev.first_name, ' ', rev.last_name) AS reviewer_name,
+                    (SELECT COUNT(*) FROM purchase_order_request_item pori WHERE pori.request_id = por.request_id) AS total_items,
+                    (SELECT COALESCE(SUM(pori.quantity_requested), 0) FROM purchase_order_request_item pori WHERE pori.request_id = por.request_id) AS total_qty_requested
+             FROM purchase_order_request por
+             JOIN employee e ON e.employee_id = por.requested_by_employee_id
+             LEFT JOIN employee rev ON rev.employee_id = por.reviewed_by_employee_id
+             WHERE por.business_unit_id = ?
+             ORDER BY por.request_date DESC, por.request_id DESC"
+        );
+        $porStmt->execute([$unitId]);
+        $purchaseOrderRequests = $porStmt->fetchAll();
+
+        foreach ($purchaseOrderRequests as &$req) {
+            $riStmt = $this->db->prepare(
+                "SELECT pori.*, p.product_name, p.sku,
+                        COALESCE(i.on_hand, 0) AS on_hand,
+                        COALESCE(i.committed, 0) AS committed,
+                        GREATEST(COALESCE(i.on_hand, 0) - COALESCE(i.committed, 0), 0) AS available
+                 FROM purchase_order_request_item pori
+                 JOIN business_product bp ON bp.business_product_id = pori.business_product_id
+                 JOIN product p ON p.product_id = bp.product_id
+                 LEFT JOIN inventory i ON i.business_product_id = bp.business_product_id
+                 WHERE pori.request_id = ?
+                 ORDER BY pori.request_item_id ASC"
+            );
+            $riStmt->execute([(int)$req['request_id']]);
+            $req['items'] = $riStmt->fetchAll();
+        }
+        unset($req);
+
+        // Logged-in employee's name for populating request modal
+        if (empty($employeeId)) {
+            $empLookup = $this->db->prepare("SELECT employee_id FROM employee WHERE user_account_id = ? LIMIT 1");
+            $empLookup->execute([(int)$uid]);
+            $employeeId = (int)$empLookup->fetchColumn();
+        }
+
+        $currentEmployeeName = 'Staff Member';
+        if (!empty($employeeId)) {
+            $empNameStmt = $this->db->prepare("SELECT CONCAT(first_name, ' ', last_name) FROM employee WHERE employee_id = ?");
+            $empNameStmt->execute([(int)$employeeId]);
+            $currentEmployeeName = (string)($empNameStmt->fetchColumn() ?: 'Staff Member');
+        } elseif ($isSuper) {
+            $currentEmployeeName = 'Super Administrator';
+        }
+
         $this->render('manager/inventory', [
             'title' => "Inventory · $unitName",
             'activeTab' => 'inventory',
@@ -3500,6 +3581,8 @@ final class ManagerController extends Controller
             'inventoryItems' => $inventoryItems,
             'catalogProducts' => $catalogProducts,
             'purchaseOrders' => $purchaseOrders,
+            'purchaseOrderRequests' => $purchaseOrderRequests,
+            'currentEmployeeName' => $currentEmployeeName,
             'searchQuery' => $q,
         ]);
     }
@@ -3889,12 +3972,164 @@ final class ManagerController extends Controller
         $this->redirect('/manager/inventory?tab=orders');
     }
 
+    public function storePurchaseOrderRequest(?int $routeUnitId = null): void
+    {
+        [$uid, $employeeId, $unitId, , $isSuper, $isInvOnly, $isTempKeyAccess] = $this->checkManagerOrInventoryManager($routeUnitId);
+        CSRF::check();
+
+        if ($isTempKeyAccess) {
+            $this->forbidden('Temporary inventory access keys cannot submit purchase order requests.');
+        }
+
+        if ($employeeId <= 0) {
+            $empStmt = $this->db->prepare("SELECT employee_id FROM employee WHERE user_account_id = ? LIMIT 1");
+            $empStmt->execute([$uid]);
+            $employeeId = (int)$empStmt->fetchColumn() ?: (int)$this->db->query("SELECT employee_id FROM employee WHERE business_unit_id = " . (int)$unitId . " LIMIT 1")->fetchColumn();
+        }
+
+        $invRedirect = '/manager/inventory' . ($isSuper ? '?unit_id=' . (int)$unitId . '&tab=orders' : '?tab=orders');
+
+        $items = $_POST['items'] ?? [];
+        if (!is_array($items) || empty($items)) {
+            $this->flash('error', 'At least one product must be added to request a purchase order.');
+            $this->redirect($invRedirect);
+        }
+
+        $validItems = [];
+        foreach ($items as $it) {
+            $bpId = (int)($it['business_product_id'] ?? 0);
+            $qty = (int)($it['quantity_requested'] ?? 0);
+            if ($bpId > 0 && $qty > 0) {
+                $validItems[] = [
+                    'business_product_id' => $bpId,
+                    'quantity_requested' => $qty,
+                    'notes' => trim((string)($it['notes'] ?? '')),
+                ];
+            }
+        }
+
+        if (empty($validItems)) {
+            $this->flash('error', 'Please provide a valid quantity greater than zero for at least one product.');
+            $this->redirect($invRedirect);
+        }
+
+        $reason = trim((string)($_POST['reason'] ?? ''));
+        if ($reason === '') {
+            $this->flash('error', 'Please specify a reason for requesting stock replenishment.');
+            $this->redirect($invRedirect);
+        }
+
+        $priority = trim((string)($_POST['priority'] ?? 'Medium'));
+        if (!in_array($priority, ['Low', 'Medium', 'High', 'Urgent'], true)) {
+            $priority = 'Medium';
+        }
+
+        $neededBy = trim((string)($_POST['needed_by_date'] ?? ''));
+        $neededByDate = null;
+        if ($neededBy !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $neededBy)) {
+            $neededByDate = $neededBy;
+        }
+
+        $notes = trim((string)($_POST['notes'] ?? ''));
+
+        // System-generated request number
+        $reqNumber = 'POR-' . date('Ymd') . '-' . strtoupper(substr(bin2hex(random_bytes(3)), 0, 5));
+
+        $this->db->beginTransaction();
+        try {
+            $stmt = $this->db->prepare(
+                "INSERT INTO purchase_order_request (request_number, business_unit_id, requested_by_employee_id, request_date, reason, priority, needed_by_date, notes, request_status)
+                 VALUES (?, ?, ?, NOW(), ?, ?, ?, ?, 'Pending')"
+            );
+            $stmt->execute([
+                $reqNumber,
+                $unitId,
+                $employeeId,
+                $reason,
+                $priority,
+                $neededByDate,
+                $notes ?: null,
+            ]);
+            $reqId = (int)$this->db->lastInsertId();
+
+            $itStmt = $this->db->prepare(
+                "INSERT INTO purchase_order_request_item (request_id, business_product_id, quantity_requested, notes)
+                 VALUES (?, ?, ?, ?)"
+            );
+            foreach ($validItems as $vi) {
+                $itStmt->execute([
+                    $reqId,
+                    $vi['business_product_id'],
+                    $vi['quantity_requested'],
+                    $vi['notes'] ?: null,
+                ]);
+            }
+
+            $this->db->commit();
+            Audit::log('inventory.po_request.create', "Submitted Purchase Order Request {$reqNumber} for Unit #{$unitId}.", $unitId, 'purchase_order_request', $reqId, $uid);
+            $this->flash('success', "Purchase order request {$reqNumber} submitted successfully for Business Manager review.");
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            $this->flash('error', 'Failed to submit purchase order request: ' . $e->getMessage());
+        }
+
+        $this->redirect($invRedirect);
+    }
+
+    public function reviewPurchaseOrderRequest(int $requestId, ?int $routeUnitId = null): void
+    {
+        [$uid, $employeeId, $unitId, , $isSuper] = $this->checkBusinessManager($routeUnitId);
+        CSRF::check();
+
+        $invRedirect = '/manager/inventory' . ($isSuper ? '?unit_id=' . (int)$unitId . '&tab=orders' : '?tab=orders');
+
+        $reqStmt = $this->db->prepare("SELECT * FROM purchase_order_request WHERE request_id = ? AND business_unit_id = ?");
+        $reqStmt->execute([$requestId, $unitId]);
+        $req = $reqStmt->fetch();
+        if (!$req) {
+            $this->notFound();
+        }
+
+        if ($req['request_status'] !== 'Pending') {
+            $this->flash('error', 'This request has already been reviewed.');
+            $this->redirect($invRedirect);
+        }
+
+        $decision = trim((string)($_POST['decision'] ?? ''));
+        if (!in_array($decision, ['approve', 'reject'], true)) {
+            $this->flash('error', 'Invalid review action.');
+            $this->redirect($invRedirect);
+        }
+
+        $reviewNotes = trim((string)($_POST['review_notes'] ?? ''));
+        $newStatus = ($decision === 'approve') ? 'Approved' : 'Rejected';
+
+        $stmt = $this->db->prepare(
+            "UPDATE purchase_order_request
+             SET request_status = ?, reviewed_by_employee_id = ?, reviewed_at = NOW(), review_notes = ?
+             WHERE request_id = ?"
+        );
+        $stmt->execute([$newStatus, $employeeId, $reviewNotes ?: null, $requestId]);
+
+        Audit::log('inventory.po_request.review', "Review decision '{$newStatus}' recorded for request #{$req['request_number']}.", $unitId, 'purchase_order_request', $requestId, $uid);
+        $this->flash('success', "Purchase order request #{$req['request_number']} has been {$newStatus}.");
+        $this->redirect($invRedirect);
+    }
+
     // ==========================================
     // 5. EMPLOYEES PAGE (READ-ONLY)
     // ==========================================
     public function employees(?int $routeUnitId = null): void
     {
-        [, , $unitId, $unitName, $isSuper] = $this->checkBusinessManager($routeUnitId);
+        [$uid, $employeeId, $unitId, $unitName, $isSuper, $isInventoryManagerOnly, $isTempKeyAccess] = $this->checkManagerOrInventoryManager($routeUnitId);
+
+        if ($isTempKeyAccess) {
+            $this->forbidden('Temporary inventory access keys do not grant access to the employee roster.');
+        }
+
+        if ($isInventoryManagerOnly && (int)$unitId !== 1) {
+            $this->forbidden('Access denied: you cannot access another business unit.');
+        }
 
         $q = trim((string)($_GET['q'] ?? ''));
         $posFilter = trim((string)($_GET['position'] ?? ''));
@@ -3974,6 +4209,7 @@ final class ManagerController extends Controller
             'unitId' => $unitId,
             'unitName' => $unitName,
             'isSuper' => $isSuper,
+            'isInventoryManagerOnly' => $isInventoryManagerOnly,
             'allUnits' => $isSuper ? Units::all() : [],
             'employees' => $employees,
             'allEmployees' => $allEmployees,
@@ -3985,6 +4221,122 @@ final class ManagerController extends Controller
             'searchQuery' => $q,
             'positionFilter' => $posFilter,
             'workStatusFilter' => $wsFilter,
+        ]);
+    }
+
+    // ==========================================
+    // 5B. ORDERS PAGE (READ-ONLY MONITORING FOR INVENTORY MANAGER & BM)
+    // ==========================================
+    public function orders(?int $routeUnitId = null): void
+    {
+        [$uid, $employeeId, $unitId, $unitName, $isSuper, $isInventoryManagerOnly, $isTempKeyAccess] = $this->checkManagerOrInventoryManager($routeUnitId);
+
+        if ($isTempKeyAccess) {
+            $this->forbidden('Temporary inventory access keys do not grant access to customer orders.');
+        }
+
+        if ((int)$unitId !== 1) {
+            $this->forbidden('The orders monitoring page is available for Pet Store only.');
+        }
+
+        $typeFilter = strtolower(trim((string)($_GET['type'] ?? 'all')));
+        if (!in_array($typeFilter, ['all', 'pickup', 'delivery'], true)) {
+            $typeFilter = 'all';
+        }
+
+        $statusFilter = strtolower(trim((string)($_GET['status'] ?? 'all')));
+        $allowedStatuses = ['all', 'pending', 'confirmed', 'processing', 'ready_for_pickup', 'out_for_delivery', 'completed', 'cancelled', 'delivery_failed'];
+        if (!in_array($statusFilter, $allowedStatuses, true)) {
+            $statusFilter = 'all';
+        }
+
+        $dateFrom = trim((string)($_GET['date_from'] ?? ''));
+        $dateTo = trim((string)($_GET['date_to'] ?? ''));
+        $q = trim((string)($_GET['q'] ?? ''));
+
+        $sql = "SELECT co.*, CONCAT(c.first_name, ' ', c.last_name) AS customer_name,
+                       ua.email AS customer_email, c.phone AS customer_phone,
+                       p.payment_method, p.payment_status,
+                       CONCAT(deliv_emp.first_name, ' ', deliv_emp.last_name) AS delivery_employee_name
+                FROM customer_order co
+                JOIN customer c ON c.customer_id = co.customer_id
+                LEFT JOIN user_account ua ON ua.user_account_id = c.user_account_id
+                LEFT JOIN payment p ON p.order_id = co.order_id
+                LEFT JOIN employee deliv_emp ON deliv_emp.employee_id = co.delivery_employee_id
+                WHERE co.business_unit_id = ?";
+        $params = [$unitId];
+
+        if ($typeFilter !== 'all') {
+            $sql .= " AND co.fulfillment_method = ?";
+            $params[] = $typeFilter;
+        }
+
+        if ($statusFilter !== 'all') {
+            $sql .= " AND co.order_status = ?";
+            $params[] = $statusFilter;
+        }
+
+        if ($dateFrom !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateFrom)) {
+            $sql .= " AND DATE(co.order_date) >= ?";
+            $params[] = $dateFrom;
+        }
+        if ($dateTo !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateTo)) {
+            $sql .= " AND DATE(co.order_date) <= ?";
+            $params[] = $dateTo;
+        }
+
+        if ($q !== '') {
+            $cleanQ = ltrim($q, '#');
+            if (str_starts_with(strtoupper($cleanQ), 'ORD-')) {
+                $cleanQ = substr($cleanQ, 4);
+            }
+            $isNum = ctype_digit($cleanQ);
+            $sql .= " AND (co.order_id = ? OR c.first_name LIKE ? OR c.last_name LIKE ? OR ua.email LIKE ? OR c.phone LIKE ?)";
+            $params[] = $isNum ? (int)$cleanQ : 0;
+            $params[] = "%$q%";
+            $params[] = "%$q%";
+            $params[] = "%$q%";
+            $params[] = "%$q%";
+        }
+
+        $sql .= " ORDER BY co.order_date DESC, co.order_id DESC";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute($params);
+        $orders = $stmt->fetchAll();
+
+        foreach ($orders as &$order) {
+            $itStmt = $this->db->prepare(
+                "SELECT oi.order_item_id, oi.quantity, oi.unit_price,
+                        p.product_name, p.sku
+                 FROM order_item oi
+                 JOIN business_product bp ON bp.business_product_id = oi.business_product_id
+                 JOIN product p ON p.product_id = bp.product_id
+                 WHERE oi.order_id = ?
+                 ORDER BY oi.order_item_id"
+            );
+            $itStmt->execute([(int)$order['order_id']]);
+            $order['items'] = $itStmt->fetchAll();
+
+            // Strict privacy: For Delivery Failed orders, Inventory Manager sees status but never internal failure reasons
+            if ($isInventoryManagerOnly) {
+                $order['delivery_failure_reason'] = null;
+            }
+        }
+        unset($order);
+
+        $this->render('manager/orders', [
+            'title' => 'Orders · Pet Store',
+            'activeTab' => 'orders',
+            'unitId' => $unitId,
+            'unitName' => $unitName,
+            'isSuper' => $isSuper,
+            'isInventoryManagerOnly' => $isInventoryManagerOnly,
+            'orders' => $orders,
+            'typeFilter' => $typeFilter,
+            'statusFilter' => $statusFilter,
+            'dateFrom' => $dateFrom,
+            'dateTo' => $dateTo,
+            'searchQuery' => $q,
         ]);
     }
 

@@ -80,8 +80,8 @@ $isInvManager = !empty($isInventoryManagerOnly);
       </form>
 
       <?php if ($isInvManager): ?>
-        <button type="button" class="btn secondary btn-sm" disabled title="The Request Order workflow is managed via procurement and not configured for this interface.">
-          Request Order
+        <button type="button" class="btn secondary btn-sm" data-modal-open="po-request-modal">
+          Request Purchase Order
         </button>
       <?php endif; ?>
     </div>
@@ -320,6 +320,87 @@ $isInvManager = !empty($isInventoryManagerOnly);
   <?php endforeach; ?>
 
 <?php else: ?>
+  <!-- PURCHASE ORDER REQUESTS SECTION -->
+  <section class="card" style="margin-bottom: 1.5rem;">
+    <div class="row" style="justify-content: space-between; align-items: baseline; margin-bottom: 1rem;">
+      <div>
+        <h2 style="margin: 0;">Purchase Order Requests (<?= count($purchaseOrderRequests ?? []) ?>)</h2>
+        <p class="caption" style="margin: 0.2rem 0 0 0;">
+          <?php if ($isInvManager): ?>
+            Stock replenishment requisitions submitted for Business Manager review and approval.
+          <?php else: ?>
+            Stock replenishment requests submitted by the Inventory Manager awaiting review and purchase order generation.
+          <?php endif; ?>
+        </p>
+      </div>
+      <div>
+        <?php if ($isInvManager): ?>
+          <button type="button" class="btn primary btn-sm" data-modal-open="po-request-modal">
+            Request Purchase Order
+          </button>
+        <?php endif; ?>
+      </div>
+    </div>
+
+    <?php if (empty($purchaseOrderRequests)): ?>
+      <div class="empty">No purchase order requests found. Use "Request Purchase Order" to submit a stock replenishment requisition.</div>
+    <?php else: ?>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Request #</th>
+              <th>Date</th>
+              <th>Requester</th>
+              <th>Reason</th>
+              <th>Items</th>
+              <th>Priority</th>
+              <th>Status</th>
+              <th style="text-align: right;">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            <?php foreach ($purchaseOrderRequests as $por): ?>
+              <tr>
+                <td><strong><?= e($por['request_number']) ?></strong></td>
+                <td><?= e(date('M j, Y', strtotime((string)$por['request_date']))) ?></td>
+                <td><?= e($por['requester_name']) ?></td>
+                <td><?= e($por['reason']) ?></td>
+                <td><?= (int)$por['total_items'] ?> item(s) (<?= (int)$por['total_qty_requested'] ?> units)</td>
+                <td>
+                  <?php
+                  $prio = (string)$por['priority'];
+                  $prioClass = in_array($prio, ['High', 'Urgent'], true) ? 'badge-danger' : ($prio === 'Medium' ? 'badge-warning' : 'secondary');
+                  ?>
+                  <span class="badge <?= $prioClass ?>"><?= e($prio) ?></span>
+                </td>
+                <td>
+                  <?php
+                  $rst = (string)$por['request_status'];
+                  $rClass = $rst === 'Approved' ? 'badge-success' : ($rst === 'Rejected' ? 'badge-danger' : 'badge-warning');
+                  ?>
+                  <span class="badge <?= $rClass ?>"><?= e($rst) ?></span>
+                </td>
+                <td style="text-align: right;">
+                  <div class="row" style="gap: 0.35rem; justify-content: flex-end;">
+                    <button type="button" class="btn ghost btn-sm" data-modal-open="view-por-<?= (int)$por['request_id'] ?>">
+                      View Details
+                    </button>
+                    <?php if (!$isInvManager && $por['request_status'] === 'Pending'): ?>
+                      <button type="button" class="btn secondary btn-sm" data-modal-open="review-por-<?= (int)$por['request_id'] ?>">
+                        Review
+                      </button>
+                    <?php endif; ?>
+                  </div>
+                </td>
+              </tr>
+            <?php endforeach; ?>
+          </tbody>
+        </table>
+      </div>
+    <?php endif; ?>
+  </section>
+
   <!-- PURCHASE ORDERS & RECEIVING TABLE -->
   <section class="card">
     <div class="row" style="justify-content: space-between; align-items: baseline; margin-bottom: 1rem;">
@@ -331,6 +412,10 @@ $isInvManager = !empty($isInventoryManagerOnly);
         <?php if (!$isInvManager): ?>
           <button type="button" class="btn primary btn-sm" data-modal-open="po-create-modal">
             + Purchase Order
+          </button>
+        <?php else: ?>
+          <button type="button" class="btn secondary btn-sm" data-modal-open="po-request-modal">
+            Request Purchase Order
           </button>
         <?php endif; ?>
       </div>
@@ -556,6 +641,135 @@ $isInvManager = !empty($isInventoryManagerOnly);
       </div>
     </dialog>
   <?php endforeach; ?>
+
+  <!-- Purchase Order Request Details & Review Modals -->
+  <?php foreach ($purchaseOrderRequests as $por): ?>
+    <dialog class="modal modal-wide" id="view-por-<?= (int)$por['request_id'] ?>" aria-labelledby="view-por-title-<?= (int)$por['request_id'] ?>">
+      <div class="modal-head">
+        <div>
+          <span class="badge" style="background: #e0f2fe; color: #0369a1; margin-bottom: 0.25rem;">Purchase Order Request</span>
+          <h3 id="view-por-title-<?= (int)$por['request_id'] ?>" style="margin: 0;"><?= e($por['request_number']) ?></h3>
+        </div>
+        <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="grid grid-2" style="gap: 1rem; margin-bottom: 1.5rem; background: var(--bg-subtle, #f9fafb); padding: 1rem; border-radius: 6px;">
+          <div>
+            <p style="margin: 0 0 0.25rem 0;" class="caption">Request Number</p>
+            <strong><?= e($por['request_number']) ?></strong>
+
+            <p style="margin: 0.5rem 0 0.25rem 0;" class="caption">Date Submitted</p>
+            <div><?= e(date('F j, Y · g:i A', strtotime((string)$por['request_date']))) ?></div>
+
+            <p style="margin: 0.5rem 0 0.25rem 0;" class="caption">Status</p>
+            <div>
+              <?php
+              $rst = (string)$por['request_status'];
+              $rClass = $rst === 'Approved' ? 'badge-success' : ($rst === 'Rejected' ? 'badge-danger' : 'badge-warning');
+              ?>
+              <span class="badge <?= $rClass ?>"><?= e($rst) ?></span>
+            </div>
+          </div>
+          <div>
+            <p style="margin: 0 0 0.25rem 0;" class="caption">Requester</p>
+            <strong><?= e($por['requester_name']) ?></strong>
+
+            <p style="margin: 0.5rem 0 0.25rem 0;" class="caption">Reason &amp; Priority</p>
+            <div><strong><?= e($por['reason']) ?></strong> · <span class="badge secondary"><?= e($por['priority']) ?> Priority</span></div>
+
+            <?php if (!empty($por['needed_by_date'])): ?>
+              <p style="margin: 0.5rem 0 0.25rem 0;" class="caption">Needed by Date</p>
+              <div><?= e(date('M j, Y', strtotime((string)$por['needed_by_date']))) ?></div>
+            <?php endif; ?>
+
+            <?php if (!empty($por['reviewer_name'])): ?>
+              <p style="margin: 0.5rem 0 0.25rem 0;" class="caption">Reviewed By</p>
+              <div><strong><?= e($por['reviewer_name']) ?></strong> on <?= e(date('M j, Y · g:i A', strtotime((string)$por['reviewed_at']))) ?></div>
+              <?php if (!empty($por['review_notes'])): ?>
+                <div class="caption">Review Notes: <?= e($por['review_notes']) ?></div>
+              <?php endif; ?>
+            <?php endif; ?>
+          </div>
+        </div>
+
+        <h4 style="margin: 1rem 0 0.5rem 0;">Requested Products</h4>
+        <div class="table-wrap" style="margin-bottom: 1.5rem;">
+          <table>
+            <thead>
+              <tr>
+                <th>Product</th>
+                <th>SKU</th>
+                <th>Requested Qty</th>
+                <th>On Hand</th>
+                <th>Committed</th>
+                <th>Available</th>
+              </tr>
+            </thead>
+            <tbody>
+              <?php foreach ($por['items'] as $it): ?>
+                <tr>
+                  <td><strong><?= e($it['product_name']) ?></strong></td>
+                  <td><code><?= e($it['sku'] ?: '—') ?></code></td>
+                  <td><strong><?= (int)$it['quantity_requested'] ?></strong></td>
+                  <td><?= (int)$it['on_hand'] ?></td>
+                  <td><?= (int)$it['committed'] ?></td>
+                  <td><strong><?= (int)$it['available'] ?></strong></td>
+                </tr>
+              <?php endforeach; ?>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn ghost btn-sm" data-modal-close>Close</button>
+      </div>
+    </dialog>
+
+    <?php if (!$isInvManager && $por['request_status'] === 'Pending'): ?>
+      <dialog class="modal" id="review-por-<?= (int)$por['request_id'] ?>" aria-labelledby="review-por-title-<?= (int)$por['request_id'] ?>">
+        <div class="modal-head">
+          <div>
+            <span class="badge secondary" style="margin-bottom: 0.25rem;">Business Manager Review</span>
+            <h3 id="review-por-title-<?= (int)$por['request_id'] ?>" style="margin: 0;">Review <?= e($por['request_number']) ?></h3>
+          </div>
+          <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p style="margin-bottom: 1rem;">
+            Review stock requisition submitted by <strong><?= e($por['requester_name']) ?></strong> for <strong><?= (int)$por['total_items'] ?> product(s)</strong> (<?= (int)$por['total_qty_requested'] ?> units).
+          </p>
+
+          <form method="post" action="/manager/inventory/purchase-order-requests/<?= (int)$por['request_id'] ?>/review<?= $unitQuery ?>">
+            <?= \App\Core\CSRF::field() ?>
+
+            <div class="field">
+              <label class="caption" style="display: block; margin-bottom: 0.5rem;">Review Decision</label>
+              <div class="row" style="gap: 1.5rem;">
+                <label style="display: flex; align-items: center; gap: 0.4rem; cursor: pointer;">
+                  <input type="radio" name="decision" value="approve" checked>
+                  <strong>Approve Requisition</strong>
+                </label>
+                <label style="display: flex; align-items: center; gap: 0.4rem; cursor: pointer;">
+                  <input type="radio" name="decision" value="reject">
+                  <strong style="color: var(--danger, #dc2626);">Reject Requisition</strong>
+                </label>
+              </div>
+            </div>
+
+            <div class="field" style="margin-top: 1rem;">
+              <label for="review-notes-<?= (int)$por['request_id'] ?>" class="caption" style="display: block; margin-bottom: 0.25rem;">Review Notes (Optional)</label>
+              <textarea id="review-notes-<?= (int)$por['request_id'] ?>" name="review_notes" rows="3" style="width: 100%;" placeholder="e.g. Approved for procurement from vendor"></textarea>
+            </div>
+
+            <div class="modal-foot" style="margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--border, #e5e7eb); display: flex; justify-content: flex-end; gap: 0.5rem;">
+              <button type="button" class="btn ghost btn-sm" data-modal-close>Cancel</button>
+              <button type="submit" class="btn primary btn-sm">Submit Decision</button>
+            </div>
+          </form>
+        </div>
+      </dialog>
+    <?php endif; ?>
+  <?php endforeach; ?>
 <?php endif; ?>
 
 <!-- MULTI-STEP PURCHASE ORDER CREATION MODAL -->
@@ -671,6 +885,307 @@ $isInvManager = !empty($isInventoryManagerOnly);
     </option>
   <?php endforeach; ?>
 </template>
+
+<!-- PURCHASE ORDER REQUEST MODAL (FOR INVENTORY MANAGER & BM) -->
+<dialog class="modal modal-wide" id="po-request-modal" aria-labelledby="por-modal-title">
+  <div class="modal-head">
+    <div>
+      <span class="badge" style="background: #e0f2fe; color: #0369a1; margin-bottom: 0.25rem;">Stock Requisition</span>
+      <h3 id="por-modal-title" style="margin: 0;">Request Purchase Order</h3>
+    </div>
+    <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close">&times;</button>
+  </div>
+  <div class="modal-body">
+    <p class="caption" style="margin-bottom: 1.25rem;">
+      Submit a stock replenishment requisition for Business Manager review. Submitting a request does not increase inventory, reserve stock, or issue an actual purchase order until approved.
+    </p>
+
+    <form method="post" action="/manager/inventory/purchase-order-requests<?= $unitQuery ?>" id="por-form">
+      <?= \App\Core\CSRF::field() ?>
+
+      <!-- Request Meta Details -->
+      <div class="grid grid-2" style="gap: 1rem; margin-bottom: 1.25rem; background: var(--bg-subtle, #f9fafb); padding: 1rem; border-radius: 6px;">
+        <div>
+          <span class="caption" style="display: block;">Request Number</span>
+          <code style="font-weight: 600; color: var(--primary, #0284c7);">System-generated upon submission</code>
+
+          <span class="caption" style="display: block; margin-top: 0.5rem;">Request Date</span>
+          <strong><?= e(date('F j, Y')) ?></strong>
+        </div>
+        <div>
+          <span class="caption" style="display: block;">Requester</span>
+          <strong><?= e($currentEmployeeName ?? 'Current Employee') ?></strong>
+
+          <span class="caption" style="display: block; margin-top: 0.5rem;">Business Unit</span>
+          <strong><?= e($unitName) ?></strong>
+        </div>
+      </div>
+
+      <!-- Requested Products -->
+      <h4 style="margin: 1rem 0 0.5rem 0;">Requested Products</h4>
+      <p class="caption" style="margin-bottom: 0.75rem;">Select products and enter requested quantities. Current inventory stock levels (On Hand, Committed, Available) are displayed for reference.</p>
+
+      <div id="por-items-container" style="margin-bottom: 1rem;">
+        <!-- Dynamically populated rows -->
+      </div>
+
+      <div style="margin-bottom: 1.5rem;">
+        <button type="button" class="btn secondary btn-sm" id="por-add-product-btn">
+          + Add Product
+        </button>
+      </div>
+
+      <!-- Reason & Priority -->
+      <div class="grid grid-2" style="gap: 1rem; margin-bottom: 1rem;">
+        <div class="field" style="margin: 0;">
+          <label for="por-reason" class="caption" style="display: block; margin-bottom: 0.25rem;">Reason for Request <span style="color: var(--danger, #dc2626);">*</span></label>
+          <select id="por-reason" name="reason" required style="width: 100%;">
+            <option value="">Select a reason...</option>
+            <option value="Low stock replenishment">Low stock replenishment</option>
+            <option value="Out of stock emergency">Out of stock emergency</option>
+            <option value="Upcoming seasonal demand">Upcoming seasonal demand</option>
+            <option value="Anticipated customer pre-orders">Anticipated customer pre-orders</option>
+            <option value="Supplier minimum order quantity threshold">Supplier minimum order quantity threshold</option>
+            <option value="Routine stock replenishment">Routine stock replenishment</option>
+          </select>
+        </div>
+
+        <div class="field" style="margin: 0;">
+          <label for="por-priority" class="caption" style="display: block; margin-bottom: 0.25rem;">Priority</label>
+          <select id="por-priority" name="priority" style="width: 100%;">
+            <option value="Low">Low</option>
+            <option value="Medium" selected>Medium</option>
+            <option value="High">High</option>
+            <option value="Urgent">Urgent</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="grid grid-2" style="gap: 1rem; margin-bottom: 1.5rem;">
+        <div class="field" style="margin: 0;">
+          <label for="por-needed-by" class="caption" style="display: block; margin-bottom: 0.25rem;">Needed-by Date (Optional)</label>
+          <input id="por-needed-by" name="needed_by_date" type="date" min="<?= date('Y-m-d') ?>" style="width: 100%;">
+        </div>
+
+        <div class="field" style="margin: 0;">
+          <label for="por-notes" class="caption" style="display: block; margin-bottom: 0.25rem;">Additional Notes (Optional)</label>
+          <input id="por-notes" name="notes" type="text" placeholder="e.g. Preferred delivery window or special notes" style="width: 100%;">
+        </div>
+      </div>
+
+      <div class="modal-foot" style="display: flex; justify-content: flex-end; gap: 0.5rem; padding-top: 1rem; border-top: 1px solid var(--border, #e5e7eb);">
+        <button type="button" class="btn ghost" data-modal-close>Cancel</button>
+        <button type="submit" class="btn primary" id="por-submit-btn" disabled>
+          Submit Purchase Order Request
+        </button>
+      </div>
+    </form>
+  </div>
+</dialog>
+
+<!-- Datalist for Request Product Selection (Product Name & Specifications only, NO SKU and NO on-hand/committed/available) -->
+<datalist id="por-products-datalist">
+  <?php
+    $uniqueNames = [];
+    foreach ($catalogProducts as $cp):
+      $name = trim((string)$cp['product_name']);
+      if ($name === '' || isset($uniqueNames[$name])) continue;
+      $uniqueNames[$name] = true;
+  ?>
+    <option value="<?= e($name) ?>"></option>
+  <?php endforeach; ?>
+</datalist>
+
+<!-- Datalist for Product SKU -->
+<datalist id="por-skus-datalist">
+  <?php
+    $uniqueSkus = [];
+    foreach ($catalogProducts as $cp):
+      $sku = trim((string)($cp['sku'] ?? ''));
+      if ($sku === '' || isset($uniqueSkus[$sku])) continue;
+      $uniqueSkus[$sku] = true;
+  ?>
+    <option value="<?= e($sku) ?>"></option>
+  <?php endforeach; ?>
+</datalist>
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    var porItemsContainer = document.getElementById('por-items-container');
+    var porAddBtn = document.getElementById('por-add-product-btn');
+    var porSubmitBtn = document.getElementById('por-submit-btn');
+    var porReasonSelect = document.getElementById('por-reason');
+    var porItemIndex = 0;
+
+    var porCatalog = <?= json_encode(array_values(array_map(function($cp) {
+        return [
+            'id' => (int)$cp['business_product_id'],
+            'name' => (string)$cp['product_name'],
+            'sku' => (string)($cp['sku'] ?? ''),
+            'on_hand' => (int)$cp['on_hand'],
+            'committed' => (int)$cp['committed'],
+            'available' => (int)$cp['available'],
+        ];
+    }, $catalogProducts)), JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>;
+
+    function findProductByName(name) {
+      if (!name) return null;
+      var term = name.trim().toLowerCase();
+      for (var i = 0; i < porCatalog.length; i++) {
+        if (porCatalog[i].name.toLowerCase() === term) {
+          return porCatalog[i];
+        }
+      }
+      return null;
+    }
+
+    function findProductBySku(sku) {
+      if (!sku) return null;
+      var term = sku.trim().toLowerCase();
+      for (var i = 0; i < porCatalog.length; i++) {
+        if (porCatalog[i].sku.toLowerCase() === term) {
+          return porCatalog[i];
+        }
+      }
+      return null;
+    }
+
+    function checkPorValidity() {
+      if (!porItemsContainer || !porSubmitBtn) return;
+      var rows = porItemsContainer.querySelectorAll('.por-item-row');
+      var hasValidProduct = false;
+      rows.forEach(function(row) {
+        var bpidInput = row.querySelector('.por-bpid-input');
+        var qtyInput = row.querySelector('.por-qty-input');
+        if (bpidInput && parseInt(bpidInput.value, 10) > 0 && qtyInput && parseInt(qtyInput.value, 10) > 0) {
+          hasValidProduct = true;
+        }
+      });
+      var reasonValid = porReasonSelect && porReasonSelect.value !== '';
+      porSubmitBtn.disabled = !(hasValidProduct && reasonValid);
+    }
+
+    function addPorRow() {
+      if (!porItemsContainer) return;
+      var idx = porItemIndex++;
+      var row = document.createElement('div');
+      row.className = 'por-item-row';
+      row.style.cssText = 'display: flex; gap: 0.65rem; align-items: flex-end; margin-bottom: 0.75rem; background: var(--bg-subtle, #f9fafb); padding: 0.85rem; border-radius: 6px; border: 1px solid var(--border, #e5e7eb); flex-wrap: wrap;';
+
+      row.innerHTML = '' +
+        '<input type="hidden" name="items[' + idx + '][business_product_id]" class="por-bpid-input" value="">' +
+        '<div style="flex: 2; min-width: 220px;">' +
+          '<label class="caption" style="display: block; margin-bottom: 0.25rem;">Product Name &amp; Specifications</label>' +
+          '<input type="text" list="por-products-datalist" class="por-prod-search" placeholder="Type product name or specs..." autocomplete="off" style="width: 100%;">' +
+        '</div>' +
+        '<div style="width: 150px;">' +
+          '<label class="caption" style="display: block; margin-bottom: 0.25rem;">SKU</label>' +
+          '<input type="text" list="por-skus-datalist" class="por-sku-input" placeholder="e.g. SKU-..." autocomplete="off" style="width: 100%; font-family: monospace;">' +
+        '</div>' +
+        '<div style="width: 75px;">' +
+          '<label class="caption" style="display: block; margin-bottom: 0.25rem; text-align: center;">On Hand</label>' +
+          '<input type="text" class="por-onhand-input" readonly placeholder="0" style="width: 100%; text-align: center; background: var(--bg-subtle, #f3f4f6); font-weight: 600;">' +
+        '</div>' +
+        '<div style="width: 75px;">' +
+          '<label class="caption" style="display: block; margin-bottom: 0.25rem; text-align: center;">Committed</label>' +
+          '<input type="text" class="por-committed-input" readonly placeholder="0" style="width: 100%; text-align: center; background: var(--bg-subtle, #f3f4f6); font-weight: 600;">' +
+        '</div>' +
+        '<div style="width: 75px;">' +
+          '<label class="caption" style="display: block; margin-bottom: 0.25rem; text-align: center;">Available</label>' +
+          '<input type="text" class="por-available-input" readonly placeholder="0" style="width: 100%; text-align: center; background: var(--bg-subtle, #f3f4f6); font-weight: 700; color: var(--primary, #0284c7);">' +
+        '</div>' +
+        '<div style="width: 85px;">' +
+          '<label class="caption" style="display: block; margin-bottom: 0.25rem; text-align: center;">Quantity</label>' +
+          '<input type="number" name="items[' + idx + '][quantity_requested]" class="por-qty-input" min="1" value="10" required style="width: 100%; text-align: center;">' +
+        '</div>' +
+        '<div style="flex: 1; min-width: 130px;">' +
+          '<label class="caption" style="display: block; margin-bottom: 0.25rem;">Notes (Optional)</label>' +
+          '<input type="text" name="items[' + idx + '][notes]" class="por-notes-input" placeholder="Optional notes" style="width: 100%;">' +
+        '</div>' +
+        '<div style="padding-bottom: 2px;">' +
+          '<button type="button" class="btn ghost btn-sm por-remove-row-btn" style="color: var(--danger, #dc2626);" title="Remove product">&times;</button>' +
+        '</div>';
+
+      porItemsContainer.appendChild(row);
+
+      var prodInput = row.querySelector('.por-prod-search');
+      var skuInput = row.querySelector('.por-sku-input');
+      var bpidInput = row.querySelector('.por-bpid-input');
+      var onHandInput = row.querySelector('.por-onhand-input');
+      var committedInput = row.querySelector('.por-committed-input');
+      var availableInput = row.querySelector('.por-available-input');
+      var qtyInput = row.querySelector('.por-qty-input');
+      var removeBtn = row.querySelector('.por-remove-row-btn');
+
+      function syncFromProduct() {
+        var p = findProductByName(prodInput.value);
+        if (p) {
+          bpidInput.value = p.id;
+          skuInput.value = p.sku;
+          onHandInput.value = p.on_hand;
+          committedInput.value = p.committed;
+          availableInput.value = p.available;
+        } else if (prodInput.value.trim() === '') {
+          bpidInput.value = '';
+          skuInput.value = '';
+          onHandInput.value = '';
+          committedInput.value = '';
+          availableInput.value = '';
+        }
+        checkPorValidity();
+      }
+
+      function syncFromSku() {
+        var p = findProductBySku(skuInput.value);
+        if (p) {
+          bpidInput.value = p.id;
+          prodInput.value = p.name;
+          onHandInput.value = p.on_hand;
+          committedInput.value = p.committed;
+          availableInput.value = p.available;
+        } else if (skuInput.value.trim() === '') {
+          bpidInput.value = '';
+          onHandInput.value = '';
+          committedInput.value = '';
+          availableInput.value = '';
+        }
+        checkPorValidity();
+      }
+
+      prodInput.addEventListener('input', syncFromProduct);
+      prodInput.addEventListener('change', syncFromProduct);
+
+      skuInput.addEventListener('input', syncFromSku);
+      skuInput.addEventListener('change', syncFromSku);
+
+      qtyInput.addEventListener('input', checkPorValidity);
+      qtyInput.addEventListener('change', checkPorValidity);
+
+      removeBtn.addEventListener('click', function() {
+        row.remove();
+        checkPorValidity();
+      });
+
+      checkPorValidity();
+    }
+
+    if (porAddBtn) {
+      porAddBtn.addEventListener('click', addPorRow);
+    }
+    if (porReasonSelect) {
+      porReasonSelect.addEventListener('change', checkPorValidity);
+    }
+
+    // Auto-seed one product row when opening modal
+    document.querySelectorAll('[data-modal-open="po-request-modal"]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        if (porItemsContainer && porItemsContainer.children.length === 0) {
+          addPorRow();
+        }
+      });
+    });
+  });
+</script>
 
 <?php if (!empty($canManageInventoryKey) && !empty($activeInventoryKey)): ?>
   <?php

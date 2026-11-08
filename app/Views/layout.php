@@ -69,6 +69,7 @@ $authorizedInterfaces = [];
 $activeUnitId = isset($_GET['unit_id']) && ctype_digit((string)$_GET['unit_id'])
     ? (int)$_GET['unit_id']
     : (isset($unitId) && is_numeric($unitId) ? (int)$unitId : ($sysAdminUnitId ?: 1));
+$currentUnitId = $activeUnitId;
 
 if ($isSignedIn && $baseContext === 'employee') {
     $allBusinessUnits = [
@@ -78,6 +79,8 @@ if ($isSignedIn && $baseContext === 'employee') {
     ];
 
     if ($isSuperAdmin) {
+        $isInvMode = !empty(\App\Core\Session::get('inventory_manager_mode'));
+
         $authorizedInterfaces[] = [
             'id' => 'super-admin',
             'label' => 'Super Administrator',
@@ -105,7 +108,18 @@ if ($isSignedIn && $baseContext === 'employee') {
                 'name' => $u['name'],
                 'url' => '/switch-interface?target=manager&unit_id=' . $u['id'],
             ], $allBusinessUnits),
-            'active' => str_starts_with($curPath, '/manager') && $activeContext !== 'customer',
+            'active' => str_starts_with($curPath, '/manager') && $activeContext !== 'customer' && !$isInvMode,
+        ];
+        $authorizedInterfaces[] = [
+            'id' => 'inventory-manager',
+            'label' => 'Inventory Manager',
+            'hasUnits' => true,
+            'units' => array_map(fn($u) => [
+                'id' => $u['id'],
+                'name' => $u['name'],
+                'url' => '/switch-interface?target=inventory-manager&unit_id=' . $u['id'],
+            ], $allBusinessUnits),
+            'active' => str_starts_with($curPath, '/manager') && $activeContext !== 'customer' && $isInvMode,
         ];
         $authorizedInterfaces[] = [
             'id' => 'employee',

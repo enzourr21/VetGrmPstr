@@ -33,24 +33,37 @@ $isTempInv = !empty($isTempKeyAccess);
 <?php else: ?>
 <div class="admin-workspace-banner">
   <div class="row" style="gap: 0.75rem;">
-    <span class="unit-pill">BUSINESS MANAGER · <?= e(strtoupper($unitName)) ?></span>
-    <span class="caption">
-      <?= e($unitName) ?> Business Manager Dashboard · Scoped to Unit #<?= (int)$unitId ?> · <?= e(\App\Core\Session::get('email', '')) ?>
-    </span>
+    <?php if (!empty($isInventoryManagerOnly)): ?>
+      <span class="unit-pill">INVENTORY MANAGER · <?= e(strtoupper($unitName)) ?></span>
+      <span class="caption">
+        <?= e($unitName) ?> Inventory Manager Workspace · Scoped to Unit #<?= (int)$unitId ?> · <?= e(\App\Core\Session::get('email', '')) ?>
+      </span>
+    <?php else: ?>
+      <span class="unit-pill">BUSINESS MANAGER · <?= e(strtoupper($unitName)) ?></span>
+      <span class="caption">
+        <?= e($unitName) ?> Business Manager Dashboard · Scoped to Unit #<?= (int)$unitId ?> · <?= e(\App\Core\Session::get('email', '')) ?>
+      </span>
+    <?php endif; ?>
   </div>
 </div>
 
 <?php if ($isPetStore): ?>
-  <nav class="admin-subnav" aria-label="Pet Store Business Manager navigation">
-    <a href="/manager<?= $unitQuery ?>" class="segmented-pill <?= $tab === 'overview' ? 'is-active' : '' ?>">Overview</a>
-    <a href="/manager/sales<?= $unitQuery ?>" class="segmented-pill <?= $tab === 'sales' ? 'is-active' : '' ?>">Sales</a>
-    <a href="/manager/products<?= $unitQuery ?>" class="segmented-pill <?= $tab === 'products' ? 'is-active' : '' ?>">Products</a>
-    <a href="/manager/inventory<?= $unitQuery ?>" class="segmented-pill <?= $tab === 'inventory' ? 'is-active' : '' ?>">Inventory</a>
-    <a href="/manager/employees<?= $unitQuery ?>" class="segmented-pill <?= $tab === 'employees' ? 'is-active' : '' ?>">Employees</a>
-    <?php if (empty($isInventoryManagerOnly)): ?>
+  <?php if (!empty($isInventoryManagerOnly)): ?>
+    <nav class="admin-subnav" aria-label="Pet Store Inventory Manager navigation">
+      <a href="/manager/orders<?= $unitQuery ?>" class="segmented-pill <?= $tab === 'orders' ? 'is-active' : '' ?>">Orders</a>
+      <a href="/manager/inventory<?= $unitQuery ?>" class="segmented-pill <?= $tab === 'inventory' ? 'is-active' : '' ?>">Inventory</a>
+      <a href="/manager/employees<?= $unitQuery ?>" class="segmented-pill <?= $tab === 'employees' ? 'is-active' : '' ?>">Employees</a>
+    </nav>
+  <?php else: ?>
+    <nav class="admin-subnav" aria-label="Pet Store Business Manager navigation">
+      <a href="/manager<?= $unitQuery ?>" class="segmented-pill <?= $tab === 'overview' ? 'is-active' : '' ?>">Overview</a>
+      <a href="/manager/sales<?= $unitQuery ?>" class="segmented-pill <?= $tab === 'sales' ? 'is-active' : '' ?>">Sales</a>
+      <a href="/manager/products<?= $unitQuery ?>" class="segmented-pill <?= $tab === 'products' ? 'is-active' : '' ?>">Products</a>
+      <a href="/manager/inventory<?= $unitQuery ?>" class="segmented-pill <?= $tab === 'inventory' ? 'is-active' : '' ?>">Inventory</a>
+      <a href="/manager/employees<?= $unitQuery ?>" class="segmented-pill <?= $tab === 'employees' ? 'is-active' : '' ?>">Employees</a>
       <a href="/manager/settings<?= $unitQuery ?>" class="segmented-pill <?= $tab === 'settings' ? 'is-active' : '' ?>">Business Settings</a>
-    <?php endif; ?>
-  </nav>
+    </nav>
+  <?php endif; ?>
 <?php elseif ($isVetClinic): ?>
   <nav class="admin-subnav" aria-label="Veterinary Clinic Business Manager navigation">
     <a href="/manager<?= $unitQuery ?>" class="segmented-pill <?= $tab === 'overview' ? 'is-active' : '' ?>">Overview</a>

@@ -109,6 +109,8 @@ $r->post('/manager/units/{unit_id}/services/{id}/status', 'ManagerController', '
 $r->post('/manager/units/{unit_id}/services/{id}/toggle-status', 'ManagerController', 'toggleServiceStatusUnit');
 $r->get('/manager/sales', 'ManagerController', 'sales');
 $r->get('/manager/units/{id}/sales', 'ManagerController', 'sales');
+$r->get('/manager/orders', 'ManagerController', 'orders');
+$r->get('/manager/units/{id}/orders', 'ManagerController', 'orders');
 $r->post('/manager/sales/refunds/{id}/approve', 'ManagerController', 'approveRefund');
 $r->post('/manager/sales/refunds/{id}/reject', 'ManagerController', 'rejectRefund');
 $r->post('/manager/units/{id}/sales/refunds/{ref_id}/approve', 'ManagerController', 'approveRefundUnit');
@@ -130,6 +132,10 @@ $r->post('/manager/units/{id}/inventory/adjust', 'ManagerController', 'adjustSto
 $r->post('/manager/inventory/purchase-orders', 'ManagerController', 'storePurchaseOrder');
 $r->post('/manager/units/{id}/inventory/purchase-orders', 'ManagerController', 'storePurchaseOrder');
 $r->post('/manager/inventory/purchase-orders/{id}/receive', 'ManagerController', 'receiveStock');
+$r->post('/manager/inventory/purchase-order-requests', 'ManagerController', 'storePurchaseOrderRequest');
+$r->post('/manager/units/{id}/inventory/purchase-order-requests', 'ManagerController', 'storePurchaseOrderRequest');
+$r->post('/manager/inventory/purchase-order-requests/{id}/review', 'ManagerController', 'reviewPurchaseOrderRequest');
+$r->post('/manager/units/{unit_id}/inventory/purchase-order-requests/{id}/review', 'ManagerController', 'reviewPurchaseOrderRequest');
 $r->get('/manager/employees', 'ManagerController', 'employees');
 $r->get('/manager/units/{id}/employees', 'ManagerController', 'employees');
 $r->get('/manager/medical-records', 'ManagerController', 'medicalRecords');
