@@ -38,6 +38,8 @@ $r->post('/logout', 'AuthController', 'logout');
 $r->post('/demo/super-admin', 'AuthController', 'demoSuperAdmin');
 $r->get('/customer-interface', 'AuthController', 'enterCustomerInterface');
 $r->get('/workspace', 'AuthController', 'returnToWorkspace');
+$r->get('/switch-interface', 'AuthController', 'switchInterface');
+$r->post('/switch-interface', 'AuthController', 'switchInterface');
 $r->post('/session/context', 'AuthController', 'switchContext');
 
 // Profile + pets

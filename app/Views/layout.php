@@ -11,6 +11,8 @@ $isWorkspaceRoute = str_starts_with($curPath, '/super-admin')
 // Administrator identification & state
 $isSuperAdmin = $isSignedIn && (bool)\App\Core\Session::get('is_super_admin');
 $isSysAdmin = false;
+$hasBmRole = false;
+$hasEmployeeRecord = false;
 $sysAdminUnitId = null;
 $sysAdminUnitName = '';
 $adminInitials = 'SA';
@@ -21,8 +23,9 @@ if ($isSignedIn && $baseContext === 'employee') {
     if (!isset($adminUserCache[$uid])) {
         $db = \App\Core\Database::pdo();
         $stmt = $db->prepare(
-            "SELECT ua.is_super_admin, e.first_name, e.last_name, e.business_unit_id, bu.business_unit_name,
-                    (SELECT 1 FROM account_role ar JOIN role r ON r.role_id = ar.role_id WHERE ar.user_account_id = ua.user_account_id AND r.role_name = 'SYSTEM_ADMINISTRATOR' LIMIT 1) AS has_sysadmin_role
+            "SELECT ua.is_super_admin, e.employee_id, e.first_name, e.last_name, e.business_unit_id, bu.business_unit_name,
+                    (SELECT 1 FROM account_role ar JOIN role r ON r.role_id = ar.role_id WHERE ar.user_account_id = ua.user_account_id AND r.role_name = 'SYSTEM_ADMINISTRATOR' LIMIT 1) AS has_sysadmin_role,
+                    (SELECT 1 FROM account_role ar JOIN role r ON r.role_id = ar.role_id WHERE ar.user_account_id = ua.user_account_id AND r.role_name IN ('BUSINESS_MANAGER', 'INVENTORY_MANAGER') LIMIT 1) AS has_bm_role
              FROM user_account ua
              LEFT JOIN employee e ON e.user_account_id = ua.user_account_id
              LEFT JOIN business_unit bu ON bu.business_unit_id = e.business_unit_id
@@ -42,6 +45,12 @@ if ($isSignedIn && $baseContext === 'employee') {
             $sysAdminUnitId = (int)($adminRow['business_unit_id'] ?? 0);
             $sysAdminUnitName = (string)($adminRow['business_unit_name'] ?? '');
         }
+        if ((bool)$adminRow['has_bm_role']) {
+            $hasBmRole = true;
+        }
+        if (!empty($adminRow['employee_id'])) {
+            $hasEmployeeRecord = true;
+        }
         $first = trim((string)($adminRow['first_name'] ?? ''));
         $last = trim((string)($adminRow['last_name'] ?? ''));
         if ($first !== '' || $last !== '') {
@@ -54,6 +63,149 @@ if ($isSignedIn && $baseContext === 'employee') {
 
 $isAdminUser = $isSuperAdmin || $isSysAdmin;
 $inAdminWorkspace = $isAdminUser && $baseContext === 'employee' && $activeContext === 'employee';
+
+// Determine authorized interfaces for the Switch Interface menu
+$authorizedInterfaces = [];
+$activeUnitId = isset($_GET['unit_id']) && ctype_digit((string)$_GET['unit_id'])
+    ? (int)$_GET['unit_id']
+    : (isset($unitId) && is_numeric($unitId) ? (int)$unitId : ($sysAdminUnitId ?: 1));
+
+if ($isSignedIn && $baseContext === 'employee') {
+    $allBusinessUnits = [
+        ['id' => 1, 'name' => 'Pet Store'],
+        ['id' => 2, 'name' => 'Veterinary Clinic'],
+        ['id' => 3, 'name' => 'Grooming Services'],
+    ];
+
+    if ($isSuperAdmin) {
+        $authorizedInterfaces[] = [
+            'id' => 'super-admin',
+            'label' => 'Super Administrator',
+            'hasUnits' => false,
+            'url' => '/switch-interface?target=super-admin',
+            'active' => str_starts_with($curPath, '/super-admin') && $activeContext !== 'customer',
+        ];
+        $authorizedInterfaces[] = [
+            'id' => 'sysadmin',
+            'label' => 'System Administrator',
+            'hasUnits' => true,
+            'units' => array_map(fn($u) => [
+                'id' => $u['id'],
+                'name' => $u['name'],
+                'url' => '/switch-interface?target=sysadmin&unit_id=' . $u['id'],
+            ], $allBusinessUnits),
+            'active' => str_starts_with($curPath, '/sysadmin') && $activeContext !== 'customer',
+        ];
+        $authorizedInterfaces[] = [
+            'id' => 'manager',
+            'label' => 'Business Manager',
+            'hasUnits' => true,
+            'units' => array_map(fn($u) => [
+                'id' => $u['id'],
+                'name' => $u['name'],
+                'url' => '/switch-interface?target=manager&unit_id=' . $u['id'],
+            ], $allBusinessUnits),
+            'active' => str_starts_with($curPath, '/manager') && $activeContext !== 'customer',
+        ];
+        $authorizedInterfaces[] = [
+            'id' => 'employee',
+            'label' => 'Employee Workspace',
+            'hasUnits' => true,
+            'units' => array_map(fn($u) => [
+                'id' => $u['id'],
+                'name' => $u['name'],
+                'url' => '/switch-interface?target=employee&unit_id=' . $u['id'],
+            ], $allBusinessUnits),
+            'active' => (str_starts_with($curPath, '/staff') || $curPath === '/workspace') && $activeContext !== 'customer',
+        ];
+        $authorizedInterfaces[] = [
+            'id' => 'customer',
+            'label' => 'Customer Interface',
+            'hasUnits' => false,
+            'url' => '/switch-interface?target=customer',
+            'active' => $activeContext === 'customer' || (!$isWorkspaceRoute && !$inAdminWorkspace),
+        ];
+    } elseif ($isSysAdmin) {
+        $sysUnits = [];
+        if ($sysAdminUnitId) {
+            $sysUnits[] = ['id' => $sysAdminUnitId, 'name' => $sysAdminUnitName ?: 'Assigned Unit', 'url' => '/switch-interface?target=sysadmin&unit_id=' . $sysAdminUnitId];
+        } else {
+            $sysUnits[] = ['id' => 1, 'name' => 'Assigned Unit', 'url' => '/switch-interface?target=sysadmin'];
+        }
+        $authorizedInterfaces[] = [
+            'id' => 'sysadmin',
+            'label' => 'System Administrator',
+            'hasUnits' => true,
+            'units' => $sysUnits,
+            'active' => str_starts_with($curPath, '/sysadmin') && $activeContext !== 'customer',
+        ];
+        if ($hasEmployeeRecord) {
+            $authorizedInterfaces[] = [
+                'id' => 'employee',
+                'label' => 'Employee Workspace',
+                'hasUnits' => true,
+                'units' => [
+                    ['id' => $sysAdminUnitId ?: 1, 'name' => $sysAdminUnitName ?: 'Assigned Unit', 'url' => '/switch-interface?target=employee'],
+                ],
+                'active' => (str_starts_with($curPath, '/staff') || $curPath === '/workspace') && $activeContext !== 'customer',
+            ];
+        }
+        $authorizedInterfaces[] = [
+            'id' => 'customer',
+            'label' => 'Customer Interface',
+            'hasUnits' => false,
+            'url' => '/switch-interface?target=customer',
+            'active' => $activeContext === 'customer' || (!$isWorkspaceRoute),
+        ];
+    } elseif (!empty($hasBmRole)) {
+        $bmUnitId = (int)($adminRow['business_unit_id'] ?? 1);
+        $bmUnitName = (string)($adminRow['business_unit_name'] ?? 'Assigned Unit');
+        $authorizedInterfaces[] = [
+            'id' => 'manager',
+            'label' => 'Business Manager',
+            'hasUnits' => true,
+            'units' => [
+                ['id' => $bmUnitId, 'name' => $bmUnitName, 'url' => '/switch-interface?target=manager&unit_id=' . $bmUnitId],
+            ],
+            'active' => str_starts_with($curPath, '/manager') && $activeContext !== 'customer',
+        ];
+        $authorizedInterfaces[] = [
+            'id' => 'employee',
+            'label' => 'Employee Workspace',
+            'hasUnits' => true,
+            'units' => [
+                ['id' => $bmUnitId, 'name' => $bmUnitName, 'url' => '/switch-interface?target=employee'],
+            ],
+            'active' => (str_starts_with($curPath, '/staff') || $curPath === '/workspace') && $activeContext !== 'customer',
+        ];
+        $authorizedInterfaces[] = [
+            'id' => 'customer',
+            'label' => 'Customer Interface',
+            'hasUnits' => false,
+            'url' => '/switch-interface?target=customer',
+            'active' => $activeContext === 'customer' || (!$isWorkspaceRoute),
+        ];
+    } elseif (!empty($hasEmployeeRecord)) {
+        $empUId = (int)($adminRow['business_unit_id'] ?? 1);
+        $empUName = (string)($adminRow['business_unit_name'] ?? 'Assigned Unit');
+        $authorizedInterfaces[] = [
+            'id' => 'employee',
+            'label' => 'Employee Workspace',
+            'hasUnits' => true,
+            'units' => [
+                ['id' => $empUId, 'name' => $empUName, 'url' => '/switch-interface?target=employee'],
+            ],
+            'active' => (str_starts_with($curPath, '/staff') || $curPath === '/workspace') && $activeContext !== 'customer',
+        ];
+        $authorizedInterfaces[] = [
+            'id' => 'customer',
+            'label' => 'Customer Interface',
+            'hasUnits' => false,
+            'url' => '/switch-interface?target=customer',
+            'active' => $activeContext === 'customer' || (!$isWorkspaceRoute),
+        ];
+    }
+}
 
 $showCustomerNav = $isSignedIn && ((bool)\App\Core\Session::get('customer_id') || $activeContext === 'customer' || !$isWorkspaceRoute);
 $showEmployeeWorkspaceNav = $isSignedIn && $baseContext === 'employee' && $activeContext === 'employee' && $isWorkspaceRoute;
@@ -86,18 +238,18 @@ $isAuthSignInOrOut = str_starts_with($curPath, '/login') || str_starts_with($cur
     </a>
     <nav aria-label="Main">
 <?php if ($inAdminWorkspace): ?>
-  <?php if ($isSuperAdmin): ?>
+  <?php if (str_starts_with($curPath, '/sysadmin')): ?>
+      <a href="/sysadmin" class="segmented-pill <?= ($curPath === '/sysadmin' || preg_match('#^/sysadmin/units/\d+$#', $curPath)) ? 'is-current' : '' ?>">Overview</a>
+      <a href="/sysadmin/employees" class="segmented-pill <?= (str_starts_with($curPath, '/sysadmin/employees') || preg_match('#^/sysadmin/units/\d+/employees#', $curPath)) ? 'is-current' : '' ?>">Unit Employees</a>
+      <a href="/sysadmin/roles" class="segmented-pill <?= (str_starts_with($curPath, '/sysadmin/roles') || preg_match('#^/sysadmin/units/\d+/roles#', $curPath)) ? 'is-current' : '' ?>">Roles &amp; Permissions</a>
+      <a href="/sysadmin/activity" class="segmented-pill <?= (str_starts_with($curPath, '/sysadmin/activity') || preg_match('#^/sysadmin/units/\d+/activity#', $curPath)) ? 'is-current' : '' ?>">Activity Log</a>
+  <?php elseif (str_starts_with($curPath, '/super-admin')): ?>
       <a href="/super-admin" class="<?= $curPath === '/super-admin' ? 'is-current' : '' ?>">Dashboard</a>
       <a href="/super-admin/business-units" class="<?= str_starts_with($curPath, '/super-admin/business-units') ? 'is-current' : '' ?>">Business Units</a>
       <a href="/super-admin/system-admins" class="<?= str_starts_with($curPath, '/super-admin/system-admins') ? 'is-current' : '' ?>">System Administrators</a>
       <a href="/super-admin/employees" class="<?= str_starts_with($curPath, '/super-admin/employees') ? 'is-current' : '' ?>">Employee Accounts</a>
       <a href="/super-admin/roles" class="<?= str_starts_with($curPath, '/super-admin/roles') ? 'is-current' : '' ?>">Roles &amp; Permissions</a>
       <a href="/super-admin/activity" class="<?= str_starts_with($curPath, '/super-admin/activity') ? 'is-current' : '' ?>">System Activity</a>
-  <?php elseif ($isSysAdmin): ?>
-      <a href="/sysadmin" class="<?= ($curPath === '/sysadmin' || preg_match('#^/sysadmin/units/\d+$#', $curPath)) ? 'is-current' : '' ?>">Overview</a>
-      <a href="/sysadmin/employees" class="<?= (str_starts_with($curPath, '/sysadmin/employees') || preg_match('#^/sysadmin/units/\d+/employees#', $curPath)) ? 'is-current' : '' ?>">Unit Employees</a>
-      <a href="/sysadmin/roles" class="<?= (str_starts_with($curPath, '/sysadmin/roles') || preg_match('#^/sysadmin/units/\d+/roles#', $curPath)) ? 'is-current' : '' ?>">Roles &amp; Permissions</a>
-      <a href="/sysadmin/activity" class="<?= (str_starts_with($curPath, '/sysadmin/activity') || preg_match('#^/sysadmin/units/\d+/activity#', $curPath)) ? 'is-current' : '' ?>">Activity Log</a>
   <?php endif; ?>
       <span class="nav-divider" aria-hidden="true"></span>
       <div class="profile-menu">
@@ -105,7 +257,48 @@ $isAuthSignInOrOut = str_starts_with($curPath, '/login') || str_starts_with($cur
           <span class="profile-avatar"><?= e($adminInitials) ?></span>
         </button>
         <div class="profile-dropdown" id="admin-profile-dropdown" role="menu" hidden>
-          <a href="/customer-interface" class="profile-dropdown-item" role="menuitem">Switch Interface</a>
+          <div class="profile-switcher-wrap">
+            <button type="button" class="profile-dropdown-item profile-switcher-btn" id="profile-switch-btn" aria-expanded="false" aria-haspopup="true">
+              <span>Switch Interface</span>
+              <svg class="profile-switcher-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </button>
+            <div class="profile-switcher-menu" id="profile-switcher-menu" hidden>
+              <?php foreach ($authorizedInterfaces as $iface): ?>
+                <?php if (!empty($iface['hasUnits']) && !empty($iface['units'])): ?>
+                  <div class="profile-switcher-group">
+                    <button type="button" class="profile-switcher-parent-btn <?= $iface['active'] ? 'is-current-parent is-current-interface' : '' ?>" data-target="<?= e($iface['id']) ?>" aria-expanded="false" aria-controls="switcher-units-<?= e($iface['id']) ?>">
+                      <span class="switcher-opt-indicator" aria-hidden="true"><?= $iface['active'] ? '●' : '○' ?></span>
+                      <span class="switcher-opt-name"><?= e($iface['label']) ?></span>
+                      <?php if ($iface['active']): ?>
+                        <span class="switcher-opt-badge">Current</span>
+                      <?php endif; ?>
+                      <svg class="profile-switcher-parent-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                    </button>
+                    <div class="profile-switcher-units" id="switcher-units-<?= e($iface['id']) ?>" hidden>
+                      <?php foreach ($iface['units'] as $u): ?>
+                        <?php $isUnitCurrent = $iface['active'] && ((int)$u['id'] === (int)$currentUnitId); ?>
+                        <a href="<?= e($u['url']) ?>" class="profile-switcher-unit-link <?= $isUnitCurrent ? 'is-current-unit' : '' ?>" role="menuitem">
+                          <span class="unit-dot" aria-hidden="true"><?= $isUnitCurrent ? '●' : '▪' ?></span>
+                          <span class="unit-name"><?= e($u['name']) ?></span>
+                          <?php if ($isUnitCurrent): ?>
+                            <span class="unit-badge">Active</span>
+                          <?php endif; ?>
+                        </a>
+                      <?php endforeach; ?>
+                    </div>
+                  </div>
+                <?php else: ?>
+                  <a href="<?= e($iface['url']) ?>" class="profile-switcher-option <?= $iface['active'] ? 'is-current-interface' : '' ?>" role="menuitem">
+                    <span class="switcher-opt-indicator" aria-hidden="true"><?= $iface['active'] ? '●' : '○' ?></span>
+                    <span class="switcher-opt-name"><?= e($iface['label']) ?></span>
+                    <?php if ($iface['active']): ?>
+                      <span class="switcher-opt-badge">Current</span>
+                    <?php endif; ?>
+                  </a>
+                <?php endif; ?>
+              <?php endforeach; ?>
+            </div>
+          </div>
           <button type="button" class="profile-dropdown-item" id="admin-dark-mode-toggle" role="menuitem">Dark Mode</button>
           <form method="post" action="/logout" class="profile-dropdown-form">
             <?= \App\Core\CSRF::field() ?>
@@ -137,7 +330,48 @@ $isAuthSignInOrOut = str_starts_with($curPath, '/login') || str_starts_with($cur
           <span class="profile-avatar"><?= e($adminInitials) ?></span>
         </button>
         <div class="profile-dropdown" id="admin-profile-dropdown" role="menu" hidden>
-          <a href="/workspace" class="profile-dropdown-item" role="menuitem">Switch Interface</a>
+          <div class="profile-switcher-wrap">
+            <button type="button" class="profile-dropdown-item profile-switcher-btn" id="profile-switch-btn" aria-expanded="false" aria-haspopup="true">
+              <span>Switch Interface</span>
+              <svg class="profile-switcher-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </button>
+            <div class="profile-switcher-menu" id="profile-switcher-menu" hidden>
+              <?php foreach ($authorizedInterfaces as $iface): ?>
+                <?php if (!empty($iface['hasUnits']) && !empty($iface['units'])): ?>
+                  <div class="profile-switcher-group">
+                    <button type="button" class="profile-switcher-parent-btn <?= $iface['active'] ? 'is-current-parent is-current-interface' : '' ?>" data-target="<?= e($iface['id']) ?>" aria-expanded="false" aria-controls="switcher-units-<?= e($iface['id']) ?>">
+                      <span class="switcher-opt-indicator" aria-hidden="true"><?= $iface['active'] ? '●' : '○' ?></span>
+                      <span class="switcher-opt-name"><?= e($iface['label']) ?></span>
+                      <?php if ($iface['active']): ?>
+                        <span class="switcher-opt-badge">Current</span>
+                      <?php endif; ?>
+                      <svg class="profile-switcher-parent-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                    </button>
+                    <div class="profile-switcher-units" id="switcher-units-<?= e($iface['id']) ?>" hidden>
+                      <?php foreach ($iface['units'] as $u): ?>
+                        <?php $isUnitCurrent = $iface['active'] && ((int)$u['id'] === (int)$currentUnitId); ?>
+                        <a href="<?= e($u['url']) ?>" class="profile-switcher-unit-link <?= $isUnitCurrent ? 'is-current-unit' : '' ?>" role="menuitem">
+                          <span class="unit-dot" aria-hidden="true"><?= $isUnitCurrent ? '●' : '▪' ?></span>
+                          <span class="unit-name"><?= e($u['name']) ?></span>
+                          <?php if ($isUnitCurrent): ?>
+                            <span class="unit-badge">Active</span>
+                          <?php endif; ?>
+                        </a>
+                      <?php endforeach; ?>
+                    </div>
+                  </div>
+                <?php else: ?>
+                  <a href="<?= e($iface['url']) ?>" class="profile-switcher-option <?= $iface['active'] ? 'is-current-interface' : '' ?>" role="menuitem">
+                    <span class="switcher-opt-indicator" aria-hidden="true"><?= $iface['active'] ? '●' : '○' ?></span>
+                    <span class="switcher-opt-name"><?= e($iface['label']) ?></span>
+                    <?php if ($iface['active']): ?>
+                      <span class="switcher-opt-badge">Current</span>
+                    <?php endif; ?>
+                  </a>
+                <?php endif; ?>
+              <?php endforeach; ?>
+            </div>
+          </div>
           <button type="button" class="profile-dropdown-item" id="admin-dark-mode-toggle" role="menuitem">Dark Mode</button>
           <form method="post" action="/logout" class="profile-dropdown-form">
             <?= \App\Core\CSRF::field() ?>

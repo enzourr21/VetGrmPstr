@@ -11,25 +11,14 @@ if (!empty($isSuper)) {
 }
 ?>
 <div class="admin-workspace-banner">
-  <div class="row" style="justify-content: space-between; width: 100%; flex-wrap: wrap; gap: 0.75rem;">
-    <div class="row" style="gap: 0.75rem;">
-      <span class="unit-pill">EMPLOYEE WORKSPACE</span>
-      <span class="caption">
-        Signed in via staff email · <?= e($emp['email'] ?? '') ?>
-        <?php if (!empty($emp['business_unit_name'])): ?>
-          · Assigned to <strong><?= e($emp['business_unit_name']) ?></strong>
-        <?php endif; ?>
-      </span>
-    </div>
-    <div class="row" style="gap: 0.5rem;">
-      <?php if (!empty($hasPermanentInventoryAccess) || !empty($activeTempInventoryGrant)): ?>
-        <a href="/manager/inventory" class="btn ghost btn-sm">Inventory</a>
+  <div class="row" style="gap: 0.75rem;">
+    <span class="unit-pill">EMPLOYEE WORKSPACE</span>
+    <span class="caption">
+      Signed in via staff email · <?= e($emp['email'] ?? '') ?>
+      <?php if (!empty($emp['business_unit_name'])): ?>
+        · Assigned to <strong><?= e($emp['business_unit_name']) ?></strong>
       <?php endif; ?>
-      <?php if ($canViewGroomingAppts): ?>
-        <a href="/staff/appointments" class="btn ghost btn-sm">Grooming Appointments</a>
-      <?php endif; ?>
-      <a href="/customer-interface" class="btn secondary btn-sm">Customer Interface &rarr;</a>
-    </div>
+    </span>
   </div>
 </div>
 

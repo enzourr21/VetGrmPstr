@@ -426,6 +426,119 @@ final class AuthController extends Controller
         $this->enterCustomerInterface();
     }
 
+    /**
+     * Interface Switcher: allows authenticated users to switch between interfaces
+     * they are legitimately authorized to access (Super Admin, System Admin, Business Manager, Employee, Customer).
+     */
+    public function switchInterface(): void
+    {
+        $uid = Session::get('user_id');
+        if (!$uid) {
+            $this->redirect('/login');
+        }
+
+        $target = strtolower(trim((string)($_GET['target'] ?? $this->post('target', ''))));
+        $unitId = isset($_GET['unit_id']) && ctype_digit((string)$_GET['unit_id']) ? (int)$_GET['unit_id'] : null;
+        if ($unitId === null && isset($_POST['unit_id']) && ctype_digit((string)$_POST['unit_id'])) {
+            $unitId = (int)$_POST['unit_id'];
+        }
+        $unitQuery = $unitId !== null ? '?unit_id=' . $unitId : '';
+
+        // 1. Customer Interface
+        if ($target === 'customer') {
+            $this->enterCustomerInterface();
+            return;
+        }
+
+        // Customer-only sessions (including username logins) cannot access administrative or employee interfaces
+        if (Session::get('base_context') !== 'employee' || Session::get('auth_method') !== 'email') {
+            $this->forbidden('Customer-only sessions cannot access administrative or employee workspaces.');
+        }
+
+        // Determine if account is Super Administrator from trusted base session or database
+        $isSuper = (bool)Session::get('is_super_admin');
+        if (!$isSuper) {
+            $s = $this->db->prepare('SELECT is_super_admin FROM user_account WHERE user_account_id = ?');
+            $s->execute([(int)$uid]);
+            $isSuper = (bool)$s->fetchColumn();
+        }
+
+        // 2. Super Administrator Interface
+        if ($target === 'super-admin' || $target === 'super_admin') {
+            if (!$isSuper) {
+                $this->forbidden('Super Administrator authorization is required.');
+            }
+            Session::set('active_context', 'employee');
+            $this->redirect('/super-admin');
+            return;
+        }
+
+        // 3. System Administrator Interface
+        if ($target === 'sysadmin' || $target === 'system_admin') {
+            if (!$isSuper) {
+                if ($unitId !== null) {
+                    $stmt = $this->db->prepare(
+                        "SELECT 1 FROM account_role ar JOIN role r ON r.role_id = ar.role_id WHERE ar.user_account_id = ? AND ar.business_unit_id = ? AND r.role_name = 'SYSTEM_ADMINISTRATOR' LIMIT 1"
+                    );
+                    $stmt->execute([(int)$uid, $unitId]);
+                } else {
+                    $stmt = $this->db->prepare(
+                        "SELECT 1 FROM account_role ar JOIN role r ON r.role_id = ar.role_id WHERE ar.user_account_id = ? AND r.role_name = 'SYSTEM_ADMINISTRATOR' LIMIT 1"
+                    );
+                    $stmt->execute([(int)$uid]);
+                }
+                if (!$stmt->fetchColumn()) {
+                    $this->forbidden('System Administrator authorization is required.');
+                }
+            }
+            Session::set('active_context', 'employee');
+            $this->redirect('/sysadmin' . $unitQuery);
+            return;
+        }
+
+        // 4. Business Manager Interface
+        if ($target === 'manager' || $target === 'business_manager') {
+            if (!$isSuper) {
+                if ($unitId !== null) {
+                    $stmt = $this->db->prepare(
+                        "SELECT 1 FROM account_role ar JOIN role r ON r.role_id = ar.role_id WHERE ar.user_account_id = ? AND ar.business_unit_id = ? AND r.role_name IN ('BUSINESS_MANAGER', 'INVENTORY_MANAGER') LIMIT 1"
+                    );
+                    $stmt->execute([(int)$uid, $unitId]);
+                } else {
+                    $stmt = $this->db->prepare(
+                        "SELECT 1 FROM account_role ar JOIN role r ON r.role_id = ar.role_id WHERE ar.user_account_id = ? AND r.role_name IN ('BUSINESS_MANAGER', 'INVENTORY_MANAGER') LIMIT 1"
+                    );
+                    $stmt->execute([(int)$uid]);
+                }
+                if (!$stmt->fetchColumn()) {
+                    $this->forbidden('Business Manager authorization is required.');
+                }
+            }
+            Session::set('active_context', 'employee');
+            $this->redirect('/manager' . $unitQuery);
+            return;
+        }
+
+        // 5. Employee Workspace
+        if ($target === 'employee' || $target === 'workspace') {
+            if (!$isSuper) {
+                $stmt = $this->db->prepare(
+                    "SELECT 1 FROM employee WHERE user_account_id = ? AND employee_status = 'active' LIMIT 1"
+                );
+                $stmt->execute([(int)$uid]);
+                if (!$stmt->fetchColumn()) {
+                    $this->forbidden('Employee workspace authorization is required.');
+                }
+            }
+            Session::set('active_context', 'employee');
+            $this->redirect('/staff/workspace' . $unitQuery);
+            return;
+        }
+
+        // Fallback: return to default authorized workspace
+        $this->returnToWorkspace();
+    }
+
     public function logout(): void
     {
         CSRF::check();

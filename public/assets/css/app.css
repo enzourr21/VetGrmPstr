@@ -3721,6 +3721,119 @@ body.has-modal-open {
   color: var(--brand, #0e8a75);
 }
 
+.profile-switcher-group {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.profile-switcher-parent-btn {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  justify-content: flex-start;
+  gap: 0.45rem;
+  padding: 0.35rem 0.5rem;
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--ink-secondary, #475569);
+  background: transparent;
+  border: 0;
+  border-radius: 0.25rem;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color var(--dur-fast) var(--ease-apple), color var(--dur-fast) var(--ease-apple);
+  box-sizing: border-box;
+}
+
+.profile-switcher-parent-btn:hover,
+.profile-switcher-parent-btn:focus-visible {
+  background-color: var(--bg-subtle);
+  color: var(--ink);
+  outline: none;
+}
+
+.profile-switcher-parent-btn.is-current-parent {
+  font-weight: 600;
+  color: var(--brand, #0e8a75);
+}
+
+.profile-switcher-parent-chevron {
+  transition: transform var(--dur-fast) var(--ease-apple);
+  color: var(--muted);
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.profile-switcher-parent-btn[aria-expanded="true"] .profile-switcher-parent-chevron {
+  transform: rotate(90deg);
+}
+
+.profile-switcher-units {
+  display: flex;
+  flex-direction: column;
+  padding: 0.15rem 0 0.25rem 0.65rem;
+  margin: 0.1rem 0 0.2rem 0.75rem;
+  border-left: 1.5px dashed var(--line, #cbd5e1);
+  gap: 0.15rem;
+  animation: dropdownFadeIn 120ms var(--ease-apple);
+}
+
+.profile-switcher-units[hidden] {
+  display: none !important;
+}
+
+.profile-switcher-unit-link {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.775rem;
+  font-weight: 500;
+  color: var(--ink-secondary, #475569);
+  text-decoration: none;
+  border-radius: 0.25rem;
+  transition: background-color var(--dur-fast) var(--ease-apple), color var(--dur-fast) var(--ease-apple);
+  box-sizing: border-box;
+}
+
+.profile-switcher-unit-link:hover,
+.profile-switcher-unit-link:focus-visible {
+  background-color: var(--bg-subtle);
+  color: var(--ink);
+  outline: none;
+}
+
+.profile-switcher-unit-link.is-current-unit {
+  font-weight: 600;
+  color: var(--brand, #0e8a75);
+}
+
+.profile-switcher-unit-link .unit-dot {
+  font-size: 0.5rem;
+  color: var(--muted);
+}
+
+.profile-switcher-unit-link.is-current-unit .unit-dot {
+  color: var(--brand, #0e8a75);
+}
+
+.profile-switcher-unit-link .unit-name {
+  flex-grow: 1;
+  white-space: nowrap;
+}
+
+.profile-switcher-unit-link .unit-badge {
+  font-size: 0.625rem;
+  font-weight: 600;
+  padding: 0.08rem 0.3rem;
+  border-radius: 999px;
+  background: rgba(14, 138, 117, 0.12);
+  color: var(--brand, #0e8a75);
+  margin-left: 0.25rem;
+}
+
 .switcher-opt-indicator {
   font-size: 0.5rem;
   line-height: 1;

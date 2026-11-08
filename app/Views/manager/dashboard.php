@@ -1,21 +1,7 @@
 <div class="admin-workspace-banner">
-  <div class="row" style="justify-content: space-between; width: 100%; flex-wrap: wrap; gap: 0.75rem;">
-    <div class="row" style="gap: 0.75rem;">
-      <span class="unit-pill">BUSINESS MANAGER · <?= e(strtoupper($unitName)) ?></span>
-      <span class="caption">Operational overview for <strong><?= e($unitName) ?></strong> (Unit #<?= (int)$unitId ?>)</span>
-    </div>
-    <div class="row" style="gap: 0.5rem;">
-      <?php if (!empty($isSuper) && !empty($allUnits)): ?>
-        <?php foreach ($allUnits as $u): ?>
-          <a href="/manager?unit_id=<?= (int)$u['business_unit_id'] ?>"
-             class="btn <?= (int)$u['business_unit_id'] === (int)$unitId ? 'secondary' : 'ghost' ?> btn-sm">
-            <?= e($u['business_unit_name']) ?>
-          </a>
-        <?php endforeach; ?>
-        <a href="/super-admin" class="btn ghost btn-sm">&larr; Super Admin</a>
-      <?php endif; ?>
-      <a href="/customer-interface" class="btn secondary btn-sm">Customer Interface &rarr;</a>
-    </div>
+  <div class="row" style="gap: 0.75rem;">
+    <span class="unit-pill">BUSINESS MANAGER · <?= e(strtoupper($unitName)) ?></span>
+    <span class="caption">Operational overview for <strong><?= e($unitName) ?></strong> (Unit #<?= (int)$unitId ?>)</span>
   </div>
 </div>
 

@@ -32,28 +32,11 @@ $isTempInv = !empty($isTempKeyAccess);
 </nav>
 <?php else: ?>
 <div class="admin-workspace-banner">
-  <div class="row" style="justify-content: space-between; width: 100%; flex-wrap: wrap; gap: 0.75rem;">
-    <div class="row" style="gap: 0.75rem;">
-      <span class="unit-pill">BUSINESS MANAGER · <?= e(strtoupper($unitName)) ?></span>
-      <span class="caption">
-        Operational workspace for <strong><?= e($unitName) ?></strong> (Unit #<?= (int)$unitId ?>)
-        · <?= e(\App\Core\Session::get('email', '')) ?>
-      </span>
-    </div>
-    <div class="row" style="gap: 0.5rem;">
-      <?php if (!empty($isSuper) && !empty($allUnits)): ?>
-        <div class="row" style="gap: 0.35rem;">
-          <?php foreach ($allUnits as $u): ?>
-            <a href="/manager?unit_id=<?= (int)$u['business_unit_id'] ?>"
-               class="btn <?= (int)$u['business_unit_id'] === (int)$unitId ? 'secondary' : 'ghost' ?> btn-sm">
-              <?= e($u['business_unit_name']) ?>
-            </a>
-          <?php endforeach; ?>
-        </div>
-        <a href="/super-admin" class="btn ghost btn-sm">&larr; Super Admin</a>
-      <?php endif; ?>
-      <a href="/customer-interface" class="btn secondary btn-sm">Customer Interface &rarr;</a>
-    </div>
+  <div class="row" style="gap: 0.75rem;">
+    <span class="unit-pill">BUSINESS MANAGER · <?= e(strtoupper($unitName)) ?></span>
+    <span class="caption">
+      <?= e($unitName) ?> Business Manager Dashboard · Scoped to Unit #<?= (int)$unitId ?> · <?= e(\App\Core\Session::get('email', '')) ?>
+    </span>
   </div>
 </div>
 

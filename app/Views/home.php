@@ -72,33 +72,7 @@
   </div>
 </section>
 
-<?php if ($signedIn): ?>
-<section style="margin-top: 2.75rem;">
-  <div class="section-header" style="margin-top: 0;">
-    <div>
-      <h2>Your Customer Account</h2>
-      <p class="muted">Quickly manage your registered pets, grooming requests, and orders.</p>
-    </div>
-  </div>
-  <div class="grid-3">
-    <a class="card overview-card hoverable" href="/appointments/new">
-      <h3>Book Grooming</h3>
-      <p class="muted">Select your registered pets and submit a new grooming appointment request.</p>
-      <span class="action-link">Book grooming <span class="arrow" aria-hidden="true">&rarr;</span></span>
-    </a>
-    <a class="card overview-card hoverable" href="/pets">
-      <h3>My Registered Pets</h3>
-      <p class="muted">Add or update your pets' species, breed, weight, and care notes.</p>
-      <span class="action-link">Manage pets <span class="arrow" aria-hidden="true">&rarr;</span></span>
-    </a>
-    <a class="card overview-card hoverable" href="/orders">
-      <h3>Order History</h3>
-      <p class="muted">Track your submitted pickup and delivery orders across business units.</p>
-      <span class="action-link">View orders <span class="arrow" aria-hidden="true">&rarr;</span></span>
-    </a>
-  </div>
-</section>
-<?php endif; ?>
+
 
 <!-- Section 3: Staffs & Customer Reviews Overview (No green badges) -->
 <section data-scene="community" id="home-community">

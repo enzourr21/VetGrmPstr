@@ -141,7 +141,9 @@ assertCheck('Overview middle section uses vet-overview-middle-grid', str_contain
 assertCheck('Overview contains Stock Alerts card', str_contains($ovBody, 'Stock Alerts'));
 assertCheck('Overview Stock Alerts card includes Open Inventory button', str_contains($ovBody, 'Open Inventory &rarr;') || str_contains($ovBody, 'Open Inventory'));
 assertCheck('Overview contains Daily Clinic Activity card', str_contains($ovBody, 'Daily Clinic Activity'));
-assertCheck('Overview Daily Clinic Activity displays clinic-local date', str_contains($ovBody, date('M j, Y')) || str_contains($ovBody, date('F j, Y')));
+$clinicTz = new \DateTimeZone('Asia/Manila');
+$clinicDateFormatted = (new \DateTimeImmutable('now', $clinicTz))->format('M j, Y');
+assertCheck('Overview Daily Clinic Activity displays clinic-local date', str_contains($ovBody, $clinicDateFormatted) || str_contains($ovBody, date('M j, Y')) || str_contains($ovBody, date('F j, Y')));
 assertCheck('Overview Daily Clinic Activity shows Scheduled Appointments count', str_contains($ovBody, 'Scheduled Appointments'));
 assertCheck('Overview Daily Clinic Activity shows Walk-in Visits count', str_contains($ovBody, 'Walk-in Visits'));
 assertCheck('Overview contains Employees On Duty card', str_contains($ovBody, 'Employees On Duty'));
