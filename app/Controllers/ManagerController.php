@@ -31,7 +31,7 @@ final class ManagerController extends Controller
      */
     private function checkBusinessManager(?int $routeUnitId = null): array
     {
-        if ($this->isSuperAdmin() && Session::get('inventory_manager_mode')) {
+        if (Session::get('inventory_manager_mode')) {
             $this->forbidden('Access denied: Business Manager privileges are required.');
         }
         return $this->requireBusinessManager($routeUnitId);
@@ -100,7 +100,7 @@ final class ManagerController extends Controller
             $chosen = $targetUnitId !== null ? $byUnitId[$targetUnitId] : $rows[0];
             $chosenUnitId = (int)$chosen['business_unit_id'];
             $unitRoles = $rolesByUnit[$chosenUnitId] ?? [];
-            $isInvOnly = !in_array('BUSINESS_MANAGER', $unitRoles, true) && in_array('INVENTORY_MANAGER', $unitRoles, true);
+            $isInvOnly = (bool)Session::get('inventory_manager_mode') || (!in_array('BUSINESS_MANAGER', $unitRoles, true) && in_array('INVENTORY_MANAGER', $unitRoles, true));
 
             return [(int)$uid, (int)$chosen['employee_id'], $chosenUnitId, (string)$chosen['business_unit_name'], false, $isInvOnly, false, null];
         }
@@ -172,7 +172,13 @@ final class ManagerController extends Controller
         if ($uid) {
             $isInvMode = (bool)Session::get('inventory_manager_mode', false);
             if ($isInvMode) {
-                $targetUnit = $routeUnitId ?? (isset($_GET['unit_id']) && ctype_digit((string)$_GET['unit_id']) ? (int)$_GET['unit_id'] : 1);
+                $targetUnit = $routeUnitId ?? (isset($_GET['unit_id']) && ctype_digit((string)$_GET['unit_id']) ? (int)$_GET['unit_id'] : null);
+                if ($targetUnit === null && !$this->isSuperAdmin()) {
+                    $chk = $this->db->prepare("SELECT ar.business_unit_id FROM account_role ar JOIN role r ON r.role_id = ar.role_id WHERE ar.user_account_id = ? AND r.role_name = 'INVENTORY_MANAGER' LIMIT 1");
+                    $chk->execute([(int)$uid]);
+                    $targetUnit = (int)($chk->fetchColumn() ?: 1);
+                }
+                $targetUnit = $targetUnit ?? 1;
                 $uQ = ($this->isSuperAdmin() && $targetUnit) ? '?unit_id=' . $targetUnit : '';
                 if ($targetUnit === 1) {
                     $this->redirect('/manager/orders' . $uQ);
@@ -2513,7 +2519,10 @@ final class ManagerController extends Controller
      */
     public function medicalRecords(?int $routeUnitId = null): void
     {
-        [$uid, , $unitId, $unitName, $isSuper] = $this->checkBusinessManager($routeUnitId);
+        [$uid, , $unitId, $unitName, $isSuper, $isInvOnly, $isTempKeyAccess] = $this->checkManagerOrInventoryManager($routeUnitId);
+        if ($isTempKeyAccess) {
+            $this->forbidden('Temporary key holders cannot access medical records.');
+        }
         if ($isSuper && (int)$unitId === Units::petStoreId()) {
             $unitId = Units::vetClinicId();
             $unit = Units::find($unitId);
@@ -2590,6 +2599,7 @@ final class ManagerController extends Controller
             'unitId' => $unitId,
             'unitName' => $unitName,
             'isSuper' => $isSuper,
+            'isInventoryManagerOnly' => $isInvOnly,
             'allUnits' => $isSuper ? Units::all() : [],
             'records' => $records,
             'statusFilter' => $statusFilter,
@@ -2611,7 +2621,10 @@ final class ManagerController extends Controller
             $routeUnitId = null;
         }
 
-        [$uid, , $unitId, $unitName, $isSuper] = $this->checkBusinessManager($routeUnitId);
+        [$uid, , $unitId, $unitName, $isSuper, $isInvOnly, $isTempKeyAccess] = $this->checkManagerOrInventoryManager($routeUnitId);
+        if ($isTempKeyAccess) {
+            $this->forbidden('Temporary key holders cannot access medical records.');
+        }
         if ($isSuper && (int)$unitId === Units::petStoreId()) {
             $unitId = Units::vetClinicId();
             $unit = Units::find($unitId);
@@ -2654,6 +2667,7 @@ final class ManagerController extends Controller
             'unitId' => $unitId,
             'unitName' => $unitName,
             'isSuper' => $isSuper,
+            'isInventoryManagerOnly' => $isInvOnly,
             'allUnits' => $isSuper ? Units::all() : [],
             'record' => $record,
         ]);
@@ -3410,7 +3424,7 @@ final class ManagerController extends Controller
     {
         [$uid, $employeeId, $unitId, $unitName, $isSuper, $isInvOnly, $isTempKeyAccess, $tempKeyGrant] = $this->checkManagerOrInventoryManager($routeUnitId);
 
-        $tab = isset($_GET['tab']) && $_GET['tab'] === 'orders' ? 'orders' : 'stock';
+        $tab = in_array($_GET['tab'] ?? '', ['orders', 'movements'], true) ? $_GET['tab'] : 'stock';
         $q = trim((string)($_GET['q'] ?? ''));
 
         $canManageInventoryKey = !$isInvOnly && !$isTempKeyAccess && InventoryAccessKey::isUnitSupported((int)$unitId);
@@ -3425,7 +3439,7 @@ final class ManagerController extends Controller
         }
 
         // Stock list query: Prioritize out-of-stock items (A–Z), then in-stock items (A–Z)
-        $stockSql = "SELECT bp.business_product_id, bp.selling_price, bp.product_status,
+        $stockSql = "SELECT bp.business_product_id, bp.selling_price, bp.product_status, bp.requires_batch_tracking,
                             p.product_name, p.product_category, p.sku,
                             i.inventory_id,
                             COALESCE(i.on_hand, 0) AS on_hand,
@@ -3452,21 +3466,50 @@ final class ManagerController extends Controller
         if (!empty($invIds)) {
             $inClause = implode(',', $invIds);
             $batchStmt = $this->db->query(
-                "SELECT * FROM inventory_batch WHERE inventory_id IN ($inClause) ORDER BY expiration_date ASC, batch_id ASC"
+                "SELECT * FROM inventory_batch WHERE inventory_id IN ($inClause) ORDER BY (CASE WHEN expiration_date IS NULL THEN 1 ELSE 0 END) ASC, expiration_date ASC, batch_id ASC"
             );
             foreach ($batchStmt->fetchAll() as $b) {
                 $batchesByInv[(int)$b['inventory_id']][] = $b;
             }
         }
+        $todayStr = date('Y-m-d');
         foreach ($inventoryItems as &$item) {
             $invId = (int)($item['inventory_id'] ?? 0);
-            $item['batches'] = $batchesByInv[$invId] ?? [];
+            $rawBatches = $batchesByInv[$invId] ?? [];
+            $batches = [];
+            $expiredQty = 0;
+            foreach ($rawBatches as $b) {
+                $exp = $b['expiration_date'] ? (string)$b['expiration_date'] : null;
+                $isExp = ($exp !== null && $exp < $todayStr);
+                $isSoon = (!$isExp && $exp !== null && (strtotime($exp) - strtotime($todayStr) <= 30 * 86400));
+                $b['is_expired'] = $isExp;
+                $b['is_expiring_soon'] = $isSoon;
+                $b['status_label'] = $isExp ? 'Expired' : ($isSoon ? 'Expiring Soon' : 'Active');
+                $b['badge_class'] = $isExp ? 'badge-danger' : ($isSoon ? 'warn' : 'secondary');
+                $batches[] = $b;
+                if ($isExp) {
+                    $expiredQty += (int)$b['quantity'];
+                }
+            }
+            $item['batches'] = $batches;
+            $item['expired_quantity'] = $expiredQty;
+            $requiresBatch = !empty($item['requires_batch_tracking']);
+
+            if ($requiresBatch) {
+                // Rule 6: Expired batches must not be counted as usable available stock
+                $usableOnHand = max(0, (int)$item['on_hand'] - $expiredQty);
+                $item['usable_on_hand'] = $usableOnHand;
+                $item['available'] = max(0, $usableOnHand - (int)$item['committed']);
+            } else {
+                $item['usable_on_hand'] = (int)$item['on_hand'];
+                $item['available'] = max(0, (int)$item['on_hand'] - (int)$item['committed']);
+            }
         }
         unset($item);
 
         // Catalog products for PO and PO Request dropdowns (including live stock counts)
         $catStmt = $this->db->prepare(
-            "SELECT bp.business_product_id, bp.selling_price, p.product_name, p.sku,
+            "SELECT bp.business_product_id, bp.selling_price, bp.requires_batch_tracking, p.product_name, p.sku,
                     COALESCE(i.on_hand, 0) AS on_hand,
                     COALESCE(i.committed, 0) AS committed,
                     GREATEST(COALESCE(i.on_hand, 0) - COALESCE(i.committed, 0), 0) AS available
@@ -3494,7 +3537,7 @@ final class ManagerController extends Controller
         // Attach items & receiving records per PO
         foreach ($purchaseOrders as &$po) {
             $poiStmt = $this->db->prepare(
-                "SELECT poi.*, p.product_name, p.sku
+                "SELECT poi.*, p.product_name, p.sku, bp.requires_batch_tracking
                  FROM purchase_order_item poi
                  JOIN business_product bp ON bp.business_product_id = poi.business_product_id
                  JOIN product p ON p.product_id = bp.product_id
@@ -3506,7 +3549,7 @@ final class ManagerController extends Controller
 
             $rcvStmt = $this->db->prepare(
                 "SELECT sr.receiving_reference, sr.receiving_date, CONCAT(e.first_name, ' ', e.last_name) AS employee_name,
-                        p.product_name, sri.quantity_received, sri.quantity_accepted, sri.quantity_rejected, sri.rejection_reason
+                        p.product_name, sri.quantity_received, sri.quantity_accepted, sri.quantity_rejected, sri.rejection_reason, sri.notes AS receiving_notes
                  FROM stock_receiving sr
                  JOIN employee e ON e.employee_id = sr.employee_id
                  JOIN stock_receiving_item sri ON sri.receiving_id = sr.receiving_id
@@ -3519,6 +3562,35 @@ final class ManagerController extends Controller
             $po['receivings'] = $rcvStmt->fetchAll();
         }
         unset($po);
+
+        // Movement History query (when tab=movements or for unit summary)
+        $movements = [];
+        if ($tab === 'movements') {
+            $movSql = "SELECT im.*, p.product_name, p.sku, p.product_category,
+                              ib.batch_number, ib.expiration_date
+                       FROM inventory_movement im
+                       JOIN inventory i ON i.inventory_id = im.inventory_id
+                       JOIN business_product bp ON bp.business_product_id = i.business_product_id
+                       JOIN product p ON p.product_id = bp.product_id
+                       LEFT JOIN inventory_batch ib ON ib.batch_id = im.batch_id
+                       WHERE bp.business_unit_id = ?";
+            $movParams = [$unitId];
+            if ($q !== '') {
+                $movSql .= " AND (p.product_name LIKE ? OR p.sku LIKE ? OR ib.batch_number LIKE ? OR im.movement_type LIKE ? OR im.notes LIKE ?)";
+                $movParams[] = "%$q%";
+                $movParams[] = "%$q%";
+                $movParams[] = "%$q%";
+                $movParams[] = "%$q%";
+                $movParams[] = "%$q%";
+            }
+            $movSql .= " ORDER BY im.movement_date DESC, im.movement_id DESC LIMIT 200";
+            $movStmt = $this->db->prepare($movSql);
+            $movStmt->execute($movParams);
+            $movements = $movStmt->fetchAll();
+        }
+
+        // Summary Statistics for Overview section
+        $inventorySummary = \App\Models\InventoryBatch::getSummaryForUnit($this->db, (int)$unitId);
 
         // Purchase Order Requests (Requisitions submitted by Inventory Manager or BM)
         $porStmt = $this->db->prepare(
@@ -3590,6 +3662,8 @@ final class ManagerController extends Controller
             'purchaseOrderRequests' => $purchaseOrderRequests,
             'currentEmployeeName' => $currentEmployeeName,
             'searchQuery' => $q,
+            'movements' => $movements,
+            'inventorySummary' => $inventorySummary,
         ]);
     }
 
@@ -3702,6 +3776,19 @@ final class ManagerController extends Controller
         [$uid, $employeeId, $unitId, , $isSuper] = $this->checkManagerOrInventoryManager($routeUnitId);
         CSRF::check();
 
+        if ($employeeId <= 0) {
+            $empLookup = $this->db->prepare("SELECT employee_id FROM employee WHERE user_account_id = ? LIMIT 1");
+            $empLookup->execute([(int)$uid]);
+            $foundEmpId = (int)$empLookup->fetchColumn();
+            if ($foundEmpId > 0) {
+                $employeeId = $foundEmpId;
+            } else {
+                $unitEmpLookup = $this->db->prepare("SELECT employee_id FROM employee WHERE business_unit_id = ? AND employment_status = 'active' ORDER BY employee_id ASC LIMIT 1");
+                $unitEmpLookup->execute([(int)$unitId]);
+                $employeeId = (int)$unitEmpLookup->fetchColumn() ?: 1;
+            }
+        }
+
         $invRedirect = '/manager/inventory' . ($isSuper ? '?unit_id=' . (int)$unitId : '');
 
         $bpId = (int)($_POST['business_product_id'] ?? 0);
@@ -3710,6 +3797,9 @@ final class ManagerController extends Controller
         $reason = trim((string)($_POST['reason'] ?? ''));
         $inspectionConfirmed = !empty($_POST['inspection_confirmed']);
         $relatedRef = trim((string)($_POST['related_reference'] ?? ''));
+        $batchId = isset($_POST['batch_id']) && ctype_digit((string)$_POST['batch_id']) ? (int)$_POST['batch_id'] : 0;
+        $batchNumber = trim((string)($_POST['batch_number'] ?? ''));
+        $expirationDate = !empty($_POST['expiration_date']) ? trim((string)$_POST['expiration_date']) : null;
 
         if ($bpId <= 0 || !in_array($type, ['increase', 'decrease'], true) || $qty <= 0 || $reason === '') {
             $this->flash('error', 'Valid product, adjustment direction, positive quantity, and mandatory reason are required.');
@@ -3726,7 +3816,7 @@ final class ManagerController extends Controller
         $this->db->beginTransaction();
         try {
             $stmt = $this->db->prepare(
-                'SELECT i.on_hand, p.product_name
+                'SELECT COALESCE(i.inventory_id, 0) AS inventory_id, COALESCE(i.on_hand, 0) AS on_hand, p.product_name, bp.requires_batch_tracking
                  FROM business_product bp
                  JOIN product p ON p.product_id = bp.product_id
                  LEFT JOIN inventory i ON i.business_product_id = bp.business_product_id
@@ -3740,8 +3830,19 @@ final class ManagerController extends Controller
                 $this->notFound();
             }
 
+            $invId = (int)$row['inventory_id'];
+            if ($invId === 0) {
+                $insInv = $this->db->prepare("INSERT INTO inventory (business_product_id, on_hand, committed) VALUES (?, 0, 0)");
+                $insInv->execute([$bpId]);
+                $invId = (int)$this->db->lastInsertId();
+            }
+
             $prevOnHand = (int)$row['on_hand'];
             $prodName = (string)$row['product_name'];
+            $requiresBatch = !empty($row['requires_batch_tracking']);
+
+            $affectedBatchNumber = null;
+            $affectedBatchId = null;
 
             if ($type === 'decrease') {
                 if ($prevOnHand <= 0) {
@@ -3754,26 +3855,136 @@ final class ManagerController extends Controller
                     $this->flash('error', "Cannot deduct $qty units: current on-hand quantity is only $prevOnHand.");
                     $this->redirect($invRedirect);
                 }
+
+                if ($requiresBatch) {
+                    if ($batchId <= 0) {
+                        $this->db->rollBack();
+                        $this->flash('error', 'Please select a specific batch to deduct from.');
+                        $this->redirect($invRedirect);
+                    }
+
+                    $bStmt = $this->db->prepare("SELECT batch_id, batch_number, quantity, expiration_date FROM inventory_batch WHERE batch_id = ? AND inventory_id = ? FOR UPDATE");
+                    $bStmt->execute([$batchId, $invId]);
+                    $batchRow = $bStmt->fetch();
+                    if (!$batchRow) {
+                        $this->db->rollBack();
+                        $this->flash('error', 'Selected batch was not found.');
+                        $this->redirect($invRedirect);
+                    }
+
+                    $bQty = (int)$batchRow['quantity'];
+                    if ($qty > $bQty) {
+                        $this->db->rollBack();
+                        $this->flash('error', "Cannot deduct $qty units: selected batch '{$batchRow['batch_number']}' only contains $bQty units.");
+                        $this->redirect($invRedirect);
+                    }
+
+                    $updBatch = $this->db->prepare("UPDATE inventory_batch SET quantity = quantity - ?, updated_at = NOW() WHERE batch_id = ?");
+                    $updBatch->execute([$qty, $batchId]);
+
+                    $affectedBatchId = $batchId;
+                    $affectedBatchNumber = (string)$batchRow['batch_number'];
+                }
+
                 $newOnHand = $prevOnHand - $qty;
+                $upd = $this->db->prepare('UPDATE inventory SET on_hand = ? WHERE inventory_id = ?');
+                $upd->execute([$newOnHand, $invId]);
+
+                $movType = ($reason === 'Expired stock write-off') ? 'write_off_expired' : 'adjustment_decrease';
+                $refNote = $relatedRef ?: ($affectedBatchNumber ? "Batch: $affectedBatchNumber" : null);
+
+                $adjStmt = $this->db->prepare(
+                    'INSERT INTO stock_adjustment (business_unit_id, business_product_id, employee_id, adjustment_type, quantity_change, previous_on_hand, new_on_hand, reason, related_reference)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                );
+                $adjStmt->execute([$unitId, $bpId, $employeeId, $type, $qty, $prevOnHand, $newOnHand, $reason, $refNote]);
+
+                $movNotes = ($reason === 'Expired stock write-off' ? 'Expired stock write-off' : 'Manual stock deduction') .
+                            ($affectedBatchNumber ? " (Batch: $affectedBatchNumber)" : "") .
+                            ": $reason" . ($relatedRef ? " [Ref: $relatedRef]" : "");
+                $movNotes = mb_substr($movNotes, 0, 255);
+
+                $movStmt = $this->db->prepare(
+                    'INSERT INTO inventory_movement (inventory_id, batch_id, movement_type, quantity, notes)
+                     VALUES (?, ?, ?, ?, ?)'
+                );
+                $movStmt->execute([$invId, $affectedBatchId, $movType, -$qty, $movNotes]);
             } else {
+                // type === 'increase'
+                if ($requiresBatch) {
+                    if ($batchId > 0) {
+                        $bStmt = $this->db->prepare("SELECT batch_id, batch_number, quantity FROM inventory_batch WHERE batch_id = ? AND inventory_id = ? FOR UPDATE");
+                        $bStmt->execute([$batchId, $invId]);
+                        $batchRow = $bStmt->fetch();
+                        if (!$batchRow) {
+                            $this->db->rollBack();
+                            $this->flash('error', 'Selected batch was not found.');
+                            $this->redirect($invRedirect);
+                        }
+                        $updBatch = $this->db->prepare("UPDATE inventory_batch SET quantity = quantity + ?, updated_at = NOW() WHERE batch_id = ?");
+                        $updBatch->execute([$qty, $batchId]);
+
+                        $affectedBatchId = $batchId;
+                        $affectedBatchNumber = (string)$batchRow['batch_number'];
+                    } else {
+                        if ($batchNumber === '') {
+                            $this->db->rollBack();
+                            $this->flash('error', 'Batch number is required for increasing stock of batch-tracked products.');
+                            $this->redirect($invRedirect);
+                        }
+
+                        if ($expirationDate !== null && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $expirationDate)) {
+                            $this->db->rollBack();
+                            $this->flash('error', 'Invalid expiration date format (expected YYYY-MM-DD).');
+                            $this->redirect($invRedirect);
+                        }
+
+                        $existStmt = $this->db->prepare("SELECT batch_id, quantity FROM inventory_batch WHERE inventory_id = ? AND batch_number = ? FOR UPDATE");
+                        $existStmt->execute([$invId, $batchNumber]);
+                        $existBatch = $existStmt->fetch();
+
+                        if ($existBatch) {
+                            $affectedBatchId = (int)$existBatch['batch_id'];
+                            $updBatch = $this->db->prepare("UPDATE inventory_batch SET quantity = quantity + ?, updated_at = NOW() WHERE batch_id = ?");
+                            $updBatch->execute([$qty, $affectedBatchId]);
+                        } else {
+                            $insBatch = $this->db->prepare("INSERT INTO inventory_batch (inventory_id, batch_number, expiration_date, quantity) VALUES (?, ?, ?, ?)");
+                            $insBatch->execute([$invId, $batchNumber, $expirationDate, $qty]);
+                            $affectedBatchId = (int)$this->db->lastInsertId();
+                        }
+                        $affectedBatchNumber = $batchNumber;
+                    }
+                }
+
                 $newOnHand = $prevOnHand + $qty;
+                $upd = $this->db->prepare('UPDATE inventory SET on_hand = ? WHERE inventory_id = ?');
+                $upd->execute([$newOnHand, $invId]);
+
+                $refNote = $relatedRef ?: ($affectedBatchNumber ? "Batch: $affectedBatchNumber" : null);
+
+                $adjStmt = $this->db->prepare(
+                    'INSERT INTO stock_adjustment (business_unit_id, business_product_id, employee_id, adjustment_type, quantity_change, previous_on_hand, new_on_hand, reason, related_reference)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                );
+                $adjStmt->execute([$unitId, $bpId, $employeeId, $type, $qty, $prevOnHand, $newOnHand, $reason, $refNote]);
+
+                $movNotes = "Manual stock addition" .
+                            ($affectedBatchNumber ? " (Batch: $affectedBatchNumber)" : "") .
+                            ": $reason" . ($relatedRef ? " [Ref: $relatedRef]" : "");
+                $movNotes = mb_substr($movNotes, 0, 255);
+
+                $movStmt = $this->db->prepare(
+                    'INSERT INTO inventory_movement (inventory_id, batch_id, movement_type, quantity, notes)
+                     VALUES (?, ?, ?, ?, ?)'
+                );
+                $movStmt->execute([$invId, $affectedBatchId, 'adjustment_increase', $qty, $movNotes]);
             }
 
-            // Update inventory
-            $upd = $this->db->prepare('UPDATE inventory SET on_hand = ? WHERE business_product_id = ?');
-            $upd->execute([$newOnHand, $bpId]);
-
-            // Insert audit record in stock_adjustment
-            $adjStmt = $this->db->prepare(
-                'INSERT INTO stock_adjustment (business_unit_id, business_product_id, employee_id, adjustment_type, quantity_change, previous_on_hand, new_on_hand, reason, related_reference)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-            );
-            $adjStmt->execute([$unitId, $bpId, $employeeId, $type, $qty, $prevOnHand, $newOnHand, $reason, $relatedRef ?: null]);
-
-            Audit::log('inventory.stock_adjustment', "Stock {$type} of {$qty} for '$prodName' ($prevOnHand -> $newOnHand). Reason: $reason", $unitId, 'business_product', $bpId, $uid);
+            Audit::log('inventory.stock_adjustment', "Stock {$type} of {$qty} for '$prodName' ($prevOnHand -> $newOnHand). Reason: $reason" . ($affectedBatchNumber ? " (Batch: $affectedBatchNumber)" : ""), $unitId, 'business_product', $bpId, $uid);
 
             $this->db->commit();
-            $this->flash('success', "Stock adjusted for '$prodName': {$prevOnHand} → {$newOnHand} ($reason).");
+            $batchMsg = $affectedBatchNumber ? " [Batch {$affectedBatchNumber}]" : '';
+            $this->flash('success', "Stock adjusted for '$prodName'{$batchMsg}: {$prevOnHand} → {$newOnHand} ($reason).");
         } catch (\Throwable $e) {
             $this->db->rollBack();
             $this->flash('error', 'Stock adjustment failed: ' . $e->getMessage());
@@ -3879,8 +4090,10 @@ final class ManagerController extends Controller
 
     public function receiveStock(int $purchaseOrderId): void
     {
-        [$uid, $employeeId, $unitId] = $this->checkManagerOrInventoryManager();
+        [$uid, $employeeId, $unitId, , $isSuper] = $this->checkManagerOrInventoryManager();
         CSRF::check();
+
+        $ordersRedirect = '/manager/inventory' . ($isSuper ? '?unit_id=' . (int)$unitId . '&tab=orders' : '?tab=orders');
 
         $poStmt = $this->db->prepare('SELECT * FROM purchase_order WHERE purchase_order_id = ? AND business_unit_id = ?');
         $poStmt->execute([$purchaseOrderId, $unitId]);
@@ -3891,7 +4104,20 @@ final class ManagerController extends Controller
 
         if (!in_array($po['po_status'], ['Ordered', 'Partially Received'], true)) {
             $this->flash('error', 'Stock can only be received for orders in Ordered or Partially Received status.');
-            $this->redirect('/manager/inventory?tab=orders');
+            $this->redirect($ordersRedirect);
+        }
+
+        if ($employeeId <= 0) {
+            $empLookup = $this->db->prepare("SELECT employee_id FROM employee WHERE user_account_id = ? LIMIT 1");
+            $empLookup->execute([(int)$uid]);
+            $foundEmpId = (int)$empLookup->fetchColumn();
+            if ($foundEmpId > 0) {
+                $employeeId = $foundEmpId;
+            } else {
+                $unitEmpLookup = $this->db->prepare("SELECT employee_id FROM employee WHERE business_unit_id = ? AND employment_status = 'active' ORDER BY employee_id ASC LIMIT 1");
+                $unitEmpLookup->execute([(int)$unitId]);
+                $employeeId = (int)$unitEmpLookup->fetchColumn() ?: 1;
+            }
         }
 
         $itemsInput = $_POST['items'] ?? [];
@@ -3899,7 +4125,7 @@ final class ManagerController extends Controller
 
         if (!is_array($itemsInput) || empty($itemsInput)) {
             $this->flash('error', 'Receiving quantities must be specified.');
-            $this->redirect('/manager/inventory?tab=orders');
+            $this->redirect($ordersRedirect);
         }
 
         $this->db->beginTransaction();
@@ -3923,6 +4149,8 @@ final class ManagerController extends Controller
                 $qtyAcc = (int)($it['quantity_accepted'] ?? 0);
                 $qtyRej = (int)($it['quantity_rejected'] ?? 0);
                 $rejReason = trim((string)($it['rejection_reason'] ?? ''));
+                $batchNumber = trim((string)($it['batch_number'] ?? ''));
+                $expDate = !empty($it['expiration_date']) ? trim((string)$it['expiration_date']) : null;
 
                 if ($qtyRecv <= 0 && $qtyAcc <= 0) {
                     continue;
@@ -3932,12 +4160,71 @@ final class ManagerController extends Controller
                     $qtyRej = max(0, $qtyRecv - $qtyAcc);
                 }
 
+                if ($qtyRej > 0 && $rejReason === '') {
+                    $rejReason = 'Rejected during receiving inspection';
+                }
+
+                // Check product batch tracking requirement
+                $bpCheck = $this->db->prepare(
+                    "SELECT bp.requires_batch_tracking, p.product_name, COALESCE(i.inventory_id, 0) AS inventory_id
+                     FROM business_product bp
+                     JOIN product p ON p.product_id = bp.product_id
+                     LEFT JOIN inventory i ON i.business_product_id = bp.business_product_id
+                     WHERE bp.business_product_id = ? FOR UPDATE"
+                );
+                $bpCheck->execute([$bpId]);
+                $bpInfo = $bpCheck->fetch();
+                $requiresBatch = !empty($bpInfo['requires_batch_tracking']);
+                $productName = $bpInfo['product_name'] ?? "Product #$bpId";
+
+                $invId = (int)($bpInfo['inventory_id'] ?? 0);
+                if ($invId === 0) {
+                    $insInv = $this->db->prepare("INSERT INTO inventory (business_product_id, on_hand, committed) VALUES (?, 0, 0)");
+                    $insInv->execute([$bpId]);
+                    $invId = (int)$this->db->lastInsertId();
+                }
+
+                $batchId = null;
+
+                if ($requiresBatch && $qtyAcc > 0) {
+                    if ($batchNumber === '') {
+                        throw new \RuntimeException("Batch number is required for batch-tracked product '{$productName}'.");
+                    }
+                    if ($expDate !== null && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $expDate)) {
+                        throw new \RuntimeException("Invalid expiration date format for batch '{$batchNumber}' (expected YYYY-MM-DD).");
+                    }
+
+                    // Check if batch already exists for this inventory
+                    $bStmt = $this->db->prepare("SELECT batch_id, quantity, expiration_date FROM inventory_batch WHERE inventory_id = ? AND batch_number = ? FOR UPDATE");
+                    $bStmt->execute([$invId, $batchNumber]);
+                    $existingBatch = $bStmt->fetch();
+
+                    if ($existingBatch) {
+                        $batchId = (int)$existingBatch['batch_id'];
+                        $bUpd = $this->db->prepare("UPDATE inventory_batch SET quantity = quantity + ?, updated_at = NOW() WHERE batch_id = ?");
+                        $bUpd->execute([$qtyAcc, $batchId]);
+
+                        if ($expDate !== null && empty($existingBatch['expiration_date'])) {
+                            $this->db->prepare("UPDATE inventory_batch SET expiration_date = ? WHERE batch_id = ?")
+                                     ->execute([$expDate, $batchId]);
+                        }
+                    } else {
+                        $bIns = $this->db->prepare("INSERT INTO inventory_batch (inventory_id, batch_number, expiration_date, quantity) VALUES (?, ?, ?, ?)");
+                        $bIns->execute([$invId, $batchNumber, $expDate, $qtyAcc]);
+                        $batchId = (int)$this->db->lastInsertId();
+                    }
+                }
+
                 // 1. Record item in stock_receiving_item
+                $itemNotes = null;
+                if ($batchNumber !== '') {
+                    $itemNotes = "Batch: $batchNumber" . ($expDate ? " (Exp: $expDate)" : "");
+                }
                 $sriIns = $this->db->prepare(
                     'INSERT INTO stock_receiving_item (receiving_id, po_item_id, business_product_id, quantity_received, quantity_accepted, quantity_rejected, rejection_reason, notes)
                      VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
                 );
-                $sriIns->execute([$receivingId, $poItemId, $bpId, $qtyRecv, $qtyAcc, $qtyRej, $rejReason ?: null, null]);
+                $sriIns->execute([$receivingId, $poItemId, $bpId, $qtyRecv, $qtyAcc, $qtyRej, $rejReason ?: null, $itemNotes]);
 
                 // 2. Update purchase_order_item total received count
                 $poiUpd = $this->db->prepare('UPDATE purchase_order_item SET quantity_received = quantity_received + ? WHERE po_item_id = ?');
@@ -3945,9 +4232,18 @@ final class ManagerController extends Controller
 
                 // 3. ONLY ACCEPTED QUANTITIES INCREASE ON-HAND INVENTORY!
                 if ($qtyAcc > 0) {
-                    $invUpd = $this->db->prepare('UPDATE inventory SET on_hand = on_hand + ? WHERE business_product_id = ?');
-                    $invUpd->execute([$qtyAcc, $bpId]);
+                    $invUpd = $this->db->prepare('UPDATE inventory SET on_hand = on_hand + ? WHERE inventory_id = ?');
+                    $invUpd->execute([$qtyAcc, $invId]);
                     $totalAcceptedInShipment += $qtyAcc;
+
+                    // 4. Log in inventory_movement
+                    $movNotes = "PO Receiving (Ref: $receivingRef)" . ($batchNumber ? ", Batch: $batchNumber" : "");
+                    $movNotes = mb_substr($movNotes, 0, 255);
+                    $movIns = $this->db->prepare(
+                        'INSERT INTO inventory_movement (inventory_id, batch_id, movement_type, quantity, notes)
+                         VALUES (?, ?, ?, ?, ?)'
+                    );
+                    $movIns->execute([$invId, $batchId, 'receiving', $qtyAcc, $movNotes]);
                 }
             }
 
@@ -3975,7 +4271,7 @@ final class ManagerController extends Controller
             $this->flash('error', 'Failed to record stock receiving: ' . $e->getMessage());
         }
 
-        $this->redirect('/manager/inventory?tab=orders');
+        $this->redirect($ordersRedirect);
     }
 
     public function storePurchaseOrderRequest(?int $routeUnitId = null): void
@@ -4173,7 +4469,7 @@ final class ManagerController extends Controller
             $this->forbidden('Temporary inventory access keys do not grant access to the employee roster.');
         }
 
-        if ($isInventoryManagerOnly && !in_array((int)$unitId, [1, 3], true)) {
+        if ($isInventoryManagerOnly && !in_array((int)$unitId, [1, 2, 3], true)) {
             $this->forbidden('Access denied: you cannot access another business unit.');
         }
 

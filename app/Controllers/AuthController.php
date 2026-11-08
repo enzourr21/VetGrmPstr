@@ -93,10 +93,10 @@ final class AuthController extends Controller
         }
         foreach ($roles as $r) {
             if ($r['role_name'] === 'INVENTORY_MANAGER') {
-                if ($r['business_unit_name'] === Units::GROOMING) {
-                    return '/manager/inventory';
+                if ($r['business_unit_name'] === Units::PET_STORE || (int)($r['business_unit_id'] ?? 0) === 1) {
+                    return '/manager/orders';
                 }
-                return '/manager/orders';
+                return '/manager/inventory';
             }
         }
         foreach ($roles as $r) {
@@ -571,6 +571,17 @@ final class AuthController extends Controller
             }
             Session::set('active_context', 'employee');
             Session::set('inventory_manager_mode', true);
+            if ($unitId === null && !$isSuper) {
+                $uStmt = $this->db->prepare(
+                    "SELECT ar.business_unit_id FROM account_role ar JOIN role r ON r.role_id = ar.role_id WHERE ar.user_account_id = ? AND r.role_name = 'INVENTORY_MANAGER' LIMIT 1"
+                );
+                $uStmt->execute([(int)$uid]);
+                $foundU = $uStmt->fetchColumn();
+                if ($foundU) {
+                    $unitId = (int)$foundU;
+                    $unitQuery = '?unit_id=' . $unitId;
+                }
+            }
             $targetUnit = $unitId ?? 1;
             if ($targetUnit === 1) {
                 $this->redirect('/manager/orders' . $unitQuery);

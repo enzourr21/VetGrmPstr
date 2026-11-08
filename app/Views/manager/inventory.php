@@ -13,7 +13,124 @@ $isInvManager = !empty($isInventoryManagerOnly);
   </div>
 </div>
 
-<!-- Sub-Tabs: Stock Levels vs Purchase Orders -->
+<?php if ((int)$unitId === \App\Models\Units::vetClinicId() && !empty($inventorySummary) && !$isInvManager): ?>
+  <!-- Veterinary Clinic Inventory Overview -->
+  <section class="card" id="vet-inventory-overview-card" style="margin-bottom: 1.5rem; padding: 1.35rem 1.5rem;">
+    <div class="row" style="justify-content: space-between; align-items: baseline; margin-bottom: 1rem;">
+      <div>
+        <span class="eyebrow" style="margin-bottom: 0.2rem;">Veterinary Clinical Inventory</span>
+        <h2 style="margin: 0; font-size: 1.25rem;">Inventory Overview</h2>
+      </div>
+      <span class="caption muted">Real-Time Stock &amp; Expiry Analytics</span>
+    </div>
+
+    <!-- 6 Primary Metric Stat Cards -->
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 1.25rem;">
+      <article class="card stat-card" style="padding: 1rem; background: var(--surface-subtle, #f8fafc); border: 1px solid var(--line);">
+        <span class="eyebrow">Total Products</span>
+        <strong class="stat-value" style="font-size: 1.6rem;"><?= (int)($inventorySummary['total_products'] ?? 0) ?></strong>
+        <p class="caption" style="margin: 0.25rem 0 0 0;">Active catalog items</p>
+      </article>
+
+      <article class="card stat-card" style="padding: 1rem; background: var(--surface-subtle, #f8fafc); border: 1px solid var(--line);">
+        <span class="eyebrow">Physical Stock</span>
+        <strong class="stat-value" style="font-size: 1.6rem;"><?= (int)($inventorySummary['total_physical_stock'] ?? 0) ?></strong>
+        <p class="caption" style="margin: 0.25rem 0 0 0;">Total units on hand</p>
+      </article>
+
+      <article class="card stat-card" style="padding: 1rem; background: var(--surface-subtle, #f8fafc); border: 1px solid var(--line);">
+        <span class="eyebrow">Low Stock</span>
+        <strong class="stat-value" style="font-size: 1.6rem; <?= ($inventorySummary['low_stock_count'] ?? 0) > 0 ? 'color: var(--danger, #dc2626);' : '' ?>">
+          <?= (int)($inventorySummary['low_stock_count'] ?? 0) ?>
+        </strong>
+        <p class="caption" style="margin: 0.25rem 0 0 0;">Available stock &le; 10</p>
+      </article>
+
+      <article class="card stat-card" style="padding: 1rem; background: var(--surface-subtle, #f8fafc); border: 1px solid var(--line);">
+        <span class="eyebrow">Out of Stock</span>
+        <strong class="stat-value" style="font-size: 1.6rem; <?= ($inventorySummary['out_of_stock_count'] ?? 0) > 0 ? 'color: var(--danger, #dc2626);' : '' ?>">
+          <?= (int)($inventorySummary['out_of_stock_count'] ?? 0) ?>
+        </strong>
+        <p class="caption" style="margin: 0.25rem 0 0 0;">Zero usable available</p>
+      </article>
+
+      <article class="card stat-card" style="padding: 1rem; background: var(--surface-subtle, #f8fafc); border: 1px solid var(--line);">
+        <span class="eyebrow">Expiring Soon</span>
+        <strong class="stat-value" style="font-size: 1.6rem; <?= ($inventorySummary['expiring_soon_count'] ?? 0) > 0 ? 'color: #b45309;' : '' ?>">
+          <?= (int)($inventorySummary['expiring_soon_count'] ?? 0) ?>
+        </strong>
+        <p class="caption" style="margin: 0.25rem 0 0 0;">Batches &le; 30 days</p>
+      </article>
+
+      <article class="card stat-card" style="padding: 1rem; background: var(--surface-subtle, #f8fafc); border: 1px solid var(--line);">
+        <span class="eyebrow">Expired Batches</span>
+        <strong class="stat-value" style="font-size: 1.6rem; <?= ($inventorySummary['expired_count'] ?? 0) > 0 ? 'color: var(--danger, #dc2626);' : '' ?>">
+          <?= (int)($inventorySummary['expired_count'] ?? 0) ?>
+        </strong>
+        <p class="caption" style="margin: 0.25rem 0 0 0;">Require write-off</p>
+      </article>
+    </div>
+
+    <!-- 7. Recent Inventory Movements Summary -->
+    <div style="border-top: 1px solid var(--line); padding-top: 1rem;">
+      <div class="row" style="justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+        <span class="caption" style="font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;">Recent Inventory Movements</span>
+        <a href="/manager/inventory<?= $unitQuery ?><?= !empty($unitQuery) ? '&' : '?' ?>tab=movements" class="btn ghost btn-sm">
+          View All Movements (<?= (int)($inventorySummary['total_movements'] ?? 0) ?>) &rarr;
+        </a>
+      </div>
+      <?php if (empty($inventorySummary['recent_movements'])): ?>
+        <p class="caption muted" style="margin: 0;">No stock movements recorded yet for this facility.</p>
+      <?php else: ?>
+        <div class="table-wrap" style="border: 1px solid var(--line); border-radius: var(--radius-sm);">
+          <table style="margin: 0; font-size: 0.85rem;">
+            <thead>
+              <tr>
+                <th style="padding: 0.5rem 0.75rem;">Date &amp; Time</th>
+                <th style="padding: 0.5rem 0.75rem;">Product</th>
+                <th style="padding: 0.5rem 0.75rem;">Batch</th>
+                <th style="padding: 0.5rem 0.75rem;">Movement Type</th>
+                <th style="padding: 0.5rem 0.75rem; text-align: right;">Quantity</th>
+                <th style="padding: 0.5rem 0.75rem;">Notes / Reason</th>
+              </tr>
+            </thead>
+            <tbody>
+              <?php foreach ($inventorySummary['recent_movements'] as $rm):
+                $rmQty = (int)$rm['quantity'];
+              ?>
+                <tr>
+                  <td style="padding: 0.5rem 0.75rem; white-space: nowrap; color: var(--muted);">
+                    <?= date('M j, Y · g:i A', strtotime((string)$rm['movement_date'])) ?>
+                  </td>
+                  <td style="padding: 0.5rem 0.75rem;">
+                    <strong><?= e($rm['product_name']) ?></strong>
+                    <?php if (!empty($rm['sku'])): ?>
+                      <span class="caption muted" style="margin-left: 0.35rem;"><code><?= e($rm['sku']) ?></code></span>
+                    <?php endif; ?>
+                  </td>
+                  <td style="padding: 0.5rem 0.75rem;">
+                    <?= !empty($rm['batch_number']) ? '<code>' . e($rm['batch_number']) . '</code>' : '<span class="caption muted">—</span>' ?>
+                  </td>
+                  <td style="padding: 0.5rem 0.75rem;">
+                    <span class="badge secondary" style="font-size: 0.75rem;"><?= e(str_replace('_', ' ', (string)$rm['movement_type'])) ?></span>
+                  </td>
+                  <td style="padding: 0.5rem 0.75rem; text-align: right; font-weight: 600; color: <?= $rmQty > 0 ? 'var(--primary, #059669)' : 'var(--danger, #dc2626)' ?>;">
+                    <?= $rmQty > 0 ? ('+' . $rmQty) : $rmQty ?>
+                  </td>
+                  <td style="padding: 0.5rem 0.75rem; color: var(--ink);">
+                    <?= e($rm['notes'] ?: '—') ?>
+                  </td>
+                </tr>
+              <?php endforeach; ?>
+            </tbody>
+          </table>
+        </div>
+      <?php endif; ?>
+    </div>
+  </section>
+<?php endif; ?>
+
+<!-- Sub-Tabs: Stock Levels vs Purchase Orders vs Movement History -->
 <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.5rem;">
   <div class="segmented-bar">
     <a href="/manager/inventory<?= $unitQuery ?><?= !empty($unitQuery) ? '&' : '?' ?>tab=stock"
@@ -23,6 +140,10 @@ $isInvManager = !empty($isInventoryManagerOnly);
     <a href="/manager/inventory<?= $unitQuery ?><?= !empty($unitQuery) ? '&' : '?' ?>tab=orders"
        class="segmented-pill <?= $invTab === 'orders' ? 'is-active' : '' ?>">
       Purchase Orders (<?= count($purchaseOrders) ?>)
+    </a>
+    <a href="/manager/inventory<?= $unitQuery ?><?= !empty($unitQuery) ? '&' : '?' ?>tab=movements"
+       class="segmented-pill <?= $invTab === 'movements' ? 'is-active' : '' ?>">
+      Movement History (<?= (int)($inventorySummary['total_movements'] ?? 0) ?>)
     </a>
   </div>
 
@@ -78,13 +199,25 @@ $isInvManager = !empty($isInventoryManagerOnly);
           <a href="/manager/inventory<?= $unitQuery ?>" class="btn ghost btn-sm">Reset</a>
         <?php endif; ?>
       </form>
-
-      <?php if ($isInvManager): ?>
-        <button type="button" class="btn secondary btn-sm" data-modal-open="po-request-modal">
-          Request Purchase Order
-        </button>
-      <?php endif; ?>
     </div>
+  <?php elseif ($invTab === 'movements'): ?>
+    <!-- Movement Search Field -->
+    <form method="get" action="/manager/inventory" class="row" style="gap: 0.5rem; align-items: center; margin: 0;">
+      <?php if (!empty($isSuper)): ?>
+        <input type="hidden" name="unit_id" value="<?= (int)$unitId ?>">
+      <?php endif; ?>
+      <input type="hidden" name="tab" value="movements">
+      <div class="search-input-wrap" style="width: 280px;">
+        <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="11" cy="11" r="8"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <input type="search" name="q" value="<?= e($q) ?>" placeholder="Search movements, batch, SKU... (Enter)" class="search-input">
+      </div>
+      <?php if ($q !== ''): ?>
+        <a href="/manager/inventory<?= $unitQuery ?><?= !empty($unitQuery) ? '&' : '?' ?>tab=movements" class="btn ghost btn-sm">Reset</a>
+      <?php endif; ?>
+    </form>
   <?php endif; ?>
 </div>
 
@@ -114,72 +247,81 @@ $isInvManager = !empty($isInventoryManagerOnly);
       </div>
     <?php else: ?>
       <div class="table-wrap">
-        <table>
+        <table class="inventory-stock-table" style="width: 100%; min-width: <?= (int)$unitId === \App\Models\Units::vetClinicId() ? '66rem' : '52rem' ?>; border-collapse: collapse;">
           <thead>
             <tr>
-              <th>Product</th>
-              <th>SKU / Code</th>
-              <th>Category</th>
+              <th style="min-width: 180px; width: 22%;">Product</th>
+              <th style="white-space: nowrap; min-width: 110px;">SKU / Code</th>
+              <th style="white-space: nowrap; min-width: 95px;">Category</th>
               <?php if ((int)$unitId === \App\Models\Units::vetClinicId()): ?>
-                <th>Batches &amp; Expiry</th>
+                <th style="min-width: 280px; width: 28%;">Batches &amp; Expiry</th>
               <?php endif; ?>
-              <th>On Hand</th>
-              <th>Committed</th>
-              <th>Available</th>
-              <th>Stock Status</th>
-              <th style="text-align: right;">Stock Adjustment</th>
+              <th style="text-align: center; white-space: nowrap; min-width: 90px;">Physical On Hand</th>
+              <th style="text-align: center; white-space: nowrap; min-width: 80px;">Committed</th>
+              <th style="text-align: center; white-space: nowrap; min-width: 90px;">Usable Available</th>
+              <th style="text-align: center; white-space: nowrap; min-width: 95px;">Stock Status</th>
+              <th style="text-align: right; white-space: nowrap; min-width: 105px;">Stock Adjustment</th>
             </tr>
           </thead>
           <tbody>
             <?php foreach ($inventoryItems as $item):
-              $isOutOfStock = (int)$item['on_hand'] <= 0;
+              $isOutOfStock = (int)$item['available'] <= 0;
             ?>
               <tr style="<?= $isOutOfStock ? 'background-color: rgba(254, 242, 242, 0.4);' : '' ?>">
-                <td>
+                <td style="vertical-align: top; padding: 0.75rem 0.85rem;">
                   <strong><?= e($item['product_name']) ?></strong>
                   <?php if ($isOutOfStock): ?>
-                    <span class="badge badge-danger" style="margin-left: 0.4rem; font-size: 0.7rem;">Out of Stock</span>
+                    <span class="badge badge-danger" style="margin-left: 0.4rem; font-size: 0.7rem; white-space: nowrap;">Out of Stock</span>
                   <?php endif; ?>
                 </td>
-                <td><code><?= e($item['sku'] ?: '—') ?></code></td>
-                <td><span class="badge secondary"><?= e($item['product_category']) ?></span></td>
+                <td style="white-space: nowrap; vertical-align: top; padding: 0.75rem 0.85rem;"><code><?= e($item['sku'] ?: '—') ?></code></td>
+                <td style="white-space: nowrap; vertical-align: top; padding: 0.75rem 0.85rem;"><span class="badge secondary"><?= e($item['product_category']) ?></span></td>
                 <?php if ((int)$unitId === \App\Models\Units::vetClinicId()): ?>
-                  <td>
+                  <td style="vertical-align: top; padding: 0.75rem 0.85rem;">
                     <?php if (!empty($item['batches'])): ?>
-                      <div style="display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.78rem;">
-                        <?php foreach ($item['batches'] as $b):
-                          $isExpired = !empty($b['expiration_date']) && strtotime((string)$b['expiration_date']) < time();
-                          $isExpiringSoon = !empty($b['expiration_date']) && !$isExpired && (strtotime((string)$b['expiration_date']) - time() <= 30 * 86400);
-                        ?>
-                          <div style="display: inline-flex; align-items: center; gap: 0.35rem; flex-wrap: wrap;">
+                      <div style="display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.78rem;">
+                        <?php foreach ($item['batches'] as $b): ?>
+                          <div style="display: inline-flex; align-items: center; gap: 0.45rem; white-space: nowrap;">
                             <code><?= e($b['batch_number']) ?></code>
-                            <span class="muted">(<?= (int)$b['quantity'] ?>)</span>
+                            <span class="muted" style="font-weight: 600;">(<?= (int)$b['quantity'] ?>)</span>
                             <?php if (!empty($b['expiration_date'])): ?>
-                              <span class="badge <?= $isExpired ? 'badge-danger' : ($isExpiringSoon ? 'warn' : 'secondary') ?>" style="font-size: 0.7rem; padding: 0.1rem 0.35rem;">
-                                Exp: <?= date('M j, Y', strtotime((string)$b['expiration_date'])) ?>
-                              </span>
+                              <span class="caption" style="color: var(--muted); font-size: 0.75rem; white-space: nowrap;">Exp: <?= date('M j, Y', strtotime((string)$b['expiration_date'])) ?></span>
                             <?php endif; ?>
+                            <span class="badge <?= e($b['badge_class']) ?>" style="font-size: 0.7rem; padding: 0.1rem 0.35rem; white-space: nowrap;">
+                              <?= e($b['status_label']) ?>
+                            </span>
                           </div>
                         <?php endforeach; ?>
                       </div>
+                    <?php elseif (!empty($item['requires_batch_tracking'])): ?>
+                      <span class="caption muted">No active batches</span>
                     <?php else: ?>
-                      <span class="caption muted">No batch tracked</span>
+                      <span class="caption muted">Standard item</span>
                     <?php endif; ?>
                   </td>
                 <?php endif; ?>
-                <td>
-                  <strong style="<?= $isOutOfStock ? 'color: var(--danger, #dc2626); font-size: 1.1rem;' : '' ?>">
+                <td style="text-align: center; white-space: nowrap; vertical-align: top; padding: 0.75rem 0.85rem;">
+                  <strong style="<?= (int)$item['on_hand'] <= 0 ? 'color: var(--danger, #dc2626); font-size: 1.1rem;' : '' ?>">
                     <?= (int)$item['on_hand'] ?>
                   </strong>
+                  <?php if (!empty($item['expired_quantity'])): ?>
+                    <div class="caption" style="color: var(--danger, #dc2626); font-weight: 600; font-size: 0.75rem;">
+                      (<?= (int)$item['expired_quantity'] ?> expired)
+                    </div>
+                  <?php endif; ?>
                 </td>
-                <td><?= (int)$item['committed'] ?></td>
-                <td><strong><?= (int)$item['available'] ?></strong></td>
-                <td>
-                  <span class="badge <?= $isOutOfStock ? 'badge-danger' : 'badge-success' ?>">
+                <td style="text-align: center; white-space: nowrap; vertical-align: top; padding: 0.75rem 0.85rem;"><?= (int)$item['committed'] ?></td>
+                <td style="text-align: center; white-space: nowrap; vertical-align: top; padding: 0.75rem 0.85rem;">
+                  <strong style="<?= (int)$item['available'] <= 0 ? 'color: var(--danger, #dc2626);' : '' ?>">
+                    <?= (int)$item['available'] ?>
+                  </strong>
+                </td>
+                <td style="text-align: center; white-space: nowrap; vertical-align: top; padding: 0.75rem 0.85rem;">
+                  <span class="badge <?= $isOutOfStock ? 'badge-danger' : 'badge-success' ?>" style="white-space: nowrap;">
                     <?= $isOutOfStock ? 'Out of Stock' : 'In Stock' ?>
                   </span>
                 </td>
-                <td style="text-align: right;">
+                <td style="text-align: right; white-space: nowrap; vertical-align: top; padding: 0.75rem 0.85rem;">
                   <div class="row" style="gap: 0.4rem; justify-content: flex-end; align-items: center;">
                     <!-- Increase Button (+) -->
                     <button type="button"
@@ -194,8 +336,8 @@ $isInvManager = !empty($isInventoryManagerOnly);
                     <button type="button"
                             class="btn secondary btn-sm"
                             style="font-weight: bold; width: 34px; padding: 0.25rem 0;"
-                            title="<?= $isOutOfStock ? 'Cannot decrease stock when on-hand is 0' : 'Decrease Stock (−)' ?>"
-                            <?= $isOutOfStock ? 'disabled' : '' ?>
+                            title="<?= (int)$item['on_hand'] <= 0 ? 'Cannot decrease stock when on-hand is 0' : 'Decrease Stock (−)' ?>"
+                            <?= (int)$item['on_hand'] <= 0 ? 'disabled' : '' ?>
                             data-modal-open="adjust-modal-dec-<?= (int)$item['business_product_id'] ?>">
                       &minus;
                     </button>
@@ -225,14 +367,48 @@ $isInvManager = !empty($isInventoryManagerOnly);
 
           <div style="background: var(--bg-subtle, #f9fafb); padding: 0.75rem 1rem; border-radius: 6px; margin-bottom: 1rem;">
             <div class="row" style="justify-content: space-between;">
-              <span class="caption">Current On-Hand:</span>
+              <span class="caption">Current Physical On-Hand:</span>
               <strong><?= (int)$item['on_hand'] ?></strong>
             </div>
+            <?php if (!empty($item['expired_quantity'])): ?>
+              <div class="row" style="justify-content: space-between; margin-top: 0.25rem;">
+                <span class="caption" style="color: var(--danger, #dc2626);">Expired Quantity:</span>
+                <strong style="color: var(--danger, #dc2626);"><?= (int)$item['expired_quantity'] ?></strong>
+              </div>
+            <?php endif; ?>
             <div class="row" style="justify-content: space-between; margin-top: 0.25rem;">
               <span class="caption">SKU:</span>
               <code><?= e($item['sku'] ?: '—') ?></code>
             </div>
           </div>
+
+          <?php if (!empty($item['requires_batch_tracking'])): ?>
+            <!-- Batch Selection for Batch-Tracked Products -->
+            <div class="field">
+              <label for="inc-batch-select-<?= (int)$item['business_product_id'] ?>">Destination Batch</label>
+              <select id="inc-batch-select-<?= (int)$item['business_product_id'] ?>"
+                      name="batch_id"
+                      onchange="const isNew = this.value === '0'; document.getElementById('inc-new-batch-fields-<?= (int)$item['business_product_id'] ?>').style.display = isNew ? 'block' : 'none'; const reqInp = document.getElementById('inc-batch-num-<?= (int)$item['business_product_id'] ?>'); if (reqInp) { reqInp.required = isNew; }">
+                <option value="0">+ Create / Enter New Batch</option>
+                <?php foreach ($item['batches'] as $b): ?>
+                  <option value="<?= (int)$b['batch_id'] ?>">
+                    Existing: <?= e($b['batch_number']) ?> (Current: <?= (int)$b['quantity'] ?><?= !empty($b['expiration_date']) ? ', Exp: ' . date('M j, Y', strtotime((string)$b['expiration_date'])) : '' ?>)
+                  </option>
+                <?php endforeach; ?>
+              </select>
+            </div>
+
+            <div id="inc-new-batch-fields-<?= (int)$item['business_product_id'] ?>" style="background: var(--bg-subtle, #f9fafb); padding: 0.75rem 1rem; border-radius: 6px; margin-bottom: 1rem; border: 1px dashed var(--line);">
+              <div class="field" style="margin-bottom: 0.75rem;">
+                <label for="inc-batch-num-<?= (int)$item['business_product_id'] ?>">New Batch Number *</label>
+                <input type="text" id="inc-batch-num-<?= (int)$item['business_product_id'] ?>" name="batch_number" placeholder="e.g. BATCH-2026-001" required>
+              </div>
+              <div class="field" style="margin-bottom: 0;">
+                <label for="inc-exp-date-<?= (int)$item['business_product_id'] ?>">Expiration Date (YYYY-MM-DD)</label>
+                <input type="date" id="inc-exp-date-<?= (int)$item['business_product_id'] ?>" name="expiration_date">
+              </div>
+            </div>
+          <?php endif; ?>
 
           <div class="field">
             <label for="inc-qty-<?= (int)$item['business_product_id'] ?>">Quantity to Add *</label>
@@ -285,14 +461,35 @@ $isInvManager = !empty($isInventoryManagerOnly);
 
           <div style="background: var(--bg-subtle, #f9fafb); padding: 0.75rem 1rem; border-radius: 6px; margin-bottom: 1rem;">
             <div class="row" style="justify-content: space-between;">
-              <span class="caption">Current On-Hand:</span>
+              <span class="caption">Current Physical On-Hand:</span>
               <strong><?= (int)$item['on_hand'] ?></strong>
             </div>
+            <?php if (!empty($item['expired_quantity'])): ?>
+              <div class="row" style="justify-content: space-between; margin-top: 0.25rem;">
+                <span class="caption" style="color: var(--danger, #dc2626);">Expired Quantity:</span>
+                <strong style="color: var(--danger, #dc2626);"><?= (int)$item['expired_quantity'] ?></strong>
+              </div>
+            <?php endif; ?>
             <div class="row" style="justify-content: space-between; margin-top: 0.25rem;">
               <span class="caption">SKU:</span>
               <code><?= e($item['sku'] ?: '—') ?></code>
             </div>
           </div>
+
+          <?php if (!empty($item['requires_batch_tracking'])): ?>
+            <!-- Batch Selection for Batch-Tracked Products -->
+            <div class="field">
+              <label for="dec-batch-<?= (int)$item['business_product_id'] ?>">Affected Batch *</label>
+              <select id="dec-batch-<?= (int)$item['business_product_id'] ?>" name="batch_id" required>
+                <option value="">Select batch to deduct from...</option>
+                <?php foreach ($item['batches'] as $b): ?>
+                  <option value="<?= (int)$b['batch_id'] ?>">
+                    Batch <?= e($b['batch_number']) ?> &mdash; Qty: <?= (int)$b['quantity'] ?><?= !empty($b['expiration_date']) ? ' (Exp: ' . date('M j, Y', strtotime((string)$b['expiration_date'])) . ' - ' . e($b['status_label']) . ')' : '' ?>
+                  </option>
+                <?php endforeach; ?>
+              </select>
+            </div>
+          <?php endif; ?>
 
           <div class="field">
             <label for="dec-qty-<?= (int)$item['business_product_id'] ?>">Quantity to Deduct *</label>
@@ -306,8 +503,14 @@ $isInvManager = !empty($isInventoryManagerOnly);
               <option value="Damaged product">Damaged product</option>
               <option value="Missing or lost product">Missing or lost product</option>
               <option value="Physical stock count correction">Physical stock count correction</option>
+              <option value="Expired stock write-off">Expired stock write-off</option>
               <option value="Other approved stock correction">Other approved stock correction</option>
             </select>
+          </div>
+
+          <div class="field" style="margin-top: 0.75rem;">
+            <label for="dec-ref-<?= (int)$item['business_product_id'] ?>" class="caption" style="display: block; margin-bottom: 0.25rem;">Reference / Notes (Optional)</label>
+            <input type="text" id="dec-ref-<?= (int)$item['business_product_id'] ?>" name="related_reference" placeholder="e.g. Audit disposal ticket #, incident ref" style="width: 100%;">
           </div>
 
           <div class="modal-foot" style="margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--border, #e5e7eb); display: flex; justify-content: flex-end; gap: 0.5rem;">
@@ -319,9 +522,8 @@ $isInvManager = !empty($isInventoryManagerOnly);
     </dialog>
   <?php endforeach; ?>
 
-<?php else: ?>
-  <!-- PURCHASE ORDER REQUESTS SECTION -->
-  <section class="card" style="margin-bottom: 1.5rem;">
+<?php elseif ($invTab === 'orders'): ?>
+  <section class="card" <?= !$isInvManager ? 'style="margin-bottom: 1.5rem;"' : '' ?>>
     <div class="row" style="justify-content: space-between; align-items: baseline; margin-bottom: 1rem;">
       <div>
         <h2 style="margin: 0;">Purchase Order Requests (<?= count($purchaseOrderRequests ?? []) ?>)</h2>
@@ -346,17 +548,17 @@ $isInvManager = !empty($isInventoryManagerOnly);
       <div class="empty">No purchase order requests found. Use "Request Purchase Order" to submit a stock replenishment requisition.</div>
     <?php else: ?>
       <div class="table-wrap">
-        <table>
+        <table style="width: 100%; min-width: 52rem; border-collapse: collapse;">
           <thead>
             <tr>
-              <th>Request #</th>
-              <th>Date</th>
-              <th>Requester</th>
-              <th>Reason</th>
-              <th>Items</th>
-              <th>Priority</th>
-              <th>Status</th>
-              <th style="text-align: right;">Action</th>
+              <th style="white-space: nowrap; min-width: 110px;">Request #</th>
+              <th style="white-space: nowrap; min-width: 95px;">Date</th>
+              <th style="min-width: 130px;">Requester</th>
+              <th style="min-width: 140px;">Reason</th>
+              <th style="white-space: nowrap; min-width: 110px;">Items</th>
+              <th style="white-space: nowrap; min-width: 85px;">Priority</th>
+              <th style="white-space: nowrap; min-width: 85px;">Status</th>
+              <th style="text-align: right; white-space: nowrap; min-width: 100px;">Action</th>
             </tr>
           </thead>
           <tbody>
@@ -401,79 +603,75 @@ $isInvManager = !empty($isInventoryManagerOnly);
     <?php endif; ?>
   </section>
 
-  <!-- PURCHASE ORDERS & RECEIVING TABLE -->
-  <section class="card">
-    <div class="row" style="justify-content: space-between; align-items: baseline; margin-bottom: 1rem;">
-      <div>
-        <h2 style="margin: 0;">Purchase Orders &amp; Stock Receiving</h2>
-        <p class="caption" style="margin: 0.2rem 0 0 0;">Purchase orders do not increase stock upon creation; only accepted received quantities update inventory.</p>
-      </div>
-      <div>
-        <?php if (!$isInvManager): ?>
+  <!-- PURCHASE ORDERS & RECEIVING TABLE (Visible to Business Manager) -->
+  <?php if (!$isInvManager): ?>
+    <section class="card">
+      <div class="row" style="justify-content: space-between; align-items: baseline; margin-bottom: 1rem;">
+        <div>
+          <h2 style="margin: 0;">Purchase Orders &amp; Stock Receiving</h2>
+          <p class="caption" style="margin: 0.2rem 0 0 0;">Purchase orders do not increase stock upon creation; only accepted received quantities update inventory.</p>
+        </div>
+        <div>
           <button type="button" class="btn primary btn-sm" data-modal-open="po-create-modal">
             + Purchase Order
           </button>
-        <?php else: ?>
-          <button type="button" class="btn secondary btn-sm" data-modal-open="po-request-modal">
-            Request Purchase Order
-          </button>
-        <?php endif; ?>
+        </div>
       </div>
-    </div>
 
-    <?php if (empty($purchaseOrders)): ?>
-      <div class="empty">No purchase orders found. Create a purchase order to initiate stock replenishment.</div>
-    <?php else: ?>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>PO Number</th>
-              <th>Supplier</th>
-              <th>Order Date</th>
-              <th>Ordered By</th>
-              <th>Items</th>
-              <th>Total Cost</th>
-              <th>Status</th>
-              <th style="text-align: right;">Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            <?php foreach ($purchaseOrders as $po): ?>
+      <?php if (empty($purchaseOrders)): ?>
+        <div class="empty">No purchase orders found. Create a purchase order to initiate stock replenishment.</div>
+      <?php else: ?>
+        <div class="table-wrap">
+          <table style="width: 100%; min-width: 54rem; border-collapse: collapse;">
+            <thead>
               <tr>
-                <td><strong><?= e($po['po_number']) ?></strong></td>
-                <td>
-                  <strong><?= e($po['supplier_name']) ?></strong>
-                  <div class="caption"><?= e($po['contact_person']) ?></div>
-                </td>
-                <td><?= e(date('M j, Y', strtotime((string)$po['order_date']))) ?></td>
-                <td><?= e($po['created_by_name']) ?></td>
-                <td><?= (int)$po['total_ordered_qty'] ?> unit(s)</td>
-                <td><?= peso((float)$po['total_cost']) ?></td>
-                <td>
-                  <span class="badge <?= $po['po_status'] === 'Fully Received' ? 'badge-success' : ($po['po_status'] === 'Partially Received' ? 'badge-warning' : 'secondary') ?>">
-                    <?= e($po['po_status']) ?>
-                  </span>
-                </td>
-                <td style="text-align: right;">
-                  <div class="row" style="gap: 0.35rem; justify-content: flex-end;">
-                    <button type="button" class="btn ghost btn-sm" data-modal-open="view-po-<?= (int)$po['purchase_order_id'] ?>">
-                      View Details
-                    </button>
-                    <?php if (in_array($po['po_status'], ['Ordered', 'Partially Received'], true)): ?>
-                      <button type="button" class="btn secondary btn-sm" data-modal-open="receive-po-<?= (int)$po['purchase_order_id'] ?>">
-                        Receive Stock
-                      </button>
-                    <?php endif; ?>
-                  </div>
-                </td>
+                <th style="white-space: nowrap; min-width: 110px;">PO Number</th>
+                <th style="min-width: 140px;">Supplier</th>
+                <th style="white-space: nowrap; min-width: 95px;">Order Date</th>
+                <th style="min-width: 120px;">Ordered By</th>
+                <th style="white-space: nowrap; min-width: 90px;">Items</th>
+                <th style="white-space: nowrap; min-width: 95px;">Total Cost</th>
+                <th style="white-space: nowrap; min-width: 90px;">Status</th>
+                <th style="text-align: right; white-space: nowrap; min-width: 110px;">Action</th>
               </tr>
-            <?php endforeach; ?>
-          </tbody>
-        </table>
-      </div>
-    <?php endif; ?>
-  </section>
+            </thead>
+            <tbody>
+              <?php foreach ($purchaseOrders as $po): ?>
+                <tr>
+                  <td><strong><?= e($po['po_number']) ?></strong></td>
+                  <td>
+                    <strong><?= e($po['supplier_name']) ?></strong>
+                    <div class="caption"><?= e($po['contact_person']) ?></div>
+                  </td>
+                  <td><?= e(date('M j, Y', strtotime((string)$po['order_date']))) ?></td>
+                  <td><?= e($po['created_by_name']) ?></td>
+                  <td><?= (int)$po['total_ordered_qty'] ?> unit(s)</td>
+                  <td><?= peso((float)$po['total_cost']) ?></td>
+                  <td>
+                    <span class="badge <?= $po['po_status'] === 'Fully Received' ? 'badge-success' : ($po['po_status'] === 'Partially Received' ? 'badge-warning' : 'secondary') ?>">
+                      <?= e($po['po_status']) ?>
+                    </span>
+                  </td>
+                  <td style="text-align: right;">
+                    <div class="row" style="gap: 0.35rem; justify-content: flex-end;">
+                      <button type="button" class="btn ghost btn-sm" data-modal-open="view-po-<?= (int)$po['purchase_order_id'] ?>">
+                        View Details
+                      </button>
+                      <?php if (in_array($po['po_status'], ['Ordered', 'Partially Received'], true)): ?>
+                        <button type="button" class="btn secondary btn-sm" data-modal-open="receive-po-<?= (int)$po['purchase_order_id'] ?>">
+                          Receive Stock
+                        </button>
+                      <?php endif; ?>
+                    </div>
+                  </td>
+                </tr>
+              <?php endforeach; ?>
+            </tbody>
+          </table>
+        </div>
+      <?php endif; ?>
+    </section>
+  <?php endif; ?>
 
   <!-- View PO Details & Stock Receiving Modals -->
   <?php foreach ($purchaseOrders as $po): ?>
@@ -596,15 +794,20 @@ $isInvManager = !empty($isInventoryManagerOnly);
                   <th>Qty Accepted *</th>
                   <th>Qty Rejected</th>
                   <th>Rejection Reason (if any)</th>
+                  <th>Batch &amp; Expiry</th>
                 </tr>
               </thead>
               <tbody>
                 <?php foreach ($po['items'] as $idx => $it):
                   $remaining = max(0, (int)$it['quantity_ordered'] - (int)$it['quantity_received']);
+                  $isBatchTracked = !empty($it['requires_batch_tracking']);
                 ?>
                   <tr>
                     <td>
                       <strong><?= e($it['product_name']) ?></strong>
+                      <?php if ($isBatchTracked): ?>
+                        <span class="badge secondary" style="font-size: 0.7rem; margin-left: 0.25rem;">Batch Tracked</span>
+                      <?php endif; ?>
                       <input type="hidden" name="items[<?= $idx ?>][po_item_id]" value="<?= (int)$it['po_item_id'] ?>">
                       <input type="hidden" name="items[<?= $idx ?>][business_product_id]" value="<?= (int)$it['business_product_id'] ?>">
                     </td>
@@ -621,6 +824,16 @@ $isInvManager = !empty($isInventoryManagerOnly);
                     </td>
                     <td>
                       <input type="text" name="items[<?= $idx ?>][rejection_reason]" placeholder="Reason if rejected..." style="width: 160px;">
+                    </td>
+                    <td>
+                      <?php if ($isBatchTracked): ?>
+                        <div style="display: flex; gap: 0.35rem; align-items: center; flex-wrap: wrap;">
+                          <input type="text" name="items[<?= $idx ?>][batch_number]" placeholder="Batch #" required style="width: 100px;">
+                          <input type="date" name="items[<?= $idx ?>][expiration_date]" style="width: 130px;" title="Expiration Date">
+                        </div>
+                      <?php else: ?>
+                        <span class="caption muted">Standard item</span>
+                      <?php endif; ?>
                     </td>
                   </tr>
                 <?php endforeach; ?>
@@ -770,6 +983,79 @@ $isInvManager = !empty($isInventoryManagerOnly);
       </dialog>
     <?php endif; ?>
   <?php endforeach; ?>
+
+<?php elseif ($invTab === 'movements'): ?>
+  <!-- MOVEMENT HISTORY SECTION -->
+  <section class="card">
+    <div class="row" style="justify-content: space-between; align-items: baseline; margin-bottom: 1rem;">
+      <div>
+        <h2 style="margin: 0;"><?= e($unitName) ?> Movement History</h2>
+        <p class="caption" style="margin: 0.2rem 0 0 0;">
+          Audit trail of inventory movements, receiving events, manual adjustments, write-offs, and batch allocations.
+        </p>
+      </div>
+      <span class="caption"><?= count($movements ?? []) ?> movements recorded</span>
+    </div>
+
+    <?php if (empty($movements)): ?>
+      <div class="empty">
+        No stock movements recorded<?= $q !== '' ? ' matching "' . e($q) . '"' : '' ?>.
+      </div>
+    <?php else: ?>
+      <div class="table-wrap">
+        <table style="width: 100%; min-width: 58rem; border-collapse: collapse;">
+          <thead>
+            <tr>
+              <th style="white-space: nowrap; min-width: 120px;">Date &amp; Time</th>
+              <th style="min-width: 150px;">Product</th>
+              <th style="white-space: nowrap; min-width: 105px;">SKU / Code</th>
+              <th style="white-space: nowrap; min-width: 110px;">Batch Number</th>
+              <th style="white-space: nowrap; min-width: 110px;">Movement Type</th>
+              <th style="text-align: right; white-space: nowrap; min-width: 80px;">Quantity</th>
+              <th style="min-width: 180px;">Notes / Reason / Reference</th>
+            </tr>
+          </thead>
+          <tbody>
+            <?php foreach ($movements as $m):
+              $mQty = (int)$m['quantity'];
+              $typeClass = match ($m['movement_type']) {
+                'receiving' => 'badge-success',
+                'adjustment_increase' => 'badge-info',
+                'adjustment_decrease' => 'badge-warning',
+                'write_off_expired' => 'badge-danger',
+                'fefo_allocation' => 'secondary',
+                default => 'secondary'
+              };
+            ?>
+              <tr>
+                <td style="white-space: nowrap; color: var(--muted); font-size: 0.85rem;">
+                  <?= date('M j, Y · g:i A', strtotime((string)$m['movement_date'])) ?>
+                </td>
+                <td>
+                  <strong><?= e($m['product_name']) ?></strong>
+                </td>
+                <td><code><?= e($m['sku'] ?: '—') ?></code></td>
+                <td>
+                  <?= !empty($m['batch_number']) ? '<code>' . e($m['batch_number']) . '</code>' : '<span class="caption muted">—</span>' ?>
+                </td>
+                <td>
+                  <span class="badge <?= e($typeClass) ?>" style="font-size: 0.75rem;">
+                    <?= e(str_replace('_', ' ', (string)$m['movement_type'])) ?>
+                  </span>
+                </td>
+                <td style="text-align: right; font-weight: 700; color: <?= $mQty > 0 ? 'var(--primary, #059669)' : 'var(--danger, #dc2626)' ?>;">
+                  <?= $mQty > 0 ? ('+' . $mQty) : $mQty ?>
+                </td>
+                <td style="font-size: 0.85rem; color: var(--ink);">
+                  <?= e($m['notes'] ?: '—') ?>
+                </td>
+              </tr>
+            <?php endforeach; ?>
+          </tbody>
+        </table>
+      </div>
+    <?php endif; ?>
+  </section>
 <?php endif; ?>
 
 <!-- MULTI-STEP PURCHASE ORDER CREATION MODAL -->
@@ -1190,6 +1476,22 @@ $isInvManager = !empty($isInventoryManagerOnly);
       btn.addEventListener('click', function() {
         if (porItemsContainer && porItemsContainer.children.length === 0) {
           addPorRow();
+        }
+      });
+    });
+
+    // Return reason inspection toggle in stock increase modals
+    document.querySelectorAll('.inc-reason-select').forEach(function(sel) {
+      sel.addEventListener('change', function() {
+        var form = sel.closest('form');
+        var wrap = form ? form.querySelector('.return-inspection-wrap') : null;
+        if (wrap) {
+          var isReturn = sel.value.indexOf('Returned product') !== -1;
+          wrap.style.display = isReturn ? 'block' : 'none';
+          var chk = wrap.querySelector('.inspection-checkbox');
+          if (chk && !isReturn) {
+            chk.checked = false;
+          }
         }
       });
     });

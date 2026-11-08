@@ -112,14 +112,14 @@ check('Accessing /manager redirects Grooming Inventory Manager to /manager/inven
 // Access Inventory page
 $invPage = request('GET', '/manager/inventory', [], $imCookies);
 check('Inventory Manager can access Inventory page (200)', $invPage['status'] === 200);
-check('Workspace banner displays "INVENTORY MANAGER · GROOMING SERVICES"', str_contains($invPage['body'], 'INVENTORY MANAGER · GROOMING SERVICES'));
-check('Workspace caption scopes to Grooming Services Unit #3', str_contains($invPage['body'], 'Scoped to Unit #3'));
+check('Workspace banner is completely removed', !str_contains($invPage['body'], 'admin-workspace-banner'));
+check('Secondary subnav is completely removed', !str_contains($invPage['body'], 'admin-subnav'));
 
-// Verify EXACTLY 2 navigation tabs: Inventory and Employees
-check('Subnav contains Inventory tab', str_contains($invPage['body'], 'href="/manager/inventory"'));
-check('Subnav contains Employees tab', str_contains($invPage['body'], 'href="/manager/employees"'));
-check('Subnav strictly EXCLUDES Orders tab', !str_contains($invPage['body'], 'href="/manager/orders"'));
-check('Subnav strictly EXCLUDES Business Manager tabs: Overview, Appointments, Services, Business Settings',
+// Verify EXACTLY 2 navigation tabs: Inventory and Employees in topbar
+check('Top navigation contains Inventory tab', str_contains($invPage['body'], 'href="/manager/inventory"'));
+check('Top navigation contains Employees tab', str_contains($invPage['body'], 'href="/manager/employees"'));
+check('Top navigation strictly EXCLUDES Orders tab', !str_contains($invPage['body'], 'href="/manager/orders"'));
+check('Top navigation strictly EXCLUDES Business Manager tabs: Overview, Appointments, Services, Business Settings',
     !str_contains($invPage['body'], 'href="/manager"') &&
     !str_contains($invPage['body'], 'href="/manager/appointments"') &&
     !str_contains($invPage['body'], 'href="/manager/services"') &&
@@ -440,7 +440,8 @@ check('Super Admin switching to Grooming Inventory Manager redirects to /manager
 
 $saGroomingInv = request('GET', '/manager/inventory?unit_id=3', [], $switchReq['cookies']);
 check('Super Admin in Grooming Inventory Manager mode accesses HTTP 200', $saGroomingInv['status'] === 200);
-check('Super Admin sees "INVENTORY MANAGER · GROOMING SERVICES" banner', str_contains($saGroomingInv['body'], 'INVENTORY MANAGER · GROOMING SERVICES'));
+check('Super Admin layout has NO workspace banner', !str_contains($saGroomingInv['body'], 'class="admin-workspace-banner"'));
+check('Super Admin layout has NO admin-subnav', !str_contains($saGroomingInv['body'], 'class="admin-subnav"'));
 check('Super Admin sees exactly 2 tabs for Grooming IM (Inventory, Employees)',
     str_contains($saGroomingInv['body'], 'href="/manager/inventory?unit_id=3"') &&
     str_contains($saGroomingInv['body'], 'href="/manager/employees?unit_id=3"') &&

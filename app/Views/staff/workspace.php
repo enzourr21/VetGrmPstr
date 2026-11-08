@@ -10,17 +10,6 @@ if (!empty($isSuper)) {
     $canViewGroomingAppts = true;
 }
 ?>
-<div class="admin-workspace-banner">
-  <div class="row" style="gap: 0.75rem;">
-    <span class="unit-pill">EMPLOYEE WORKSPACE</span>
-    <span class="caption">
-      Signed in via staff email · <?= e($emp['email'] ?? '') ?>
-      <?php if (!empty($emp['business_unit_name'])): ?>
-        · Assigned to <strong><?= e($emp['business_unit_name']) ?></strong>
-      <?php endif; ?>
-    </span>
-  </div>
-</div>
 
 <div class="page-head">
   <div>

@@ -154,13 +154,9 @@ assertCheck('Super Admin dashboard loads HTTP 200', $superDash['status'] === 200
 assertCheck('Super Admin layout contains primary topbar nav', str_contains($superDash['body'], '<nav aria-label="Main">'));
 assertCheck('Super Admin layout does NOT contain duplicate admin-subnav', !str_contains($superDash['body'], '<nav class="admin-subnav"'));
 
-// Context panel preservation and removal of redundant main-page navigation:
-assertCheck('Super Admin layout preserves admin-workspace-banner', str_contains($superDash['body'], 'class="admin-workspace-banner"'));
-assertCheck('Context panel displays SUPER ADMINISTRATOR pill', str_contains($superDash['body'], 'SUPER ADMINISTRATOR'));
-assertCheck('Main page banner does NOT contain redundant System Admin View shortcut', !str_contains($superDash['body'], 'href="/sysadmin"'));
-assertCheck('Main page banner does NOT contain redundant Business Manager View shortcut', !str_contains($superDash['body'], 'href="/manager"'));
-assertCheck('Main page banner does NOT contain redundant Staff Requests shortcut', !str_contains($superDash['body'], 'href="/staff/appointments"'));
-assertCheck('Main page banner does NOT contain redundant Customer Interface shortcut', !str_contains($superDash['body'], 'class="admin-quick-links"'));
+// Workspace banner and secondary subnav must be completely removed globally:
+assertCheck('Super Admin layout has NO admin-workspace-banner', !str_contains($superDash['body'], 'class="admin-workspace-banner"'));
+assertCheck('Super Admin layout has NO admin-subnav', !str_contains($superDash['body'], 'class="admin-subnav"'));
 
 // Check Topbar Links
 assertCheck('Super Admin sees Dashboard link with is-current class', str_contains($superDash['body'], 'href="/super-admin" class="is-current"'));
@@ -317,7 +313,8 @@ assertCheck('Redirect destination is /manager', trim($loc[1] ?? '') === '/manage
 
 $bmView = $superClient->get('/manager');
 assertCheck('Business Manager landing page loads HTTP 200', $bmView['status'] === 200);
-assertCheck('Context panel displays BUSINESS MANAGER', str_contains($bmView['body'], 'BUSINESS MANAGER'));
+assertCheck('Business Manager layout has NO admin-workspace-banner', !str_contains($bmView['body'], 'class="admin-workspace-banner"'));
+assertCheck('Business Manager top navigation contains Overview', str_contains($bmView['body'], 'href="/manager"') && str_contains($bmView['body'], 'is-current'));
 
 // Super Admin switches to Employee Workspace
 $switchToEmp = $superClient->get('/switch-interface?target=employee');

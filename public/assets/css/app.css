@@ -3887,6 +3887,37 @@ body.has-modal-open {
   color: #f8fafc;
 }
 
+/* Inventory Stock Table Layout & Column Alignment */
+.inventory-stock-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.inventory-stock-table th,
+.inventory-stock-table td {
+  padding: 0.75rem 0.85rem;
+  line-height: 1.35;
+}
+
+.inventory-stock-table th {
+  font-size: 0.75rem;
+  font-weight: 660;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  background: #f8fafb;
+}
+
+.inventory-stock-table td {
+  font-size: 0.875rem;
+}
+
+[data-theme="dark"] .inventory-stock-table th {
+  background: #1e293b;
+  color: var(--muted);
+}
+
+
 
 
 

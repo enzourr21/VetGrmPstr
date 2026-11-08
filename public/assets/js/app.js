@@ -804,7 +804,7 @@
             return true;
           }
           if (linkPath === cleanCurrent) return true;
-          if (linkPath === '/' || linkPath === '/super-admin' || linkPath === '/sysadmin' || linkPath === '/workspace') {
+          if (linkPath === '/' || linkPath === '/super-admin' || linkPath === '/sysadmin' || linkPath === '/workspace' || linkPath === '/manager') {
             return false;
           }
           if (cleanCurrent.startsWith(linkPath + '/')) return true;

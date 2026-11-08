@@ -118,13 +118,14 @@ check('Pet Store Inventory Manager (Janricson Ompoy) signs in successfully', !em
 
 $ordPage = request('GET', '/manager/orders', [], $imCookies);
 check('Inventory Manager can access Orders page (200)', $ordPage['status'] === 200);
-check('Workspace banner displays "INVENTORY MANAGER · PET STORE"', str_contains($ordPage['body'], 'INVENTORY MANAGER · PET STORE'));
-check('Subnav contains exactly 3 navigation pages: Orders, Inventory, Employees',
+check('Workspace banner is completely removed', !str_contains($ordPage['body'], 'admin-workspace-banner'));
+check('Secondary subnav is completely removed', !str_contains($ordPage['body'], 'admin-subnav'));
+check('Top navigation contains exactly 3 navigation pages: Orders, Inventory, Employees',
     str_contains($ordPage['body'], 'href="/manager/orders"') &&
     str_contains($ordPage['body'], 'href="/manager/inventory"') &&
     str_contains($ordPage['body'], 'href="/manager/employees"')
 );
-check('Subnav excludes Business Manager pages: Overview, Sales, Products, Business Settings',
+check('Top navigation excludes Business Manager pages: Overview, Sales, Products, Business Settings',
     !str_contains($ordPage['body'], 'href="/manager"') &&
     !str_contains($ordPage['body'], 'href="/manager/sales"') &&
     !str_contains($ordPage['body'], 'href="/manager/products"') &&

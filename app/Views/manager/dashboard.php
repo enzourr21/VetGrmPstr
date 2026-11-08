@@ -1,10 +1,3 @@
-<div class="admin-workspace-banner">
-  <div class="row" style="gap: 0.75rem;">
-    <span class="unit-pill">BUSINESS MANAGER · <?= e(strtoupper($unitName)) ?></span>
-    <span class="caption">Operational overview for <strong><?= e($unitName) ?></strong> (Unit #<?= (int)$unitId ?>)</span>
-  </div>
-</div>
-
 <div class="page-head">
   <div>
     <p class="eyebrow"><?= e($unitName) ?> Operations</p>

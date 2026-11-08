@@ -8,13 +8,16 @@ $isWorkspaceRoute = str_starts_with($curPath, '/super-admin')
     || str_starts_with($curPath, '/manager')
     || (str_starts_with($curPath, '/staff') && !str_starts_with($curPath, '/staffs') && $curPath !== '/staff/login');
 
-// Administrator identification & state
+// Staff / Administrator identification & role resolution
 $isSuperAdmin = $isSignedIn && (bool)\App\Core\Session::get('is_super_admin');
 $isSysAdmin = false;
 $hasBmRole = false;
+$hasImRole = false;
 $hasEmployeeRecord = false;
-$sysAdminUnitId = null;
-$sysAdminUnitName = '';
+$sysAdminRoles = [];
+$bmRoles = [];
+$imRoles = [];
+$adminRow = null;
 $adminInitials = 'SA';
 
 if ($isSignedIn && $baseContext === 'employee') {
@@ -23,9 +26,7 @@ if ($isSignedIn && $baseContext === 'employee') {
     if (!isset($adminUserCache[$uid])) {
         $db = \App\Core\Database::pdo();
         $stmt = $db->prepare(
-            "SELECT ua.is_super_admin, e.employee_id, e.first_name, e.last_name, e.business_unit_id, bu.business_unit_name,
-                    (SELECT 1 FROM account_role ar JOIN role r ON r.role_id = ar.role_id WHERE ar.user_account_id = ua.user_account_id AND r.role_name = 'SYSTEM_ADMINISTRATOR' LIMIT 1) AS has_sysadmin_role,
-                    (SELECT 1 FROM account_role ar JOIN role r ON r.role_id = ar.role_id WHERE ar.user_account_id = ua.user_account_id AND r.role_name IN ('BUSINESS_MANAGER', 'INVENTORY_MANAGER') LIMIT 1) AS has_bm_role
+            "SELECT ua.is_super_admin, e.employee_id, e.first_name, e.last_name, e.business_unit_id, bu.business_unit_name
              FROM user_account ua
              LEFT JOIN employee e ON e.user_account_id = ua.user_account_id
              LEFT JOIN business_unit bu ON bu.business_unit_id = e.business_unit_id
@@ -33,20 +34,28 @@ if ($isSignedIn && $baseContext === 'employee') {
              LIMIT 1"
         );
         $stmt->execute([$uid]);
-        $adminUserCache[$uid] = $stmt->fetch(PDO::FETCH_ASSOC);
+        $uRow = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+
+        $roleStmt = $db->prepare(
+            "SELECT ar.business_unit_id, bu.business_unit_name, r.role_name
+             FROM account_role ar
+             JOIN role r ON r.role_id = ar.role_id
+             LEFT JOIN business_unit bu ON bu.business_unit_id = ar.business_unit_id
+             WHERE ar.user_account_id = ?"
+        );
+        $roleStmt->execute([$uid]);
+        $roles = $roleStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+        $adminUserCache[$uid] = ['user' => $uRow, 'roles' => $roles];
     }
-    $adminRow = $adminUserCache[$uid] ?? null;
+
+    $cached = $adminUserCache[$uid] ?? null;
+    $adminRow = $cached['user'] ?? null;
+    $userRoles = $cached['roles'] ?? [];
+
     if ($adminRow) {
         if ((bool)$adminRow['is_super_admin']) {
             $isSuperAdmin = true;
-        }
-        if ((bool)$adminRow['has_sysadmin_role']) {
-            $isSysAdmin = true;
-            $sysAdminUnitId = (int)($adminRow['business_unit_id'] ?? 0);
-            $sysAdminUnitName = (string)($adminRow['business_unit_name'] ?? '');
-        }
-        if ((bool)$adminRow['has_bm_role']) {
-            $hasBmRole = true;
         }
         if (!empty($adminRow['employee_id'])) {
             $hasEmployeeRecord = true;
@@ -59,18 +68,68 @@ if ($isSignedIn && $baseContext === 'employee') {
             $adminInitials = $isSuperAdmin ? 'ES' : 'AM';
         }
     }
+
+    foreach ($userRoles as $r) {
+        $rName = (string)$r['role_name'];
+        if ($rName === 'SYSTEM_ADMINISTRATOR') {
+            $sysAdminRoles[] = $r;
+        } elseif ($rName === 'BUSINESS_MANAGER') {
+            $bmRoles[] = $r;
+        } elseif ($rName === 'INVENTORY_MANAGER') {
+            $imRoles[] = $r;
+        }
+    }
+
+    $isSysAdmin = !empty($sysAdminRoles);
+    $hasBmRole = !empty($bmRoles);
+    $hasImRole = !empty($imRoles);
 }
 
-$isAdminUser = $isSuperAdmin || $isSysAdmin;
-$inAdminWorkspace = $isAdminUser && $baseContext === 'employee' && $activeContext === 'employee';
+// Active Business Unit identification
+if (preg_match('#/units/(\d+)#', $curPath, $matches)) {
+    $activeUnitId = (int)$matches[1];
+} elseif (isset($_GET['unit_id']) && ctype_digit((string)$_GET['unit_id'])) {
+    $activeUnitId = (int)$_GET['unit_id'];
+} elseif (isset($unitId) && is_numeric($unitId)) {
+    $activeUnitId = (int)$unitId;
+} elseif ($isSysAdmin && !empty($sysAdminRoles)) {
+    $firstSys = reset($sysAdminRoles);
+    $activeUnitId = (int)($firstSys['business_unit_id'] ?: 1);
+} elseif ($hasBmRole && !empty($bmRoles)) {
+    $firstBm = reset($bmRoles);
+    $activeUnitId = (int)($firstBm['business_unit_id'] ?: 1);
+} elseif ($hasImRole && !empty($imRoles)) {
+    $firstIm = reset($imRoles);
+    $activeUnitId = (int)($firstIm['business_unit_id'] ?: 1);
+} else {
+    $activeUnitId = (int)($adminRow['business_unit_id'] ?? 1);
+}
+$currentUnitId = $activeUnitId;
+
+// Inventory Manager Mode resolution
+if ($isSuperAdmin) {
+    $isInvMode = !empty(\App\Core\Session::get('inventory_manager_mode'));
+} else {
+    $isInvMode = !empty(\App\Core\Session::get('inventory_manager_mode')) || (!$hasBmRole && $hasImRole);
+}
+
+// Temporary Inventory Access Key check
+$isTempInv = !empty($isTempKeyAccess);
+if (!$isTempInv && !empty($adminRow['employee_id'])) {
+    $tempGrants = \App\Core\Session::get('temp_inventory_access', []);
+    if (is_array($tempGrants)) {
+        $empId = (int)$adminRow['employee_id'];
+        foreach ($tempGrants as $bId => $g) {
+            if (is_array($g) && (int)($g['employee_id'] ?? 0) === $empId && (int)$bId === (int)$currentUnitId) {
+                $isTempInv = true;
+                break;
+            }
+        }
+    }
+}
 
 // Determine authorized interfaces for the Switch Interface menu
 $authorizedInterfaces = [];
-$activeUnitId = isset($_GET['unit_id']) && ctype_digit((string)$_GET['unit_id'])
-    ? (int)$_GET['unit_id']
-    : (isset($unitId) && is_numeric($unitId) ? (int)$unitId : ($sysAdminUnitId ?: 1));
-$currentUnitId = $activeUnitId;
-
 if ($isSignedIn && $baseContext === 'employee') {
     $allBusinessUnits = [
         ['id' => 1, 'name' => 'Pet Store'],
@@ -79,8 +138,6 @@ if ($isSignedIn && $baseContext === 'employee') {
     ];
 
     if ($isSuperAdmin) {
-        $isInvMode = !empty(\App\Core\Session::get('inventory_manager_mode'));
-
         $authorizedInterfaces[] = [
             'id' => 'super-admin',
             'label' => 'Super Administrator',
@@ -137,29 +194,60 @@ if ($isSignedIn && $baseContext === 'employee') {
             'label' => 'Customer Interface',
             'hasUnits' => false,
             'url' => '/switch-interface?target=customer',
-            'active' => $activeContext === 'customer' || (!$isWorkspaceRoute && !$inAdminWorkspace),
+            'active' => $activeContext === 'customer' || (!$isWorkspaceRoute),
         ];
-    } elseif ($isSysAdmin) {
-        $sysUnits = [];
-        if ($sysAdminUnitId) {
-            $sysUnits[] = ['id' => $sysAdminUnitId, 'name' => $sysAdminUnitName ?: 'Assigned Unit', 'url' => '/switch-interface?target=sysadmin&unit_id=' . $sysAdminUnitId];
-        } else {
-            $sysUnits[] = ['id' => 1, 'name' => 'Assigned Unit', 'url' => '/switch-interface?target=sysadmin'];
+    } else {
+        if ($isSysAdmin) {
+            $sysUnits = array_map(fn($r) => [
+                'id' => (int)$r['business_unit_id'],
+                'name' => $r['business_unit_name'] ?: 'Assigned Unit',
+                'url' => '/switch-interface?target=sysadmin&unit_id=' . (int)$r['business_unit_id'],
+            ], $sysAdminRoles);
+            $authorizedInterfaces[] = [
+                'id' => 'sysadmin',
+                'label' => 'System Administrator',
+                'hasUnits' => true,
+                'units' => $sysUnits,
+                'active' => str_starts_with($curPath, '/sysadmin') && $activeContext !== 'customer',
+            ];
         }
-        $authorizedInterfaces[] = [
-            'id' => 'sysadmin',
-            'label' => 'System Administrator',
-            'hasUnits' => true,
-            'units' => $sysUnits,
-            'active' => str_starts_with($curPath, '/sysadmin') && $activeContext !== 'customer',
-        ];
+        if ($hasBmRole) {
+            $bmUnits = array_map(fn($r) => [
+                'id' => (int)$r['business_unit_id'],
+                'name' => $r['business_unit_name'] ?: 'Assigned Unit',
+                'url' => '/switch-interface?target=manager&unit_id=' . (int)$r['business_unit_id'],
+            ], $bmRoles);
+            $authorizedInterfaces[] = [
+                'id' => 'manager',
+                'label' => 'Business Manager',
+                'hasUnits' => true,
+                'units' => $bmUnits,
+                'active' => str_starts_with($curPath, '/manager') && $activeContext !== 'customer' && !$isInvMode,
+            ];
+        }
+        if ($hasImRole) {
+            $imUnits = array_map(fn($r) => [
+                'id' => (int)$r['business_unit_id'],
+                'name' => $r['business_unit_name'] ?: 'Assigned Unit',
+                'url' => '/switch-interface?target=inventory-manager&unit_id=' . (int)$r['business_unit_id'],
+            ], $imRoles);
+            $authorizedInterfaces[] = [
+                'id' => 'inventory-manager',
+                'label' => 'Inventory Manager',
+                'hasUnits' => true,
+                'units' => $imUnits,
+                'active' => str_starts_with($curPath, '/manager') && $activeContext !== 'customer' && $isInvMode,
+            ];
+        }
         if ($hasEmployeeRecord) {
+            $empUId = (int)($adminRow['business_unit_id'] ?? 1);
+            $empUName = (string)($adminRow['business_unit_name'] ?? 'Assigned Unit');
             $authorizedInterfaces[] = [
                 'id' => 'employee',
                 'label' => 'Employee Workspace',
                 'hasUnits' => true,
                 'units' => [
-                    ['id' => $sysAdminUnitId ?: 1, 'name' => $sysAdminUnitName ?: 'Assigned Unit', 'url' => '/switch-interface?target=employee'],
+                    ['id' => $empUId, 'name' => $empUName, 'url' => '/switch-interface?target=employee'],
                 ],
                 'active' => (str_starts_with($curPath, '/staff') || $curPath === '/workspace') && $activeContext !== 'customer',
             ];
@@ -171,59 +259,13 @@ if ($isSignedIn && $baseContext === 'employee') {
             'url' => '/switch-interface?target=customer',
             'active' => $activeContext === 'customer' || (!$isWorkspaceRoute),
         ];
-    } elseif (!empty($hasBmRole)) {
-        $bmUnitId = (int)($adminRow['business_unit_id'] ?? 1);
-        $bmUnitName = (string)($adminRow['business_unit_name'] ?? 'Assigned Unit');
-        $authorizedInterfaces[] = [
-            'id' => 'manager',
-            'label' => 'Business Manager',
-            'hasUnits' => true,
-            'units' => [
-                ['id' => $bmUnitId, 'name' => $bmUnitName, 'url' => '/switch-interface?target=manager&unit_id=' . $bmUnitId],
-            ],
-            'active' => str_starts_with($curPath, '/manager') && $activeContext !== 'customer',
-        ];
-        $authorizedInterfaces[] = [
-            'id' => 'employee',
-            'label' => 'Employee Workspace',
-            'hasUnits' => true,
-            'units' => [
-                ['id' => $bmUnitId, 'name' => $bmUnitName, 'url' => '/switch-interface?target=employee'],
-            ],
-            'active' => (str_starts_with($curPath, '/staff') || $curPath === '/workspace') && $activeContext !== 'customer',
-        ];
-        $authorizedInterfaces[] = [
-            'id' => 'customer',
-            'label' => 'Customer Interface',
-            'hasUnits' => false,
-            'url' => '/switch-interface?target=customer',
-            'active' => $activeContext === 'customer' || (!$isWorkspaceRoute),
-        ];
-    } elseif (!empty($hasEmployeeRecord)) {
-        $empUId = (int)($adminRow['business_unit_id'] ?? 1);
-        $empUName = (string)($adminRow['business_unit_name'] ?? 'Assigned Unit');
-        $authorizedInterfaces[] = [
-            'id' => 'employee',
-            'label' => 'Employee Workspace',
-            'hasUnits' => true,
-            'units' => [
-                ['id' => $empUId, 'name' => $empUName, 'url' => '/switch-interface?target=employee'],
-            ],
-            'active' => (str_starts_with($curPath, '/staff') || $curPath === '/workspace') && $activeContext !== 'customer',
-        ];
-        $authorizedInterfaces[] = [
-            'id' => 'customer',
-            'label' => 'Customer Interface',
-            'hasUnits' => false,
-            'url' => '/switch-interface?target=customer',
-            'active' => $activeContext === 'customer' || (!$isWorkspaceRoute),
-        ];
     }
 }
 
+$inStaffWorkspace = $isSignedIn && $baseContext === 'employee' && $activeContext === 'employee' && $isWorkspaceRoute;
 $showCustomerNav = $isSignedIn && ((bool)\App\Core\Session::get('customer_id') || $activeContext === 'customer' || !$isWorkspaceRoute);
-$showEmployeeWorkspaceNav = $isSignedIn && $baseContext === 'employee' && $activeContext === 'employee' && $isWorkspaceRoute;
 $isAuthSignInOrOut = str_starts_with($curPath, '/login') || str_starts_with($curPath, '/staff/login') || str_starts_with($curPath, '/logout');
+$unitQuery = ($isSuperAdmin && isset($_GET['unit_id']) && ctype_digit((string)$_GET['unit_id'])) ? '?unit_id=' . (int)$_GET['unit_id'] : '';
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -251,20 +293,69 @@ $isAuthSignInOrOut = str_starts_with($curPath, '/login') || str_starts_with($cur
       <span>VETGRPET</span>
     </a>
     <nav aria-label="Main">
-<?php if ($inAdminWorkspace): ?>
-  <?php if (str_starts_with($curPath, '/sysadmin')): ?>
-      <a href="/sysadmin" class="segmented-pill <?= ($curPath === '/sysadmin' || preg_match('#^/sysadmin/units/\d+$#', $curPath)) ? 'is-current' : '' ?>">Overview</a>
-      <a href="/sysadmin/employees" class="segmented-pill <?= (str_starts_with($curPath, '/sysadmin/employees') || preg_match('#^/sysadmin/units/\d+/employees#', $curPath)) ? 'is-current' : '' ?>">Unit Employees</a>
-      <a href="/sysadmin/roles" class="segmented-pill <?= (str_starts_with($curPath, '/sysadmin/roles') || preg_match('#^/sysadmin/units/\d+/roles#', $curPath)) ? 'is-current' : '' ?>">Roles &amp; Permissions</a>
-      <a href="/sysadmin/activity" class="segmented-pill <?= (str_starts_with($curPath, '/sysadmin/activity') || preg_match('#^/sysadmin/units/\d+/activity#', $curPath)) ? 'is-current' : '' ?>">Activity Log</a>
-  <?php elseif (str_starts_with($curPath, '/super-admin')): ?>
+<?php if ($inStaffWorkspace): ?>
+  <?php if (str_starts_with($curPath, '/super-admin')): ?>
       <a href="/super-admin" class="<?= $curPath === '/super-admin' ? 'is-current' : '' ?>">Dashboard</a>
       <a href="/super-admin/business-units" class="<?= str_starts_with($curPath, '/super-admin/business-units') ? 'is-current' : '' ?>">Business Units</a>
       <a href="/super-admin/system-admins" class="<?= str_starts_with($curPath, '/super-admin/system-admins') ? 'is-current' : '' ?>">System Administrators</a>
       <a href="/super-admin/employees" class="<?= str_starts_with($curPath, '/super-admin/employees') ? 'is-current' : '' ?>">Employee Accounts</a>
       <a href="/super-admin/roles" class="<?= str_starts_with($curPath, '/super-admin/roles') ? 'is-current' : '' ?>">Roles &amp; Permissions</a>
       <a href="/super-admin/activity" class="<?= str_starts_with($curPath, '/super-admin/activity') ? 'is-current' : '' ?>">System Activity</a>
+
+  <?php elseif (str_starts_with($curPath, '/sysadmin')): ?>
+      <a href="/sysadmin<?= $unitQuery ?>" class="<?= ($curPath === '/sysadmin' || preg_match('#^/sysadmin/units/\d+$#', $curPath)) ? 'is-current' : '' ?>">Overview</a>
+      <a href="/sysadmin/employees<?= $unitQuery ?>" class="<?= (str_starts_with($curPath, '/sysadmin/employees') || preg_match('#^/sysadmin/units/\d+/employees#', $curPath)) ? 'is-current' : '' ?>">Unit Employees</a>
+      <a href="/sysadmin/roles<?= $unitQuery ?>" class="<?= (str_starts_with($curPath, '/sysadmin/roles') || preg_match('#^/sysadmin/units/\d+/roles#', $curPath)) ? 'is-current' : '' ?>">Roles &amp; Permissions</a>
+      <a href="/sysadmin/activity<?= $unitQuery ?>" class="<?= (str_starts_with($curPath, '/sysadmin/activity') || preg_match('#^/sysadmin/units/\d+/activity#', $curPath)) ? 'is-current' : '' ?>">Activity Log</a>
+
+  <?php elseif (str_starts_with($curPath, '/manager')): ?>
+    <?php if ($isTempInv): ?>
+      <a href="/manager/inventory" class="<?= str_starts_with($curPath, '/manager/inventory') ? 'is-current' : '' ?>">Inventory</a>
+      <a href="/staff/workspace">&larr; Employee Workspace</a>
+    <?php elseif ($isInvMode): ?>
+      <?php if ((int)$currentUnitId === 1): /* Pet Store Inventory Manager */ ?>
+        <a href="/manager/orders<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/orders') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Orders</a>
+        <a href="/manager/inventory<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/inventory') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Inventory</a>
+        <a href="/manager/employees<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/employees') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Employees</a>
+      <?php elseif ((int)$currentUnitId === 2): /* Veterinary Clinic Inventory Manager: EXACTLY 3 pages */ ?>
+        <a href="/manager/inventory<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/inventory') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Inventory</a>
+        <a href="/manager/medical-records<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/medical-records') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Medical Records</a>
+        <a href="/manager/employees<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/employees') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Employees</a>
+      <?php else: /* Grooming Services Inventory Manager */ ?>
+        <a href="/manager/inventory<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/inventory') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Inventory</a>
+        <a href="/manager/employees<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/employees') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Employees</a>
+      <?php endif; ?>
+    <?php else: /* Business Manager */ ?>
+      <?php if ((int)$currentUnitId === 1): /* Pet Store Business Manager */ ?>
+        <a href="/manager<?= $unitQuery ?>" class="<?= ($curPath === '/manager' || preg_match('#^/manager/units/\d+(/overview)?$#', $curPath) || $curPath === '/manager/overview') ? 'is-current' : '' ?>">Overview</a>
+        <a href="/manager/sales<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/sales') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Sales</a>
+        <a href="/manager/products<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/products') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Products</a>
+        <a href="/manager/inventory<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/inventory') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Inventory</a>
+        <a href="/manager/employees<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/employees') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Employees</a>
+        <a href="/manager/settings<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/settings') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Business Settings</a>
+      <?php elseif ((int)$currentUnitId === 2): /* Veterinary Clinic Business Manager */ ?>
+        <a href="/manager<?= $unitQuery ?>" class="<?= ($curPath === '/manager' || preg_match('#^/manager/units/\d+(/overview)?$#', $curPath) || $curPath === '/manager/overview') ? 'is-current' : '' ?>">Overview</a>
+        <a href="/manager/appointments<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/appointments') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Appointments</a>
+        <a href="/manager/employees<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/employees') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Employees</a>
+        <a href="/manager/services<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/services') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Services</a>
+        <a href="/manager/inventory<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/inventory') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Inventory</a>
+        <a href="/manager/medical-records<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/medical-records') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Medical Records</a>
+        <a href="/manager/settings<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/settings') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Business Settings</a>
+      <?php else: /* Grooming Services Business Manager */ ?>
+        <a href="/manager<?= $unitQuery ?>" class="<?= ($curPath === '/manager' || preg_match('#^/manager/units/\d+(/overview)?$#', $curPath) || $curPath === '/manager/overview') ? 'is-current' : '' ?>">Overview</a>
+        <a href="/manager/appointments<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/appointments') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Appointments</a>
+        <a href="/manager/employees<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/employees') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Employees</a>
+        <a href="/manager/services<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/services') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Services</a>
+        <a href="/manager/inventory<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/inventory') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Inventory</a>
+        <a href="/manager/settings<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/settings') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Business Settings</a>
+      <?php endif; ?>
+    <?php endif; ?>
+
+  <?php elseif (str_starts_with($curPath, '/staff') || $curPath === '/workspace'): ?>
+      <a href="/staff/workspace" class="<?= ($curPath === '/staff/workspace' || $curPath === '/workspace') ? 'is-current' : '' ?>">Workspace</a>
+      <a href="/customer-interface">Customer Interface</a>
   <?php endif; ?>
+
       <span class="nav-divider" aria-hidden="true"></span>
       <div class="profile-menu">
         <button type="button" class="profile-avatar-btn" id="admin-profile-toggle" aria-expanded="false" aria-haspopup="true" aria-label="Administrator profile menu">
@@ -313,6 +404,12 @@ $isAuthSignInOrOut = str_starts_with($curPath, '/login') || str_starts_with($cur
               <?php endforeach; ?>
             </div>
           </div>
+          <?php if (!empty($isTempInv)): ?>
+            <form method="post" action="/staff/inventory-access/exit" class="profile-dropdown-form">
+              <?= \App\Core\CSRF::field() ?>
+              <button type="submit" class="profile-dropdown-item" role="menuitem">Exit Temporary Access</button>
+            </form>
+          <?php endif; ?>
           <button type="button" class="profile-dropdown-item" id="admin-dark-mode-toggle" role="menuitem">Dark Mode</button>
           <form method="post" action="/logout" class="profile-dropdown-form">
             <?= \App\Core\CSRF::field() ?>
@@ -320,24 +417,21 @@ $isAuthSignInOrOut = str_starts_with($curPath, '/login') || str_starts_with($cur
           </form>
         </div>
       </div>
-<?php else: ?>
+
+<?php else: /* Customer / Public navigation */ ?>
       <a href="/products" class="<?= (str_starts_with($curPath, '/products') || str_starts_with($curPath, '/shop')) ? 'is-current' : '' ?>">Products</a>
       <a href="/services" class="<?= str_starts_with($curPath, '/services') ? 'is-current' : '' ?>">Services</a>
       <a href="/staffs" class="<?= str_starts_with($curPath, '/staffs') ? 'is-current' : '' ?>">Staffs</a>
       <a href="/reviews" class="<?= str_starts_with($curPath, '/reviews') ? 'is-current' : '' ?>">Customer Reviews</a>
-  <?php if ($showCustomerNav && !$showEmployeeWorkspaceNav): ?>
+  <?php if ($isSignedIn && (bool)\App\Core\Session::get('customer_id') && ($baseContext !== 'employee' || $activeContext === 'customer')): ?>
       <span class="nav-divider" aria-hidden="true"></span>
       <a href="/appointments" class="<?= str_starts_with($curPath, '/appointments') ? 'is-current' : '' ?>">Appointments</a>
       <a href="/pets" class="<?= str_starts_with($curPath, '/pets') ? 'is-current' : '' ?>">My pets</a>
       <a href="/orders" class="<?= str_starts_with($curPath, '/orders') ? 'is-current' : '' ?>">Orders</a>
       <a href="/profile" class="<?= str_starts_with($curPath, '/profile') ? 'is-current' : '' ?>">Profile</a>
   <?php endif; ?>
-  <?php if ($showEmployeeWorkspaceNav): ?>
-      <span class="nav-divider" aria-hidden="true"></span>
-      <a href="/workspace" class="is-current">Workspace</a>
-      <a href="/customer-interface">Customer Interface</a>
-  <?php endif; ?>
-  <?php if ($isAdminUser && $activeContext === 'customer'): ?>
+
+  <?php if ($isSignedIn && $baseContext === 'employee'): ?>
       <span class="nav-divider" aria-hidden="true"></span>
       <div class="profile-menu">
         <button type="button" class="profile-avatar-btn" id="admin-profile-toggle" aria-expanded="false" aria-haspopup="true" aria-label="Administrator profile menu">
@@ -386,6 +480,12 @@ $isAuthSignInOrOut = str_starts_with($curPath, '/login') || str_starts_with($cur
               <?php endforeach; ?>
             </div>
           </div>
+          <?php if (!empty($isTempInv)): ?>
+            <form method="post" action="/staff/inventory-access/exit" class="profile-dropdown-form">
+              <?= \App\Core\CSRF::field() ?>
+              <button type="submit" class="profile-dropdown-item" role="menuitem">Exit Temporary Access</button>
+            </form>
+          <?php endif; ?>
           <button type="button" class="profile-dropdown-item" id="admin-dark-mode-toggle" role="menuitem">Dark Mode</button>
           <form method="post" action="/logout" class="profile-dropdown-form">
             <?= \App\Core\CSRF::field() ?>
@@ -393,8 +493,6 @@ $isAuthSignInOrOut = str_starts_with($curPath, '/login') || str_starts_with($cur
           </form>
         </div>
       </div>
-  <?php elseif ($isSignedIn): ?>
-      <form method="post" action="/logout" class="inline"><?= \App\Core\CSRF::field() ?><button class="link" type="submit">Sign out</button></form>
   <?php else: ?>
       <span class="nav-divider" aria-hidden="true"></span>
       <a href="/login" class="<?= str_starts_with($curPath, '/login') ? 'is-current' : '' ?>">Sign in</a>
