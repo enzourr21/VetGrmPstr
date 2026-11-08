@@ -158,59 +158,109 @@ require __DIR__ . '/_nav.php';
   <div class="settings-card-head">
     <div>
       <h2 class="settings-card-title">3. Business Policies</h2>
-      <p class="caption muted" style="margin: 0.15rem 0 0 0;">Established store rules, warranty terms, and operational guidelines</p>
+      <p class="caption muted" style="margin: 0.15rem 0 0 0;">Established <?= e($unitName) ?> operational guidelines, standards, and patient compliance rules</p>
     </div>
     <span class="badge secondary" style="font-weight: 600;">Read-Only</span>
   </div>
 
   <div class="settings-policies-grid">
-    <article style="background: var(--surface-subtle, #f8fafc); border: 1px solid var(--line, #e2e8f0); border-radius: var(--radius-md, 8px); padding: 1rem 1.15rem; display: flex; flex-direction: column; gap: 0.35rem;">
-      <strong style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.92rem; font-weight: 650; color: var(--ink, #1e293b);">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--brand-emerald, #059669); flex-shrink: 0;" aria-hidden="true">
-          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
-        </svg>
-        Return &amp; Refund Policy
-      </strong>
-      <p class="caption" style="margin: 0; line-height: 1.5; color: var(--muted, #475569); font-size: 0.84rem;">
-        Pet retail items are eligible for refund or exchange within 7 days of purchase upon presentation of valid receipt. Returned items must be undamaged, unopened, and undergo physical inspection before being restored to sellable inventory.
-      </p>
-    </article>
+    <?php if ((int)$unitId === \App\Models\Units::vetClinicId()): ?>
+      <article style="background: var(--surface-subtle, #f8fafc); border: 1px solid var(--line, #e2e8f0); border-radius: var(--radius-md, 8px); padding: 1rem 1.15rem; display: flex; flex-direction: column; gap: 0.35rem;">
+        <strong style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.92rem; font-weight: 650; color: var(--ink, #1e293b);">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--brand-emerald, #059669); flex-shrink: 0;" aria-hidden="true">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+          </svg>
+          Clinical Consultation &amp; Triage Policy
+        </strong>
+        <p class="caption" style="margin: 0; line-height: 1.5; color: var(--muted, #475569); font-size: 0.84rem;">
+          Veterinary clinical consultations follow scheduled examination slots. Prior medical records and vaccination passports should be presented upon check-in. Critical emergency triage cases receive immediate clinical priority over routine consultations.
+        </p>
+      </article>
 
-    <article style="background: var(--surface-subtle, #f8fafc); border: 1px solid var(--line, #e2e8f0); border-radius: var(--radius-md, 8px); padding: 1rem 1.15rem; display: flex; flex-direction: column; gap: 0.35rem;">
-      <strong style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.92rem; font-weight: 650; color: var(--ink, #1e293b);">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--brand-emerald, #059669); flex-shrink: 0;" aria-hidden="true">
-          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
-        </svg>
-        Pet Safety &amp; Perishable Feeds Policy
-      </strong>
-      <p class="caption" style="margin: 0; line-height: 1.5; color: var(--muted, #475569); font-size: 0.84rem;">
-        Perishable animal feeds, prescription veterinary supplements, and opened treats cannot be returned for resale to prevent pet cross-contamination. Damaged or expired inventory must be processed via decrease stock adjustment.
-      </p>
-    </article>
+      <article style="background: var(--surface-subtle, #f8fafc); border: 1px solid var(--line, #e2e8f0); border-radius: var(--radius-md, 8px); padding: 1rem 1.15rem; display: flex; flex-direction: column; gap: 0.35rem;">
+        <strong style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.92rem; font-weight: 650; color: var(--ink, #1e293b);">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--brand-emerald, #059669); flex-shrink: 0;" aria-hidden="true">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+          </svg>
+          Prescription &amp; Medication Dispensing Policy
+        </strong>
+        <p class="caption" style="margin: 0; line-height: 1.5; color: var(--muted, #475569); font-size: 0.84rem;">
+          Prescription animal pharmaceuticals and regulated biologics are dispensed exclusively upon authorization by a licensed veterinarian. To prevent animal cross-contamination and guarantee drug efficacy, dispensed pharmaceuticals cannot be returned for resale.
+        </p>
+      </article>
 
-    <article style="background: var(--surface-subtle, #f8fafc); border: 1px solid var(--line, #e2e8f0); border-radius: var(--radius-md, 8px); padding: 1rem 1.15rem; display: flex; flex-direction: column; gap: 0.35rem;">
-      <strong style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.92rem; font-weight: 650; color: var(--ink, #1e293b);">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--brand-emerald, #059669); flex-shrink: 0;" aria-hidden="true">
-          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
-        </svg>
-        Store Order &amp; Cancellation Policy
-      </strong>
-      <p class="caption" style="margin: 0; line-height: 1.5; color: var(--muted, #475569); font-size: 0.84rem;">
-        Online delivery and in-store pickup orders may be cancelled prior to dispatch. Cancelled orders automatically release reserved inventory allocations.
-      </p>
-    </article>
+      <article style="background: var(--surface-subtle, #f8fafc); border: 1px solid var(--line, #e2e8f0); border-radius: var(--radius-md, 8px); padding: 1rem 1.15rem; display: flex; flex-direction: column; gap: 0.35rem;">
+        <strong style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.92rem; font-weight: 650; color: var(--ink, #1e293b);">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--brand-emerald, #059669); flex-shrink: 0;" aria-hidden="true">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+          </svg>
+          Cancellation &amp; Rescheduling Policy
+        </strong>
+        <p class="caption" style="margin: 0; line-height: 1.5; color: var(--muted, #475569); font-size: 0.84rem;">
+          Medical appointments may be rescheduled or cancelled up to 24 hours prior to the scheduled time. Timely notice enables clinical staff to accommodate patients needing urgent consultation.
+        </p>
+      </article>
 
-    <article style="background: var(--surface-subtle, #f8fafc); border: 1px solid var(--line, #e2e8f0); border-radius: var(--radius-md, 8px); padding: 1rem 1.15rem; display: flex; flex-direction: column; gap: 0.35rem;">
-      <strong style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.92rem; font-weight: 650; color: var(--ink, #1e293b);">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--brand-emerald, #059669); flex-shrink: 0;" aria-hidden="true">
-          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
-        </svg>
-        Payment &amp; Transaction Verification
-      </strong>
-      <p class="caption" style="margin: 0; line-height: 1.5; color: var(--muted, #475569); font-size: 0.84rem;">
-        Electronic e-wallet settlements (GCash and Maya) require two-factor phone number verification before merchant receiving channels are activated.
-      </p>
-    </article>
+      <article style="background: var(--surface-subtle, #f8fafc); border: 1px solid var(--line, #e2e8f0); border-radius: var(--radius-md, 8px); padding: 1rem 1.15rem; display: flex; flex-direction: column; gap: 0.35rem;">
+        <strong style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.92rem; font-weight: 650; color: var(--ink, #1e293b);">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--brand-emerald, #059669); flex-shrink: 0;" aria-hidden="true">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+          </svg>
+          Diagnostic &amp; Procedure Consent Policy
+        </strong>
+        <p class="caption" style="margin: 0; line-height: 1.5; color: var(--muted, #475569); font-size: 0.84rem;">
+          Specialized diagnostic blood panels, dental scaling, sedation, and minor surgical procedures require prior owner consultation and informed consent from the patient's guardian.
+        </p>
+      </article>
+    <?php else: ?>
+      <article style="background: var(--surface-subtle, #f8fafc); border: 1px solid var(--line, #e2e8f0); border-radius: var(--radius-md, 8px); padding: 1rem 1.15rem; display: flex; flex-direction: column; gap: 0.35rem;">
+        <strong style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.92rem; font-weight: 650; color: var(--ink, #1e293b);">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--brand-emerald, #059669); flex-shrink: 0;" aria-hidden="true">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+          </svg>
+          Return &amp; Refund Policy
+        </strong>
+        <p class="caption" style="margin: 0; line-height: 1.5; color: var(--muted, #475569); font-size: 0.84rem;">
+          Pet retail items are eligible for refund or exchange within 7 days of purchase upon presentation of valid receipt. Returned items must be undamaged, unopened, and undergo physical inspection before being restored to sellable inventory.
+        </p>
+      </article>
+
+      <article style="background: var(--surface-subtle, #f8fafc); border: 1px solid var(--line, #e2e8f0); border-radius: var(--radius-md, 8px); padding: 1rem 1.15rem; display: flex; flex-direction: column; gap: 0.35rem;">
+        <strong style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.92rem; font-weight: 650; color: var(--ink, #1e293b);">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--brand-emerald, #059669); flex-shrink: 0;" aria-hidden="true">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+          </svg>
+          Pet Safety &amp; Perishable Feeds Policy
+        </strong>
+        <p class="caption" style="margin: 0; line-height: 1.5; color: var(--muted, #475569); font-size: 0.84rem;">
+          Perishable animal feeds, prescription veterinary supplements, and opened treats cannot be returned for resale to prevent pet cross-contamination. Damaged or expired inventory must be processed via decrease stock adjustment.
+        </p>
+      </article>
+
+      <article style="background: var(--surface-subtle, #f8fafc); border: 1px solid var(--line, #e2e8f0); border-radius: var(--radius-md, 8px); padding: 1rem 1.15rem; display: flex; flex-direction: column; gap: 0.35rem;">
+        <strong style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.92rem; font-weight: 650; color: var(--ink, #1e293b);">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--brand-emerald, #059669); flex-shrink: 0;" aria-hidden="true">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+          </svg>
+          Store Order &amp; Cancellation Policy
+        </strong>
+        <p class="caption" style="margin: 0; line-height: 1.5; color: var(--muted, #475569); font-size: 0.84rem;">
+          Online delivery and in-store pickup orders may be cancelled prior to dispatch. Cancelled orders automatically release reserved inventory allocations.
+        </p>
+      </article>
+
+      <article style="background: var(--surface-subtle, #f8fafc); border: 1px solid var(--line, #e2e8f0); border-radius: var(--radius-md, 8px); padding: 1rem 1.15rem; display: flex; flex-direction: column; gap: 0.35rem;">
+        <strong style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.92rem; font-weight: 650; color: var(--ink, #1e293b);">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--brand-emerald, #059669); flex-shrink: 0;" aria-hidden="true">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+          </svg>
+          Payment &amp; Transaction Verification
+        </strong>
+        <p class="caption" style="margin: 0; line-height: 1.5; color: var(--muted, #475569); font-size: 0.84rem;">
+          Electronic e-wallet settlements (GCash and Maya) require two-factor phone number verification before merchant receiving channels are activated.
+        </p>
+      </article>
+    <?php endif; ?>
   </div>
 </section>
 

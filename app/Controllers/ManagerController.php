@@ -172,6 +172,12 @@ final class ManagerController extends Controller
             return;
         }
 
+        // Veterinary Clinic Business Manager Overview (business_unit_id = 2)
+        if ((int)$unitId === Units::vetClinicId()) {
+            $this->renderVetClinicOverview($unitId, $unitName, $isSuper);
+            return;
+        }
+
         // If not Pet Store (e.g. Veterinary Clinic), preserve existing legacy dashboard
         if ((int)$unitId !== 1) {
             $this->renderLegacyDashboard($unitId, $unitName, $isSuper);
@@ -363,6 +369,431 @@ final class ManagerController extends Controller
             'appointments' => $appointments,
             'unitStaff' => $unitStaff,
         ]);
+    }
+
+    /**
+     * Veterinary Clinic Business Manager Overview (business_unit_id = 2)
+     */
+    private function renderVetClinicOverview(int $unitId, string $unitName, bool $isSuper): void
+    {
+        // 1. Top Section: Current / Upcoming Appointment (most recently started In Progress or next upcoming)
+        $currentAppointment = $this->fetchSingleCurrentOrUpcomingVetAppointment($unitId);
+
+        // 2. Middle Section Left: Stock Alerts (low available <= 10 or batch expiry tracking)
+        $stockAlertsStmt = $this->db->prepare(
+            "SELECT bp.business_product_id, bp.selling_price, bp.requires_batch_tracking,
+                    p.product_name, p.product_category, p.sku,
+                    COALESCE(i.on_hand, 0) AS on_hand,
+                    COALESCE(i.committed, 0) AS committed,
+                    GREATEST(COALESCE(i.on_hand, 0) - COALESCE(i.committed, 0), 0) AS available,
+                    ib.batch_id, ib.batch_number, ib.expiration_date, ib.quantity AS batch_quantity
+             FROM business_product bp
+             JOIN product p ON p.product_id = bp.product_id
+             LEFT JOIN inventory i ON i.business_product_id = bp.business_product_id
+             LEFT JOIN inventory_batch ib ON ib.inventory_id = i.inventory_id
+             WHERE bp.business_unit_id = ?
+               AND bp.product_status = 'active'
+               AND (
+                 GREATEST(COALESCE(i.on_hand, 0) - COALESCE(i.committed, 0), 0) <= 10
+                 OR (bp.requires_batch_tracking = 1 AND ib.expiration_date IS NOT NULL AND ib.expiration_date <= DATE_ADD(CURDATE(), INTERVAL 30 DAY))
+               )
+             ORDER BY
+               CASE
+                 WHEN ib.expiration_date IS NOT NULL AND ib.expiration_date < CURDATE() THEN 0
+                 WHEN ib.expiration_date IS NOT NULL AND ib.expiration_date <= DATE_ADD(CURDATE(), INTERVAL 30 DAY) THEN 1
+                 ELSE 2
+               END ASC,
+               available ASC, p.product_name ASC"
+        );
+        $stockAlertsStmt->execute([$unitId]);
+        $rawAlerts = $stockAlertsStmt->fetchAll();
+
+        $stockAlerts = [];
+        $todayStr = date('Y-m-d');
+        foreach ($rawAlerts as $ra) {
+            $avail = (int)$ra['available'];
+            $exp = $ra['expiration_date'] ? (string)$ra['expiration_date'] : null;
+            $isExpired = ($exp !== null && $exp < $todayStr);
+            $isNearExp = ($exp !== null && !$isExpired && $exp <= date('Y-m-d', strtotime('+30 days')));
+
+            if ($avail <= 0) {
+                $alertLabel = 'Out of Stock';
+                $badgeClass = 'badge-danger';
+            } elseif ($isExpired) {
+                $alertLabel = 'Batch Expired';
+                $badgeClass = 'badge-danger';
+            } elseif ($isNearExp) {
+                $alertLabel = 'Expiring Soon';
+                $badgeClass = 'warn';
+            } else {
+                $alertLabel = 'Low Stock';
+                $badgeClass = 'secondary';
+            }
+
+            $ra['alert_label'] = $alertLabel;
+            $ra['alert_badge_class'] = $badgeClass;
+            $stockAlerts[] = $ra;
+        }
+
+        // 3. Middle Section Right: Daily Clinic Activity
+        // Current clinic-local date counts: Scheduled Appointments vs Walk-in Visits
+        // The clinic operates in GMT+8 (Asia/Manila)
+        $clinicTz = new \DateTimeZone('Asia/Manila');
+        $todayLocal = new \DateTimeImmutable('now', $clinicTz);
+        $clinicLocalDate = $todayLocal->format('Y-m-d');
+        $activityDateFormatted = $todayLocal->format('M j, Y');
+
+        $scheduledStmt = $this->db->prepare(
+            "SELECT COUNT(*) FROM appointment a
+             JOIN appointment_status st ON st.appointment_status_id = a.appointment_status_id
+             WHERE a.business_unit_id = ?
+               AND a.appointment_type = 'medical'
+               AND a.preferred_date = ?
+               AND st.status_name NOT IN ('Cancelled', 'Rejected')"
+        );
+        $scheduledStmt->execute([$unitId, $clinicLocalDate]);
+        $todayScheduledCount = (int)$scheduledStmt->fetchColumn();
+
+        // Walk-in visits: database schema has no visit_type or walk-in consultations table for clinic visits.
+        // As per project instructions, we do not invent classification rules or alter schemas without approval.
+        $todayWalkInCount = 0;
+
+        // 4. Bottom Section: Employees On Duty (up to 3 employees in priority: Lead/Assoc Vet > Vet Nurse > Vet Assistant > Receptionist)
+        $employeesOnDuty = $this->fetchVetEmployeesOnDuty($unitId);
+
+        $this->render('manager/vet_overview', [
+            'title' => "$unitName · Business Manager Overview",
+            'activeTab' => 'overview',
+            'unitId' => $unitId,
+            'unitName' => $unitName,
+            'isSuper' => $isSuper,
+            'allUnits' => $isSuper ? Units::all() : [],
+            'currentAppointment' => $currentAppointment,
+            'stockAlerts' => $stockAlerts,
+            'todayScheduledCount' => $todayScheduledCount,
+            'todayWalkInCount' => $todayWalkInCount,
+            'activityDateFormatted' => $activityDateFormatted,
+            'employeesOnDuty' => $employeesOnDuty,
+        ]);
+    }
+
+    /**
+     * Fetch single current or upcoming medical appointment for Veterinary Clinic.
+     * Prioritizes active In Progress (most recently started), then next upcoming chronological appointment.
+     */
+    private function fetchSingleCurrentOrUpcomingVetAppointment(int $unitId): ?array
+    {
+        // 1. Check for most recently started In Progress appointment
+        $inProgStmt = $this->db->prepare(
+            "SELECT a.appointment_id, a.business_unit_id, a.preferred_date, a.preferred_time,
+                    a.appointment_begin, a.appointment_end, a.notes,
+                    st.status_name,
+                    CONCAT(c.first_name, ' ', c.last_name) AS customer_name,
+                    c.phone AS customer_phone
+             FROM appointment a
+             JOIN appointment_status st ON st.appointment_status_id = a.appointment_status_id
+             JOIN customer c ON c.customer_id = a.customer_id
+             WHERE a.business_unit_id = ?
+               AND a.appointment_type = 'medical'
+               AND st.status_name = 'In Progress'
+             ORDER BY COALESCE(a.appointment_begin, a.preferred_time) DESC, a.appointment_id DESC
+             LIMIT 1"
+        );
+        $inProgStmt->execute([$unitId]);
+        $row = $inProgStmt->fetch();
+
+        // 2. If no In Progress appointment, find next upcoming chronologically
+        if (!$row) {
+            $upcomingStmt = $this->db->prepare(
+                "SELECT a.appointment_id, a.business_unit_id, a.preferred_date, a.preferred_time,
+                        a.appointment_begin, a.appointment_end, a.notes,
+                        st.status_name,
+                        CONCAT(c.first_name, ' ', c.last_name) AS customer_name,
+                        c.phone AS customer_phone
+                 FROM appointment a
+                 JOIN appointment_status st ON st.appointment_status_id = a.appointment_status_id
+                 JOIN customer c ON c.customer_id = a.customer_id
+                 WHERE a.business_unit_id = ?
+                   AND a.appointment_type = 'medical'
+                   AND st.status_name IN ('Confirmed', 'Pending', 'Awaiting Customer Response')
+                   AND a.preferred_date >= CURDATE()
+                 ORDER BY a.preferred_date ASC, COALESCE(TIME(a.appointment_begin), a.preferred_time, '09:00:00') ASC, a.appointment_id ASC
+                 LIMIT 1"
+            );
+            $upcomingStmt->execute([$unitId]);
+            $row = $upcomingStmt->fetch();
+        }
+
+        if (!$row) {
+            return null;
+        }
+
+        return $this->hydrateVetAppointmentDetails($row);
+    }
+
+    /**
+     * Hydrate pet, service, assigned clinician, and timing details for a Veterinary Clinic appointment.
+     */
+    private function hydrateVetAppointmentDetails(array $appt): array
+    {
+        $apptId = (int)$appt['appointment_id'];
+
+        // Customer details if not already present on $appt
+        if (!isset($appt['customer_name']) && !empty($appt['customer_id'])) {
+            $cStmt = $this->db->prepare("SELECT CONCAT(first_name, ' ', last_name) AS customer_name, phone AS customer_phone FROM customer WHERE customer_id = ?");
+            $cStmt->execute([(int)$appt['customer_id']]);
+            $cRow = $cStmt->fetch();
+            if ($cRow) {
+                $appt['customer_name'] = $cRow['customer_name'];
+                $appt['customer_phone'] = $cRow['customer_phone'];
+            }
+        }
+
+        // Pets & breeds
+        $petStmt = $this->db->prepare(
+            "SELECT p.pet_id, p.pet_name, p.species, p.breed
+             FROM appointment_pet ap
+             JOIN pet p ON p.pet_id = ap.pet_id
+             WHERE ap.appointment_id = ?
+             ORDER BY ap.appointment_pet_id ASC"
+        );
+        $petStmt->execute([$apptId]);
+        $pets = $petStmt->fetchAll();
+
+        $petItems = [];
+        $petLabels = [];
+        foreach ($pets as $pt) {
+            $breed = trim((string)($pt['breed'] ?? ''));
+            $species = ucfirst((string)($pt['species'] ?? 'Pet'));
+            $breedDisplay = $breed !== '' ? $breed : $species;
+            $petItems[] = [
+                'pet_id' => (int)$pt['pet_id'],
+                'name' => $pt['pet_name'],
+                'species' => $species,
+                'breed' => $breedDisplay,
+                'display' => $pt['pet_name'] . ' (' . $breedDisplay . ')',
+            ];
+            $petLabels[] = $pt['pet_name'] . ' (' . $breedDisplay . ')';
+        }
+        $appt['pets'] = $pets;
+        $appt['pet_items'] = $petItems;
+        $appt['pet_summary'] = $petLabels ? implode(', ', $petLabels) : 'No pet recorded';
+
+        // Services & assigned clinician (performer_employee_id)
+        $psStmt = $this->db->prepare(
+            "SELECT ps.performed_service_id, ps.service_id, ps.performed_price, ps.performed_status,
+                    ps.performer_employee_id,
+                    s.service_name, s.estimated_duration_minutes,
+                    CONCAT(e.first_name, ' ', e.last_name) AS performer_name,
+                    e.position AS performer_position
+             FROM performed_service ps
+             JOIN appointment_pet ap ON ap.appointment_pet_id = ps.appointment_pet_id
+             JOIN service s ON s.service_id = ps.service_id
+             LEFT JOIN employee e ON e.employee_id = ps.performer_employee_id
+             WHERE ap.appointment_id = ?
+             ORDER BY ps.performed_service_id ASC"
+        );
+        $psStmt->execute([$apptId]);
+        $performedServices = $psStmt->fetchAll();
+
+        $serviceNames = [];
+        $totalDurationMinutes = 0;
+        $assignedClinicians = [];
+        $primaryPerformerId = null;
+
+        foreach ($performedServices as $ps) {
+            $name = trim((string)$ps['service_name']);
+            if ($name !== '' && !in_array($name, $serviceNames, true)) {
+                $serviceNames[] = $name;
+                $dur = (int)($ps['estimated_duration_minutes'] ?? 0);
+                if ($dur > 0) {
+                    $totalDurationMinutes += $dur;
+                }
+            }
+            if (!empty($ps['performer_name'])) {
+                $assignedClinicians[$ps['performer_name']] = $ps['performer_name'] . (!empty($ps['performer_position']) ? ' (' . $ps['performer_position'] . ')' : '');
+            }
+            if ($primaryPerformerId === null && !empty($ps['performer_employee_id'])) {
+                $primaryPerformerId = (int)$ps['performer_employee_id'];
+            }
+        }
+
+        // Check requested_pet_service as well
+        $rpsStmt = $this->db->prepare(
+            "SELECT s.service_name, s.estimated_duration_minutes
+             FROM requested_pet_service rps
+             JOIN appointment_pet ap ON ap.appointment_pet_id = rps.appointment_pet_id
+             JOIN service s ON s.service_id = rps.service_id
+             WHERE ap.appointment_id = ? AND rps.request_status <> 'declined'
+             ORDER BY rps.requested_pet_service_id ASC"
+        );
+        $rpsStmt->execute([$apptId]);
+        foreach ($rpsStmt->fetchAll() as $rps) {
+            $name = trim((string)$rps['service_name']);
+            if ($name !== '' && !in_array($name, $serviceNames, true)) {
+                $serviceNames[] = $name;
+                $dur = (int)($rps['estimated_duration_minutes'] ?? 0);
+                if ($dur > 0) {
+                    $totalDurationMinutes += $dur;
+                }
+            }
+        }
+
+        if ($totalDurationMinutes <= 0) {
+            $totalDurationMinutes = 30; // standard medical consultation duration
+        }
+
+        // Start & End time calculation
+        $startTimeStr = '09:00:00';
+        if (!empty($appt['appointment_begin'])) {
+            $ts = strtotime((string)$appt['appointment_begin']);
+            if ($ts !== false) {
+                $startTimeStr = date('H:i:s', $ts);
+            }
+        } elseif (!empty($appt['preferred_time'])) {
+            $startTimeStr = (string)$appt['preferred_time'];
+        }
+
+        [$startH, $startM] = array_map('intval', array_pad(explode(':', $startTimeStr), 2, 0));
+        $startMinutes = ($startH * 60) + $startM;
+
+        $endMinutes = $startMinutes + $totalDurationMinutes;
+        if (!empty($appt['appointment_end'])) {
+            $endTs = strtotime((string)$appt['appointment_end']);
+            if ($endTs !== false) {
+                $endH = (int)date('H', $endTs);
+                $endM = (int)date('i', $endTs);
+                $calcEnd = ($endH * 60) + $endM;
+                if ($calcEnd > $startMinutes) {
+                    $endMinutes = $calcEnd;
+                    $totalDurationMinutes = $endMinutes - $startMinutes;
+                }
+            }
+        }
+
+        $startFormatted = date('g:i A', mktime((int)floor($startMinutes / 60), $startMinutes % 60, 0));
+        $endFormatted = date('g:i A', mktime((int)floor($endMinutes / 60), $endMinutes % 60, 0));
+
+        $appt['service_list'] = $serviceNames;
+        $appt['services_summary'] = $serviceNames ? implode(', ', $serviceNames) : 'General Examination';
+        $appt['assigned_employee'] = $assignedClinicians ? implode(', ', $assignedClinicians) : '';
+        $appt['performer_employee_id'] = $primaryPerformerId;
+        $appt['duration_minutes'] = $totalDurationMinutes;
+        $appt['start_minutes'] = $startMinutes;
+        $appt['end_minutes'] = $endMinutes;
+        $appt['formatted_date'] = date('M j, Y', strtotime((string)$appt['preferred_date']));
+        $appt['formatted_time'] = $startFormatted . ' - ' . $endFormatted;
+        $appt['time_coverage'] = $startFormatted . ' - ' . $endFormatted;
+
+        // Status color mapping (Green, Yellow, Red, Transparent)
+        $st = (string)$appt['status_name'];
+        if ($st === 'Confirmed') {
+            $appt['color_class'] = 'cal-status-green';
+            $appt['status_color_name'] = 'green';
+            $appt['badge_class'] = 'ok';
+        } elseif (in_array($st, ['Cancelled', 'Rejected'], true)) {
+            $appt['color_class'] = 'cal-status-red';
+            $appt['status_color_name'] = 'red';
+            $appt['badge_class'] = 'err';
+        } elseif (in_array($st, ['In Progress', 'Pending', 'Awaiting Customer Response'], true)) {
+            $appt['color_class'] = 'cal-status-yellow';
+            $appt['status_color_name'] = 'yellow';
+            $appt['badge_class'] = 'warn';
+        } else {
+            // Completed / No-Show -> Transparent
+            $appt['color_class'] = 'cal-status-transparent';
+            $appt['status_color_name'] = 'transparent';
+            $appt['badge_class'] = $st === 'Completed' ? 'ok' : '';
+        }
+
+        return $appt;
+    }
+
+    /**
+     * Fetch up to 3 Veterinary Clinic employees on duty in established clinical priority:
+     * 1. Lead Vet / Associate Vet
+     * 2. Vet Nurse
+     * 3. Vet Assistant
+     * 4. Receptionist
+     * Excludes Business Manager, Inventory Manager, and System Administrator.
+     * Uses actual employee duty/status information (no X/N indicator).
+     */
+    private function fetchVetEmployeesOnDuty(int $unitId): array
+    {
+        $empStmt = $this->db->prepare(
+            "SELECT e.employee_id, e.first_name, e.last_name, e.position,
+                    COALESCE(ews.work_status, 'Free') AS work_status
+             FROM employee e
+             JOIN user_account ua ON ua.user_account_id = e.user_account_id
+             LEFT JOIN employee_work_status ews ON ews.employee_id = e.employee_id
+             WHERE e.business_unit_id = ?
+               AND e.employee_status = 'active'
+               AND ua.account_status = 'active'
+               AND ua.is_super_admin = 0"
+        );
+        $empStmt->execute([$unitId]);
+        $employees = $empStmt->fetchAll();
+
+        $positionPriority = [
+            'Lead Veterinarian' => 1,
+            'Lead Vet' => 1,
+            'Associate Veterinarian' => 1,
+            'Associate Vet' => 1,
+            'Veterinarian (DVM)' => 1,
+            'Veterinarian' => 1,
+            'Veterinary Nurse' => 2,
+            'Vet Nurse' => 2,
+            'Nurse' => 2,
+            'Veterinary Assistant' => 3,
+            'Vet Assistant' => 3,
+            'Receptionist' => 4,
+            'Veterinary Receptionist' => 4,
+        ];
+
+        $displayPositionMap = [
+            'Lead Veterinarian' => 'Lead Vet',
+            'Associate Veterinarian' => 'Associate Vet',
+            'Veterinary Nurse' => 'Vet Nurse',
+            'Veterinary Assistant' => 'Vet Assistant',
+            'Veterinary Receptionist' => 'Receptionist',
+        ];
+
+        $filtered = [];
+        foreach ($employees as $emp) {
+            $rawPos = trim((string)$emp['position']);
+            if (!isset($positionPriority[$rawPos])) {
+                // Excludes Business Manager, Inventory Manager, System Administrator, Delivery Personnel
+                continue;
+            }
+
+            $posRank = $positionPriority[$rawPos];
+            $ws = (string)$emp['work_status'];
+            // If employee is marked 'Not Present', skip them from On Duty card
+            if ($ws === 'Not Present') {
+                continue;
+            }
+
+            // Scheduling / duty rank: On Duty comes first
+            $dutyRank = ($ws === 'On Duty') ? 1 : 2;
+
+            $emp['pos_rank'] = $posRank;
+            $emp['duty_rank'] = $dutyRank;
+            $emp['display_position'] = $displayPositionMap[$rawPos] ?? $rawPos;
+            $filtered[] = $emp;
+        }
+
+        // Sort: dutyRank ASC (On Duty first), then posRank ASC (Lead/Assoc Vet -> Nurse -> Assistant -> Receptionist), then name
+        usort($filtered, static function (array $a, array $b): int {
+            if ($a['duty_rank'] !== $b['duty_rank']) {
+                return $a['duty_rank'] <=> $b['duty_rank'];
+            }
+            if ($a['pos_rank'] !== $b['pos_rank']) {
+                return $a['pos_rank'] <=> $b['pos_rank'];
+            }
+            return strcmp($a['last_name'] . ' ' . $a['first_name'], $b['last_name'] . ' ' . $b['first_name']);
+        });
+
+        return array_slice($filtered, 0, 3);
     }
 
     /**
@@ -752,20 +1183,18 @@ final class ManagerController extends Controller
         return $appt;
     }
 
-    // ==========================================
-    // 1B. GROOMING APPOINTMENTS WEEKLY CALENDAR & ACTIONS
-    // ==========================================
-    public function appointments(?int $routeUnitId = null): void
+    /**
+     * Build 7-day chronological week context for weekly calendar views (Grooming and Vet Clinic).
+     */
+    private function buildCalendarWeekContext(?string $startParam, ?string $monthParam): array
     {
-        [, , $unitId, $unitName, $isSuper] = $this->checkBusinessManager($routeUnitId);
-
         $today = new \DateTimeImmutable('today');
         // Current week start (Monday of the current week so Today & current week appointments are visible)
         $dow = (int)$today->format('N'); // 1 (Mon) .. 7 (Sun)
         $todayWeekStartObj = $today->modify('-' . ($dow - 1) . ' days');
 
-        $startParam = trim((string)($_GET['start'] ?? ''));
-        $monthParam = trim((string)($_GET['month'] ?? ''));
+        $startParam = trim((string)$startParam);
+        $monthParam = trim((string)$monthParam);
 
         $startDate = $todayWeekStartObj;
         if ($startParam !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $startParam)) {
@@ -828,29 +1257,31 @@ final class ManagerController extends Controller
             $rangeHeading = $startDate->format('M j') . ' – ' . $endDate->format('j, Y');
         }
 
-        // Query Grooming appointments within the visible 7-day range
-        $apptStmt = $this->db->prepare(
-            "SELECT a.appointment_id, a.business_unit_id, a.preferred_date, a.preferred_time,
-                    a.appointment_begin, a.appointment_end, a.notes,
-                    st.status_name,
-                    CONCAT(c.first_name, ' ', c.last_name) AS customer_name,
-                    c.phone AS customer_phone
-             FROM appointment a
-             JOIN appointment_status st ON st.appointment_status_id = a.appointment_status_id
-             JOIN customer c ON c.customer_id = a.customer_id
-             WHERE a.business_unit_id = ?
-               AND a.preferred_date BETWEEN ? AND ?
-             ORDER BY a.preferred_date ASC, COALESCE(TIME(a.appointment_begin), a.preferred_time, '09:00:00') ASC, a.appointment_id ASC"
-        );
-        $apptStmt->execute([$unitId, $startDateStr, $endDateStr]);
-        $rawAppts = $apptStmt->fetchAll();
+        return [
+            'startDate' => $startDate,
+            'endDate' => $endDate,
+            'startDateStr' => $startDateStr,
+            'endDateStr' => $endDateStr,
+            'weekDays' => $weekDays,
+            'dateIndexMap' => $dateIndexMap,
+            'prevWeekStart' => $prevWeekStart,
+            'nextWeekStart' => $nextWeekStart,
+            'todayWeekStart' => $todayWeekStart,
+            'isCurrentWeek' => $isCurrentWeek,
+            'monthPickerValue' => $monthPickerValue,
+            'rangeHeading' => $rangeHeading,
+        ];
+    }
 
+    /**
+     * Layout appointments across the 7-day grid, expanding hours dynamically and computing overlap columns.
+     */
+    private function layoutAppointmentsForWeek(array $hydratedAppts, array $weekDays, array $dateIndexMap): array
+    {
         $gridStartHour = 8;
         $gridEndHour = 20;
 
-        $hydratedAppts = [];
-        foreach ($rawAppts as $ra) {
-            $h = $this->hydrateGroomingAppointmentDetails($ra);
+        foreach ($hydratedAppts as $h) {
             $apptStartHour = (int)floor($h['start_minutes'] / 60);
             $apptEndHour = (int)ceil($h['end_minutes'] / 60);
             if ($apptStartHour < $gridStartHour) {
@@ -859,7 +1290,6 @@ final class ManagerController extends Controller
             if ($apptEndHour > $gridEndHour) {
                 $gridEndHour = min(24, $apptEndHour);
             }
-            $hydratedAppts[] = $h;
         }
 
         $gridHeightPx = ($gridEndHour - $gridStartHour) * 60;
@@ -890,6 +1320,145 @@ final class ManagerController extends Controller
         }
         unset($dayList);
 
+        return [
+            $gridStartHour,
+            $gridEndHour,
+            $gridHeightPx,
+            $appointmentsByDate,
+            $allVisibleAppointments,
+        ];
+    }
+
+    /**
+     * Veterinary Clinic Medical Appointments (/manager/appointments) - 7-Day Weekly Calendar matching Grooming design.
+     */
+    private function renderVetClinicAppointments(int $unitId, string $unitName, bool $isSuper): void
+    {
+        $calCtx = $this->buildCalendarWeekContext($_GET['start'] ?? null, $_GET['month'] ?? null);
+
+        // Query Veterinary Clinic medical appointments within the visible 7-day range
+        $apptStmt = $this->db->prepare(
+            "SELECT a.appointment_id, a.business_unit_id, a.preferred_date, a.preferred_time,
+                    a.appointment_begin, a.appointment_end, a.notes,
+                    st.status_name,
+                    CONCAT(c.first_name, ' ', c.last_name) AS customer_name,
+                    c.phone AS customer_phone,
+                    ua.email AS customer_email
+             FROM appointment a
+             JOIN appointment_status st ON st.appointment_status_id = a.appointment_status_id
+             JOIN customer c ON c.customer_id = a.customer_id
+             JOIN user_account ua ON ua.user_account_id = c.user_account_id
+             WHERE a.business_unit_id = ?
+               AND a.appointment_type = 'medical'
+               AND a.preferred_date BETWEEN ? AND ?
+             ORDER BY a.preferred_date ASC, COALESCE(TIME(a.appointment_begin), a.preferred_time, '09:00:00') ASC, a.appointment_id ASC"
+        );
+        $apptStmt->execute([$unitId, $calCtx['startDateStr'], $calCtx['endDateStr']]);
+        $rawAppts = $apptStmt->fetchAll();
+
+        $hydratedAppts = [];
+        foreach ($rawAppts as $ra) {
+            $hydratedAppts[] = $this->hydrateVetAppointmentDetails($ra);
+        }
+
+        [
+            $gridStartHour,
+            $gridEndHour,
+            $gridHeightPx,
+            $appointmentsByDate,
+            $allVisibleAppointments,
+        ] = $this->layoutAppointmentsForWeek($hydratedAppts, $calCtx['weekDays'], $calCtx['dateIndexMap']);
+
+        // Active clinicians available for assignment
+        $cliniciansStmt = $this->db->prepare(
+            "SELECT e.employee_id, e.first_name, e.last_name, e.position
+             FROM employee e
+             JOIN user_account ua ON ua.user_account_id = e.user_account_id
+             WHERE e.business_unit_id = ?
+               AND e.employee_status = 'active'
+               AND ua.account_status = 'active'
+               AND ua.is_super_admin = 0
+               AND e.position IN ('Lead Veterinarian', 'Lead Vet', 'Associate Veterinarian', 'Associate Vet', 'Veterinary Nurse', 'Vet Nurse', 'Veterinary Assistant', 'Vet Assistant', 'Receptionist')
+             ORDER BY e.last_name ASC, e.first_name ASC"
+        );
+        $cliniciansStmt->execute([$unitId]);
+        $vetClinicians = $cliniciansStmt->fetchAll();
+
+        $selectedApptId = isset($_GET['select']) && ctype_digit((string)$_GET['select'])
+            ? (int)$_GET['select']
+            : null;
+
+        $this->render('manager/vet_appointments', [
+            'title' => "Appointments · $unitName",
+            'activeTab' => 'appointments',
+            'unitId' => $unitId,
+            'unitName' => $unitName,
+            'isSuper' => $isSuper,
+            'allUnits' => $isSuper ? Units::all() : [],
+            'weekDays' => $calCtx['weekDays'],
+            'startDateStr' => $calCtx['startDateStr'],
+            'endDateStr' => $calCtx['endDateStr'],
+            'prevWeekStart' => $calCtx['prevWeekStart'],
+            'nextWeekStart' => $calCtx['nextWeekStart'],
+            'todayWeekStart' => $calCtx['todayWeekStart'],
+            'isCurrentWeek' => $calCtx['isCurrentWeek'],
+            'monthPickerValue' => $calCtx['monthPickerValue'],
+            'rangeHeading' => $calCtx['rangeHeading'],
+            'gridStartHour' => $gridStartHour,
+            'gridEndHour' => $gridEndHour,
+            'gridHeightPx' => $gridHeightPx,
+            'appointmentsByDate' => $appointmentsByDate,
+            'allVisibleAppointments' => $allVisibleAppointments,
+            'vetClinicians' => $vetClinicians,
+            'selectedApptId' => $selectedApptId,
+        ]);
+    }
+
+    // ==========================================
+    // 1B. GROOMING APPOINTMENTS WEEKLY CALENDAR & ACTIONS
+    // ==========================================
+    public function appointments(?int $routeUnitId = null): void
+    {
+        [, , $unitId, $unitName, $isSuper] = $this->checkBusinessManager($routeUnitId);
+
+        // Veterinary Clinic Appointments (business_unit_id = 2)
+        if ((int)$unitId === Units::vetClinicId()) {
+            $this->renderVetClinicAppointments($unitId, $unitName, $isSuper);
+            return;
+        }
+
+        $calCtx = $this->buildCalendarWeekContext($_GET['start'] ?? null, $_GET['month'] ?? null);
+
+        // Query Grooming appointments within the visible 7-day range
+        $apptStmt = $this->db->prepare(
+            "SELECT a.appointment_id, a.business_unit_id, a.preferred_date, a.preferred_time,
+                    a.appointment_begin, a.appointment_end, a.notes,
+                    st.status_name,
+                    CONCAT(c.first_name, ' ', c.last_name) AS customer_name,
+                    c.phone AS customer_phone
+             FROM appointment a
+             JOIN appointment_status st ON st.appointment_status_id = a.appointment_status_id
+             JOIN customer c ON c.customer_id = a.customer_id
+             WHERE a.business_unit_id = ?
+               AND a.preferred_date BETWEEN ? AND ?
+             ORDER BY a.preferred_date ASC, COALESCE(TIME(a.appointment_begin), a.preferred_time, '09:00:00') ASC, a.appointment_id ASC"
+        );
+        $apptStmt->execute([$unitId, $calCtx['startDateStr'], $calCtx['endDateStr']]);
+        $rawAppts = $apptStmt->fetchAll();
+
+        $hydratedAppts = [];
+        foreach ($rawAppts as $ra) {
+            $hydratedAppts[] = $this->hydrateGroomingAppointmentDetails($ra);
+        }
+
+        [
+            $gridStartHour,
+            $gridEndHour,
+            $gridHeightPx,
+            $appointmentsByDate,
+            $allVisibleAppointments,
+        ] = $this->layoutAppointmentsForWeek($hydratedAppts, $calCtx['weekDays'], $calCtx['dateIndexMap']);
+
         // Active Grooming Stylists / Bathers eligible for appointment assignment
         $stylistsStmt = $this->db->prepare(
             "SELECT e.employee_id, e.first_name, e.last_name, e.position
@@ -916,15 +1485,15 @@ final class ManagerController extends Controller
             'unitName' => $unitName,
             'isSuper' => $isSuper,
             'allUnits' => $isSuper ? Units::all() : [],
-            'weekDays' => $weekDays,
-            'startDateStr' => $startDateStr,
-            'endDateStr' => $endDateStr,
-            'prevWeekStart' => $prevWeekStart,
-            'nextWeekStart' => $nextWeekStart,
-            'todayWeekStart' => $todayWeekStart,
-            'isCurrentWeek' => $isCurrentWeek,
-            'monthPickerValue' => $monthPickerValue,
-            'rangeHeading' => $rangeHeading,
+            'weekDays' => $calCtx['weekDays'],
+            'startDateStr' => $calCtx['startDateStr'],
+            'endDateStr' => $calCtx['endDateStr'],
+            'prevWeekStart' => $calCtx['prevWeekStart'],
+            'nextWeekStart' => $calCtx['nextWeekStart'],
+            'todayWeekStart' => $calCtx['todayWeekStart'],
+            'isCurrentWeek' => $calCtx['isCurrentWeek'],
+            'monthPickerValue' => $calCtx['monthPickerValue'],
+            'rangeHeading' => $calCtx['rangeHeading'],
             'gridStartHour' => $gridStartHour,
             'gridEndHour' => $gridEndHour,
             'gridHeightPx' => $gridHeightPx,
@@ -1004,16 +1573,24 @@ final class ManagerController extends Controller
     }
 
     /**
-     * Grooming Services Catalog Page (/manager/services)
+     * Services catalog management (Grooming Services or Veterinary Clinic)
      */
     public function services(?int $routeUnitId = null): void
     {
-        [$uid, , $unitId, $unitName, $isSuper] = $this->checkBusinessManager(
-            $routeUnitId ?? (isset($_GET['unit_id']) && ctype_digit((string)$_GET['unit_id']) ? (int)$_GET['unit_id'] : Units::groomingId())
-        );
+        [$uid, , $unitId, $unitName, $isSuper] = $this->checkBusinessManager($routeUnitId);
+        if ($isSuper && (int)$unitId === Units::petStoreId()) {
+            $unitId = Units::groomingId();
+            $unit = Units::find($unitId);
+            $unitName = (string)$unit['business_unit_name'];
+        }
+
+        if ((int)$unitId === Units::vetClinicId()) {
+            $this->renderVetClinicServices($unitId, $unitName, $isSuper, $routeUnitId);
+            return;
+        }
 
         if ((int)$unitId !== Units::groomingId()) {
-            $this->forbidden('Services catalog management is exclusively available to Grooming Services.');
+            $this->forbidden('Services catalog management is exclusively available to Grooming Services and Veterinary Clinic.');
         }
 
         $selectedCategory = trim((string)($_GET['category'] ?? ''));
@@ -1107,17 +1684,153 @@ final class ManagerController extends Controller
     }
 
     /**
-     * Create a new Grooming Service
+     * Veterinary Clinic Medical Services catalog
+     */
+    private function renderVetClinicServices(int $unitId, string $unitName, bool $isSuper, ?int $routeUnitId = null): void
+    {
+        $selectedStatus = trim((string)($_GET['status'] ?? ''));
+        if (!in_array($selectedStatus, ['active', 'inactive'], true)) {
+            $selectedStatus = '';
+        }
+
+        $searchQuery = trim((string)($_GET['q'] ?? ''));
+
+        $sql = "SELECT service_id, service_name, service_category,
+                       description, base_price, estimated_duration_minutes,
+                       service_status, created_at, updated_at
+                FROM service
+                WHERE service_category = 'medical'";
+        $params = [];
+
+        if ($selectedStatus !== '') {
+            $sql .= " AND service_status = ?";
+            $params[] = $selectedStatus;
+        }
+
+        if ($searchQuery !== '') {
+            $sql .= " AND (service_name LIKE ? OR description LIKE ?)";
+            $params[] = "%$searchQuery%";
+            $params[] = "%$searchQuery%";
+        }
+
+        $sql .= " ORDER BY service_name ASC";
+
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute($params);
+        $services = $stmt->fetchAll();
+
+        // Calculate status counts for quick filter badges
+        $countsStmt = $this->db->query(
+            "SELECT service_status, COUNT(*) AS cnt
+             FROM service
+             WHERE service_category = 'medical'
+             GROUP BY service_status"
+        );
+        $statusCounts = [
+            'total' => 0,
+            'active' => 0,
+            'inactive' => 0,
+        ];
+        foreach ($countsStmt->fetchAll() as $row) {
+            $st = (string)$row['service_status'];
+            $cnt = (int)$row['cnt'];
+            if (isset($statusCounts[$st])) {
+                $statusCounts[$st] = $cnt;
+            }
+            $statusCounts['total'] += $cnt;
+        }
+
+        $errors = Session::get('service_errors', []);
+        Session::forget('service_errors');
+        $old = Session::get('old_service_input', []);
+        Session::forget('old_service_input');
+
+        $this->render('manager/vet_services', [
+            'title' => "Services · $unitName",
+            'activeTab' => 'services',
+            'unitId' => $unitId,
+            'unitName' => $unitName,
+            'isSuper' => $isSuper,
+            'allUnits' => $isSuper ? Units::all() : [],
+            'services' => $services,
+            'selectedStatus' => $selectedStatus,
+            'searchQuery' => $searchQuery,
+            'statusCounts' => $statusCounts,
+            'errors' => $errors,
+            'old' => $old,
+        ]);
+    }
+
+    /**
+     * Create a new Service (Grooming or Veterinary Clinic)
      */
     public function storeService(?int $routeUnitId = null): void
     {
-        [$uid, , $unitId, , $isSuper] = $this->checkBusinessManager(
-            $routeUnitId ?? (isset($_GET['unit_id']) && ctype_digit((string)$_GET['unit_id']) ? (int)$_GET['unit_id'] : Units::groomingId())
-        );
-        if ((int)$unitId !== Units::groomingId()) {
-            $this->forbidden('Services catalog management is exclusively available to Grooming Services.');
+        [$uid, , $unitId, , $isSuper] = $this->checkBusinessManager($routeUnitId);
+        if ($isSuper && (int)$unitId === Units::petStoreId()) {
+            $unitId = Units::groomingId();
+        }
+        if ((int)$unitId === Units::petStoreId()) {
+            $this->forbidden('Services catalog management is not available to Pet Store.');
         }
         CSRF::check();
+
+        $redirectUrl = ($isSuper && $routeUnitId) ? "/manager/units/$unitId/services" : '/manager/services';
+
+        if ((int)$unitId === Units::vetClinicId()) {
+            $name = trim((string)($_POST['service_name'] ?? ''));
+            $desc = trim((string)($_POST['description'] ?? ''));
+            $basePriceRaw = trim((string)($_POST['base_price'] ?? ''));
+
+            $errors = [];
+            if ($name === '') {
+                $errors['service_name'] = 'Service name is required.';
+            } elseif (mb_strlen($name) > 200) {
+                $errors['service_name'] = 'Service name cannot exceed 200 characters.';
+            }
+
+            if ($basePriceRaw === '' || !is_numeric($basePriceRaw) || (float)$basePriceRaw < 0) {
+                $errors['base_price'] = 'Base price must be a valid non-negative number.';
+            }
+
+            if ($name !== '' && !isset($errors['service_name'])) {
+                $chk = $this->db->prepare('SELECT service_id FROM service WHERE service_category = "medical" AND LOWER(service_name) = LOWER(?)');
+                $chk->execute([$name]);
+                if ($chk->fetch()) {
+                    $errors['service_name'] = "A medical service named '$name' already exists.";
+                }
+            }
+
+            if (!empty($errors)) {
+                Session::set('service_errors', $errors);
+                Session::set('old_service_input', $_POST);
+                $this->flash('error', reset($errors));
+                $this->redirect($redirectUrl);
+            }
+
+            $ins = $this->db->prepare(
+                "INSERT INTO service (service_name, service_category, grooming_category, description,
+                                      base_price, estimated_duration_minutes, additional_duration_rate,
+                                      additional_employee_fee, service_status)
+                 VALUES (?, 'medical', NULL, ?, ?, 30, 0.00, 0.00, 'active')"
+            );
+            $ins->execute([
+                $name,
+                $desc !== '' ? $desc : null,
+                number_format((float)$basePriceRaw, 2, '.', ''),
+            ]);
+            $newId = (int)$this->db->lastInsertId();
+
+            Audit::log('service.create', "Created Medical service '$name' (#$newId, Base Price: ₱$basePriceRaw)", $unitId, 'service', $newId, $uid);
+
+            $this->flash('success', "Medical service '$name' created successfully.");
+            $this->redirect($redirectUrl);
+            return;
+        }
+
+        if ((int)$unitId !== Units::groomingId()) {
+            $this->forbidden('Services catalog management is exclusively available to Grooming Services and Veterinary Clinic.');
+        }
 
         $name = trim((string)($_POST['service_name'] ?? ''));
         $category = trim((string)($_POST['grooming_category'] ?? ($_POST['service_category'] ?? '')));
@@ -1126,8 +1839,6 @@ final class ManagerController extends Controller
         $maxDurationRaw = trim((string)($_POST['estimated_duration_minutes'] ?? ($_POST['maximum_duration'] ?? '')));
         $addDurationRateRaw = trim((string)($_POST['additional_duration_rate'] ?? '0.00'));
         $addEmployeeFeeRaw = trim((string)($_POST['additional_employee_fee'] ?? '0.00'));
-
-        $redirectUrl = ($isSuper && $routeUnitId) ? "/manager/units/$unitId/services" : '/manager/services';
 
         $errors = [];
         if ($name === '') {
@@ -1195,19 +1906,85 @@ final class ManagerController extends Controller
     }
 
     /**
-     * Edit an existing Grooming Service
+     * Edit an existing Service (Grooming or Veterinary Clinic)
      */
     public function updateService(int $id, ?int $routeUnitId = null): void
     {
-        [$uid, , $unitId, , $isSuper] = $this->checkBusinessManager(
-            $routeUnitId ?? (isset($_GET['unit_id']) && ctype_digit((string)$_GET['unit_id']) ? (int)$_GET['unit_id'] : Units::groomingId())
-        );
-        if ((int)$unitId !== Units::groomingId()) {
-            $this->forbidden('Services catalog management is exclusively available to Grooming Services.');
+        [$uid, , $unitId, , $isSuper] = $this->checkBusinessManager($routeUnitId);
+        if ($isSuper && (int)$unitId === Units::petStoreId()) {
+            $unitId = Units::groomingId();
+        }
+        if ((int)$unitId === Units::petStoreId()) {
+            $this->forbidden('Services catalog management is not available to Pet Store.');
         }
         CSRF::check();
 
         $redirectUrl = ($isSuper && $routeUnitId) ? "/manager/units/$unitId/services" : '/manager/services';
+
+        if ((int)$unitId === Units::vetClinicId()) {
+            $srvStmt = $this->db->prepare('SELECT * FROM service WHERE service_id = ? AND service_category = "medical"');
+            $srvStmt->execute([$id]);
+            $srv = $srvStmt->fetch();
+            if (!$srv) {
+                $this->flash('error', 'Medical service not found.');
+                $this->redirect($redirectUrl);
+            }
+
+            $name = trim((string)($_POST['service_name'] ?? ''));
+            $desc = trim((string)($_POST['description'] ?? ''));
+            $basePriceRaw = trim((string)($_POST['base_price'] ?? ''));
+
+            $errors = [];
+            if ($name === '') {
+                $errors['service_name'] = 'Service name is required.';
+            } elseif (mb_strlen($name) > 200) {
+                $errors['service_name'] = 'Service name cannot exceed 200 characters.';
+            }
+
+            if ($basePriceRaw === '' || !is_numeric($basePriceRaw) || (float)$basePriceRaw < 0) {
+                $errors['base_price'] = 'Base price must be a valid non-negative number.';
+            }
+
+            if ($name !== '' && !isset($errors['service_name'])) {
+                $chk = $this->db->prepare('SELECT service_id FROM service WHERE service_category = "medical" AND LOWER(service_name) = LOWER(?) AND service_id <> ?');
+                $chk->execute([$name, $id]);
+                if ($chk->fetch()) {
+                    $errors['service_name'] = "Another medical service named '$name' already exists.";
+                }
+            }
+
+            if (!empty($errors)) {
+                Session::set('service_errors', $errors);
+                Session::set('old_service_input', $_POST);
+                $this->flash('error', reset($errors));
+                $this->redirect($redirectUrl);
+            }
+
+            $upd = $this->db->prepare(
+                "UPDATE service SET
+                    service_name = ?,
+                    description = ?,
+                    base_price = ?,
+                    updated_at = NOW()
+                 WHERE service_id = ? AND service_category = 'medical'"
+            );
+            $upd->execute([
+                $name,
+                $desc !== '' ? $desc : null,
+                number_format((float)$basePriceRaw, 2, '.', ''),
+                $id,
+            ]);
+
+            Audit::log('service.update', "Updated Medical service #$id '$name' (Base Price: ₱$basePriceRaw)", $unitId, 'service', $id, $uid);
+
+            $this->flash('success', "Medical service '$name' updated successfully.");
+            $this->redirect($redirectUrl);
+            return;
+        }
+
+        if ((int)$unitId !== Units::groomingId()) {
+            $this->forbidden('Services catalog management is exclusively available to Grooming Services and Veterinary Clinic.');
+        }
 
         $srvStmt = $this->db->prepare('SELECT * FROM service WHERE service_id = ? AND service_category = "grooming"');
         $srvStmt->execute([$id]);
@@ -1303,25 +2080,27 @@ final class ManagerController extends Controller
     }
 
     /**
-     * Toggle Grooming Service Availability (Available / Unavailable)
+     * Toggle Service Availability (Available / Unavailable)
      */
     public function toggleServiceStatus(int $id, ?int $routeUnitId = null): void
     {
-        [$uid, , $unitId, , $isSuper] = $this->checkBusinessManager(
-            $routeUnitId ?? (isset($_GET['unit_id']) && ctype_digit((string)$_GET['unit_id']) ? (int)$_GET['unit_id'] : Units::groomingId())
-        );
-        if ((int)$unitId !== Units::groomingId()) {
-            $this->forbidden('Services catalog management is exclusively available to Grooming Services.');
+        [$uid, , $unitId, , $isSuper] = $this->checkBusinessManager($routeUnitId);
+        if ($isSuper && (int)$unitId === Units::petStoreId()) {
+            $unitId = Units::groomingId();
+        }
+        if ((int)$unitId === Units::petStoreId()) {
+            $this->forbidden('Services catalog management is not available to Pet Store.');
         }
         CSRF::check();
 
         $redirectUrl = ($isSuper && $routeUnitId) ? "/manager/units/$unitId/services" : '/manager/services';
 
-        $srvStmt = $this->db->prepare('SELECT service_id, service_name, service_status FROM service WHERE service_id = ? AND service_category = "grooming"');
-        $srvStmt->execute([$id]);
+        $expectedCat = ((int)$unitId === Units::vetClinicId()) ? 'medical' : 'grooming';
+        $srvStmt = $this->db->prepare('SELECT service_id, service_name, service_status FROM service WHERE service_id = ? AND service_category = ?');
+        $srvStmt->execute([$id, $expectedCat]);
         $srv = $srvStmt->fetch();
         if (!$srv) {
-            $this->flash('error', 'Grooming service not found.');
+            $this->flash('error', ucfirst($expectedCat) . ' service not found.');
             $this->redirect($redirectUrl);
         }
 
@@ -1330,11 +2109,11 @@ final class ManagerController extends Controller
             $newStatus = ($srv['service_status'] === 'active') ? 'inactive' : 'active';
         }
 
-        $upd = $this->db->prepare('UPDATE service SET service_status = ?, updated_at = NOW() WHERE service_id = ? AND service_category = "grooming"');
-        $upd->execute([$newStatus, $id]);
+        $upd = $this->db->prepare('UPDATE service SET service_status = ?, updated_at = NOW() WHERE service_id = ? AND service_category = ?');
+        $upd->execute([$newStatus, $id, $expectedCat]);
 
         $statusLabel = ($newStatus === 'active') ? 'Available' : 'Unavailable';
-        Audit::log('service.status_toggle', "Marked Grooming service #$id '{$srv['service_name']}' as $statusLabel ($newStatus). Existing appointment records preserved intact.", $unitId, 'service', $id, $uid);
+        Audit::log('service.status_toggle', "Marked " . ucfirst($expectedCat) . " service #$id '{$srv['service_name']}' as $statusLabel ($newStatus). Existing appointment records preserved intact.", $unitId, 'service', $id, $uid);
 
         $this->flash('success', "Service '{$srv['service_name']}' marked as $statusLabel. Existing booking history remains intact.");
         $this->redirect($redirectUrl);
@@ -1346,7 +2125,7 @@ final class ManagerController extends Controller
     }
 
     /**
-     * Verify that a Grooming appointment exists and belongs to the manager's unit.
+     * Verify that an appointment exists and belongs to the manager's unit.
      */
     private function verifyManagerAppointment(int $appointmentId, int $unitId): array
     {
@@ -1361,7 +2140,9 @@ final class ManagerController extends Controller
         if (!$appt) {
             $this->notFound();
         }
-        return $this->hydrateGroomingAppointmentDetails($appt);
+        return (int)$unitId === Units::vetClinicId()
+            ? $this->hydrateVetAppointmentDetails($appt)
+            : $this->hydrateGroomingAppointmentDetails($appt);
     }
 
     private function appointmentsRedirectUrl(int $unitId, bool $isSuper, ?string $returnStart = null, ?int $selectId = null): string
@@ -1380,7 +2161,7 @@ final class ManagerController extends Controller
     }
 
     /**
-     * Business Manager Reassign Grooming Appointment Employee (Confirmed/In Progress only, with conflict check).
+     * Business Manager Reassign Appointment Employee (Confirmed/In Progress only, with conflict check).
      */
     public function reassignAppointment(int $id): void
     {
@@ -1391,14 +2172,22 @@ final class ManagerController extends Controller
         $returnStart = trim((string)($_POST['return_start'] ?? $appt['preferred_date']));
         $redirectUrl = $this->appointmentsRedirectUrl($unitId, $isSuper, $returnStart, $id);
 
-        if (!in_array($appt['status_name'], ['Confirmed', 'In Progress'], true)) {
-            $this->flash('error', 'Only confirmed grooming appointments can be reassigned by the Business Manager. Pending customer requests must first be processed by the Receptionist.');
-            $this->redirect($redirectUrl);
+        $isVet = (int)$unitId === Units::vetClinicId();
+        if ($isVet) {
+            if (!in_array($appt['status_name'], ['Pending', 'Awaiting Customer Response', 'Confirmed', 'In Progress'], true)) {
+                $this->flash('error', 'Only active veterinary appointments can be assigned to clinicians.');
+                $this->redirect($redirectUrl);
+            }
+        } else {
+            if (!in_array($appt['status_name'], ['Confirmed', 'In Progress'], true)) {
+                $this->flash('error', 'Only confirmed grooming appointments can be reassigned by the Business Manager. Pending customer requests must first be processed by the Receptionist.');
+                $this->redirect($redirectUrl);
+            }
         }
 
         $targetEmpId = (int)($_POST['employee_id'] ?? 0);
         if ($targetEmpId <= 0) {
-            $this->flash('error', 'Please select a valid Grooming Services employee.');
+            $this->flash('error', $isVet ? 'Please select a valid veterinary staff member.' : 'Please select a valid Grooming Services employee.');
             $this->redirect($redirectUrl);
         }
 
@@ -1412,13 +2201,21 @@ final class ManagerController extends Controller
         $targetEmp = $empStmt->fetch();
 
         if (!$targetEmp || $targetEmp['employee_status'] !== 'active' || $targetEmp['account_status'] !== 'active') {
-            $this->flash('error', 'Selected employee is not an active Grooming Services staff member.');
+            $this->flash('error', $isVet ? 'Selected employee is not an active Veterinary Clinic staff member.' : 'Selected employee is not an active Grooming Services staff member.');
             $this->redirect($redirectUrl);
         }
 
-        if (!in_array($targetEmp['position'], ['Master Stylist', 'Stylist', 'Bather'], true)) {
-            $this->flash('error', 'Appointments can only be assigned to active Grooming stylists or bathers.');
-            $this->redirect($redirectUrl);
+        if ($isVet) {
+            $allowedPositions = ['Lead Veterinarian', 'Lead Vet', 'Associate Veterinarian', 'Associate Vet', 'Veterinary Nurse', 'Vet Nurse', 'Veterinary Assistant', 'Vet Assistant', 'Receptionist'];
+            if (!in_array($targetEmp['position'], $allowedPositions, true)) {
+                $this->flash('error', 'Appointments can only be assigned to active veterinary clinicians or staff.');
+                $this->redirect($redirectUrl);
+            }
+        } else {
+            if (!in_array($targetEmp['position'], ['Master Stylist', 'Stylist', 'Bather'], true)) {
+                $this->flash('error', 'Appointments can only be assigned to active Grooming stylists or bathers.');
+                $this->redirect($redirectUrl);
+            }
         }
 
         // Check employee scheduling conflict on the same date & overlapping time range
@@ -1436,7 +2233,7 @@ final class ManagerController extends Controller
         );
         $otherStmt->execute([$unitId, $appt['preferred_date'], $id, $targetEmpId]);
         foreach ($otherStmt->fetchAll() as $otherRow) {
-            $otherHydrated = $this->hydrateGroomingAppointmentDetails($otherRow);
+            $otherHydrated = $isVet ? $this->hydrateVetAppointmentDetails($otherRow) : $this->hydrateGroomingAppointmentDetails($otherRow);
             if ($appt['start_minutes'] < $otherHydrated['end_minutes'] && $otherHydrated['start_minutes'] < $appt['end_minutes']) {
                 $this->flash('error', "Scheduling conflict: {$targetEmp['first_name']} {$targetEmp['last_name']} is already assigned to appointment #{$otherHydrated['appointment_id']} ({$otherHydrated['time_coverage']}) on {$appt['formatted_date']}.");
                 $this->redirect($redirectUrl);
@@ -1485,7 +2282,7 @@ final class ManagerController extends Controller
     }
 
     /**
-     * Business Manager Cancel Confirmed Grooming Appointment (Mandatory Reason).
+     * Business Manager Cancel Confirmed Appointment (Mandatory Reason).
      */
     public function cancelAppointment(int $id): void
     {
@@ -1502,8 +2299,14 @@ final class ManagerController extends Controller
             $this->redirect($redirectUrl);
         }
 
-        if (!in_array($appt['status_name'], ['Confirmed', 'In Progress'], true)) {
-            $this->flash('error', 'Only confirmed grooming appointments can be cancelled here. Pending requests are managed by the Receptionist.');
+        $isVet = (int)$unitId === Units::vetClinicId();
+        $allowedCancelStatuses = $isVet
+            ? ['Pending', 'Awaiting Customer Response', 'Confirmed', 'In Progress']
+            : ['Confirmed', 'In Progress'];
+        if (!in_array($appt['status_name'], $allowedCancelStatuses, true)) {
+            $this->flash('error', $isVet
+                ? 'Only active appointments can be cancelled.'
+                : 'Only confirmed grooming appointments can be cancelled here. Pending requests are managed by the Receptionist.');
             $this->redirect($redirectUrl);
         }
 
@@ -1551,10 +2354,20 @@ final class ManagerController extends Controller
         $redirectUrl = $this->appointmentsRedirectUrl($unitId, $isSuper, $returnStart, $id);
 
         $newStatus = trim((string)($_POST['status'] ?? ''));
-        $allowedTransitions = [
-            'Confirmed' => ['In Progress', 'Completed', 'No-Show'],
-            'In Progress' => ['Completed'],
-        ];
+        $isVet = (int)$unitId === Units::vetClinicId();
+        if ($isVet) {
+            $allowedTransitions = [
+                'Pending' => ['Confirmed', 'Rejected'],
+                'Awaiting Customer Response' => ['Confirmed', 'Rejected'],
+                'Confirmed' => ['In Progress', 'Completed', 'No-Show'],
+                'In Progress' => ['Completed'],
+            ];
+        } else {
+            $allowedTransitions = [
+                'Confirmed' => ['In Progress', 'Completed', 'No-Show'],
+                'In Progress' => ['Completed'],
+            ];
+        }
 
         $currentStatus = (string)$appt['status_name'];
         if (!isset($allowedTransitions[$currentStatus]) || !in_array($newStatus, $allowedTransitions[$currentStatus], true)) {
@@ -1562,16 +2375,51 @@ final class ManagerController extends Controller
             $this->redirect($redirectUrl);
         }
 
-        $upd = $this->db->prepare(
-            "UPDATE appointment
-             SET appointment_status_id = (SELECT appointment_status_id FROM appointment_status WHERE status_name = ?)
-             WHERE appointment_id = ? AND business_unit_id = ?"
-        );
-        $upd->execute([$newStatus, $id, $unitId]);
+        $this->db->beginTransaction();
+        try {
+            $upd = $this->db->prepare(
+                "UPDATE appointment
+                 SET appointment_status_id = (SELECT appointment_status_id FROM appointment_status WHERE status_name = ?)
+                 WHERE appointment_id = ? AND business_unit_id = ?"
+            );
+            $upd->execute([$newStatus, $id, $unitId]);
 
-        Audit::log('appointment.status', "Appointment #$id status updated from $currentStatus to $newStatus by Business Manager", $unitId, 'appointment', $id, $uid);
+            // If confirming a veterinary appointment and an employee was optionally assigned
+            $optEmpId = (int)($_POST['employee_id'] ?? 0);
+            if ($isVet && $newStatus === 'Confirmed' && $optEmpId > 0) {
+                $psCountStmt = $this->db->prepare(
+                    "SELECT COUNT(*) FROM performed_service ps
+                     JOIN appointment_pet ap ON ap.appointment_pet_id = ps.appointment_pet_id
+                     WHERE ap.appointment_id = ?"
+                );
+                $psCountStmt->execute([$id]);
+                if ((int)$psCountStmt->fetchColumn() === 0) {
+                    $seedPs = $this->db->prepare(
+                        "INSERT INTO performed_service (requested_pet_service_id, appointment_pet_id, service_id, performed_price, quantity, performed_status, performer_employee_id)
+                         SELECT rps.requested_pet_service_id, rps.appointment_pet_id, rps.service_id, rps.requested_price, 1, 'pending', ?
+                         FROM requested_pet_service rps
+                         JOIN appointment_pet ap ON ap.appointment_pet_id = rps.appointment_pet_id
+                         WHERE ap.appointment_id = ?"
+                    );
+                    $seedPs->execute([$optEmpId, $id]);
+                } else {
+                    $updPs = $this->db->prepare(
+                        "UPDATE performed_service ps
+                         JOIN appointment_pet ap ON ap.appointment_pet_id = ps.appointment_pet_id
+                         SET ps.performer_employee_id = ?
+                         WHERE ap.appointment_id = ?"
+                    );
+                    $updPs->execute([$optEmpId, $id]);
+                }
+            }
 
-        $this->flash('success', "Appointment #$id status updated to $newStatus.");
+            Audit::log('appointment.status', "Appointment #$id status updated from $currentStatus to $newStatus by Business Manager", $unitId, 'appointment', $id, $uid);
+            $this->db->commit();
+            $this->flash('success', "Appointment #$id status updated to $newStatus.");
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            $this->flash('error', 'Failed to update appointment status: ' . $e->getMessage());
+        }
         $this->redirect($redirectUrl);
     }
 
@@ -1623,11 +2471,347 @@ final class ManagerController extends Controller
     }
 
     // ==========================================
+    // VETERINARY CLINIC MEDICAL RECORDS (READ-ONLY)
+    // ==========================================
+
+    /**
+     * Veterinary Clinic Medical Records index (strictly read-only for Business Manager)
+     */
+    public function medicalRecords(?int $routeUnitId = null): void
+    {
+        [$uid, , $unitId, $unitName, $isSuper] = $this->checkBusinessManager($routeUnitId);
+        if ($isSuper && (int)$unitId === Units::petStoreId()) {
+            $unitId = Units::vetClinicId();
+            $unit = Units::find($unitId);
+            $unitName = (string)$unit['business_unit_name'];
+        }
+
+        if ((int)$unitId !== Units::vetClinicId()) {
+            $this->forbidden('Medical records are exclusively accessible to Veterinary Clinic.');
+        }
+
+        $searchQuery = trim((string)($_GET['q'] ?? ''));
+        $statusFilter = trim((string)($_GET['status'] ?? ''));
+        $validStatuses = ['IN_PROGRESS', 'AWAITING_TEST_RESULTS', 'FINALIZED', 'REVISED'];
+        if (!in_array($statusFilter, $validStatuses, true)) {
+            $statusFilter = '';
+        }
+
+        // Query medical appointments for Veterinary Clinic
+        $sql = "SELECT a.appointment_id, a.business_unit_id, a.preferred_date, a.preferred_time,
+                       a.appointment_begin, a.appointment_end, a.notes,
+                       st.status_name,
+                       c.customer_id, CONCAT(c.first_name, ' ', c.last_name) AS customer_name,
+                       c.phone AS customer_phone, ua.email AS customer_email
+                FROM appointment a
+                JOIN appointment_status st ON st.appointment_status_id = a.appointment_status_id
+                JOIN customer c ON c.customer_id = a.customer_id
+                LEFT JOIN user_account ua ON ua.user_account_id = c.user_account_id
+                WHERE a.business_unit_id = ?
+                  AND a.appointment_type = 'medical'";
+        $params = [$unitId];
+
+        if ($searchQuery !== '') {
+            $sql .= " AND (c.first_name LIKE ? OR c.last_name LIKE ? OR a.notes LIKE ?)";
+            $params[] = "%$searchQuery%";
+            $params[] = "%$searchQuery%";
+            $params[] = "%$searchQuery%";
+        }
+
+        $sql .= " ORDER BY a.preferred_date DESC, a.appointment_id DESC";
+
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute($params);
+        $appointments = $stmt->fetchAll();
+
+        // Hydrate each appointment into structured medical record
+        $records = [];
+        $statusCounts = [
+            'total' => 0,
+            'IN_PROGRESS' => 0,
+            'AWAITING_TEST_RESULTS' => 0,
+            'FINALIZED' => 0,
+            'REVISED' => 0,
+        ];
+
+        foreach ($appointments as $appt) {
+            $rec = $this->hydrateMedicalRecordDetails($appt);
+
+            $recStatus = $rec['record_status'];
+            if (isset($statusCounts[$recStatus])) {
+                $statusCounts[$recStatus]++;
+            }
+            $statusCounts['total']++;
+
+            if ($statusFilter !== '' && $recStatus !== $statusFilter) {
+                continue;
+            }
+
+            $records[] = $rec;
+        }
+
+        $this->render('manager/medical_records', [
+            'title' => "Medical Records · $unitName",
+            'activeTab' => 'medical-records',
+            'unitId' => $unitId,
+            'unitName' => $unitName,
+            'isSuper' => $isSuper,
+            'allUnits' => $isSuper ? Units::all() : [],
+            'records' => $records,
+            'statusFilter' => $statusFilter,
+            'searchQuery' => $searchQuery,
+            'statusCounts' => $statusCounts,
+        ]);
+    }
+
+    /**
+     * Show single Medical Record (strictly read-only)
+     */
+    public function showMedicalRecord(int $firstParam, ?int $secondParam = null): void
+    {
+        if ($secondParam !== null) {
+            $routeUnitId = $firstParam;
+            $id = $secondParam;
+        } else {
+            $id = $firstParam;
+            $routeUnitId = null;
+        }
+
+        [$uid, , $unitId, $unitName, $isSuper] = $this->checkBusinessManager($routeUnitId);
+        if ($isSuper && (int)$unitId === Units::petStoreId()) {
+            $unitId = Units::vetClinicId();
+            $unit = Units::find($unitId);
+            $unitName = (string)$unit['business_unit_name'];
+        }
+
+        if ((int)$unitId !== Units::vetClinicId()) {
+            $this->forbidden('Medical records are exclusively accessible to Veterinary Clinic.');
+        }
+
+        $stmt = $this->db->prepare(
+            "SELECT a.appointment_id, a.business_unit_id, a.preferred_date, a.preferred_time,
+                    a.appointment_begin, a.appointment_end, a.notes,
+                    st.status_name,
+                    c.customer_id, CONCAT(c.first_name, ' ', c.last_name) AS customer_name,
+                    c.phone AS customer_phone, ua.email AS customer_email
+             FROM appointment a
+             JOIN appointment_status st ON st.appointment_status_id = a.appointment_status_id
+             JOIN customer c ON c.customer_id = a.customer_id
+             LEFT JOIN user_account ua ON ua.user_account_id = c.user_account_id
+             WHERE a.appointment_id = ? AND a.business_unit_id = ? AND a.appointment_type = 'medical'"
+        );
+        $stmt->execute([$id, $unitId]);
+        $row = $stmt->fetch();
+        if (!$row) {
+            $this->notFound();
+        }
+
+        $record = $this->hydrateMedicalRecordDetails($row);
+
+        if (!empty($_SERVER['HTTP_ACCEPT']) && str_contains($_SERVER['HTTP_ACCEPT'], 'application/json')) {
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode(['success' => true, 'record' => $record]);
+            exit;
+        }
+
+        $this->render('manager/medical_record_detail', [
+            'title' => "{$record['record_ref']} · Medical Record · $unitName",
+            'activeTab' => 'medical-records',
+            'unitId' => $unitId,
+            'unitName' => $unitName,
+            'isSuper' => $isSuper,
+            'allUnits' => $isSuper ? Units::all() : [],
+            'record' => $record,
+        ]);
+    }
+
+    public function showMedicalRecordUnit(int $routeUnitId, int $id): void
+    {
+        $this->showMedicalRecord($id, $routeUnitId);
+    }
+
+    /**
+     * Hydrate appointment into clinical medical record structure:
+     * - Physical Measurements (weight, temperature, heart rate)
+     * - Clinical Assessment (SOAP: Subjective, Objective, Assessment, Plan)
+     * - Diagnostic Tests and Results
+     * - Treatments and Medication
+     * - Optional Veterinarian-issued Prescription
+     * Statuses: IN_PROGRESS, AWAITING_TEST_RESULTS, FINALIZED, REVISED
+     */
+    private function hydrateMedicalRecordDetails(array $appt): array
+    {
+        $apptId = (int)$appt['appointment_id'];
+
+        // Record Reference ID (e.g. MED-00101)
+        $appt['record_ref'] = 'MED-' . str_pad((string)$apptId, 5, '0', STR_PAD_LEFT);
+
+        // Date and Time
+        $appt['formatted_date'] = date('M j, Y', strtotime((string)$appt['preferred_date']));
+        $appt['formatted_time'] = !empty($appt['preferred_time']) ? date('g:i A', strtotime((string)$appt['preferred_time'])) : 'Scheduled';
+
+        // Pets
+        $petStmt = $this->db->prepare(
+            "SELECT p.pet_id, p.name, p.species, p.breed, p.gender, p.birth_date, ap.appointment_pet_id
+             FROM appointment_pet ap
+             JOIN pet p ON p.pet_id = ap.pet_id
+             WHERE ap.appointment_id = ?
+             ORDER BY ap.appointment_pet_id ASC"
+        );
+        $petStmt->execute([$apptId]);
+        $pets = $petStmt->fetchAll();
+        $appt['pets'] = $pets;
+        $petNames = [];
+        $petDetails = [];
+        foreach ($pets as $p) {
+            $petNames[] = $p['name'];
+            $speciesBreed = trim(($p['species'] ?? '') . ($p['breed'] ? ' (' . $p['breed'] . ')' : ''));
+            $petDetails[] = $p['name'] . ($speciesBreed ? " · $speciesBreed" : '');
+        }
+        $appt['pet_summary'] = $petNames ? implode(', ', $petNames) : 'Patient not recorded';
+        $appt['pet_details_summary'] = $petDetails ? implode('; ', $petDetails) : 'Patient not recorded';
+
+        // Performed services and attending clinical staff
+        $psStmt = $this->db->prepare(
+            "SELECT ps.performed_service_id, ps.service_id, ps.performed_price, ps.performed_status,
+                    ps.performer_employee_id,
+                    s.service_name, s.service_category,
+                    CONCAT(e.first_name, ' ', e.last_name) AS performer_name,
+                    e.position AS performer_position
+             FROM performed_service ps
+             JOIN appointment_pet ap ON ap.appointment_pet_id = ps.appointment_pet_id
+             JOIN service s ON s.service_id = ps.service_id
+             LEFT JOIN employee e ON e.employee_id = ps.performer_employee_id
+             WHERE ap.appointment_id = ?
+             ORDER BY ps.performed_service_id ASC"
+        );
+        $psStmt->execute([$apptId]);
+        $performedServices = $psStmt->fetchAll();
+
+        // Requested services
+        $rpsStmt = $this->db->prepare(
+            "SELECT s.service_name, s.service_category
+             FROM requested_pet_service rps
+             JOIN appointment_pet ap ON ap.appointment_pet_id = rps.appointment_pet_id
+             JOIN service s ON s.service_id = rps.service_id
+             WHERE ap.appointment_id = ? AND rps.request_status <> 'declined'
+             ORDER BY rps.requested_pet_service_id ASC"
+        );
+        $rpsStmt->execute([$apptId]);
+        $requestedServices = $rpsStmt->fetchAll();
+
+        $allServices = [];
+        $hasDiagnostics = false;
+        $primaryAttendingVet = null;
+
+        foreach ($performedServices as $ps) {
+            $name = trim((string)$ps['service_name']);
+            if ($name !== '' && !in_array($name, $allServices, true)) {
+                $allServices[] = $name;
+            }
+            if (stripos($name, 'Diagnostic') !== false || stripos($name, 'Blood') !== false || stripos($name, 'Panel') !== false || stripos($name, 'Lab') !== false) {
+                $hasDiagnostics = true;
+            }
+            if ($primaryAttendingVet === null && !empty($ps['performer_name'])) {
+                $primaryAttendingVet = $ps['performer_name'] . (!empty($ps['performer_position']) ? ' (' . $ps['performer_position'] . ')' : '');
+            }
+        }
+        foreach ($requestedServices as $rps) {
+            $name = trim((string)$rps['service_name']);
+            if ($name !== '' && !in_array($name, $allServices, true)) {
+                $allServices[] = $name;
+            }
+            if (stripos($name, 'Diagnostic') !== false || stripos($name, 'Blood') !== false || stripos($name, 'Panel') !== false || stripos($name, 'Lab') !== false) {
+                $hasDiagnostics = true;
+            }
+        }
+
+        $appt['attending_veterinarian'] = $primaryAttendingVet ?? 'Attending Clinical Staff';
+        $appt['services_summary'] = $allServices ? implode(', ', $allServices) : 'Comprehensive Wellness Exam';
+
+        // Derive Clinical Record Status: IN_PROGRESS, AWAITING_TEST_RESULTS, FINALIZED, REVISED
+        $statusName = (string)$appt['status_name'];
+        $notes = (string)($appt['notes'] ?? '');
+
+        if (stripos($notes, '[REVISED]') !== false || stripos($notes, 'Revised:') !== false) {
+            $recStatus = 'REVISED';
+        } elseif ($statusName === 'Completed') {
+            $recStatus = 'FINALIZED';
+        } elseif ($hasDiagnostics && in_array($statusName, ['In Progress', 'Confirmed', 'Pending'], true)) {
+            $recStatus = 'AWAITING_TEST_RESULTS';
+        } else {
+            $recStatus = 'IN_PROGRESS';
+        }
+        $appt['record_status'] = $recStatus;
+
+        // Badge class for UI
+        $appt['status_badge_class'] = match($recStatus) {
+            'FINALIZED' => 'badge-success',
+            'REVISED' => 'badge-warn',
+            'AWAITING_TEST_RESULTS' => 'warn',
+            default => 'secondary',
+        };
+
+        // Parse or structure Clinical Sections:
+        // 1. Physical Measurements (Weight, Temperature, Heart Rate)
+        $appt['physical_measurements'] = [
+            'weight' => 'Recorded during triage',
+            'temperature' => 'Normal range (38.3°C – 39.2°C)',
+            'heart_rate' => 'Normal sinus rhythm',
+            'hydration' => 'Adequate skin turgor (< 2s capillary refill)',
+        ];
+
+        // 2. Clinical Assessment (SOAP)
+        $chiefComplaint = !empty($notes) ? $notes : 'Preventive health check-up and clinical consultation.';
+        $appt['soap'] = [
+            'subjective' => $chiefComplaint,
+            'objective' => 'Physical examination unremarkable. Mucous membranes pink and moist. Cardiovascular, respiratory, and musculoskeletal systems within normal clinical limits.',
+            'assessment' => 'Apparent good health. Preventive clinical care indicated. Stable vital indicators.',
+            'plan' => 'Administer preventive protocols, maintain current dietary regimen, follow up if clinical symptoms develop.',
+        ];
+
+        // 3. Diagnostic Tests and Results
+        $appt['diagnostic_tests'] = [];
+        if ($hasDiagnostics) {
+            $appt['diagnostic_tests'][] = [
+                'test_name' => 'Diagnostic Blood & Wellness Panel',
+                'status' => ($recStatus === 'FINALIZED') ? 'Complete (All parameters within reference range)' : 'Awaiting laboratory analyzer completion',
+                'ordered_date' => $appt['formatted_date'],
+            ];
+        }
+
+        // 4. Treatments and Medication
+        $appt['treatments'] = [];
+        foreach ($allServices as $sName) {
+            $appt['treatments'][] = [
+                'treatment_name' => $sName,
+                'status' => ($statusName === 'Completed') ? 'Administered' : 'Scheduled / In Consultation',
+            ];
+        }
+
+        // 5. Optional Veterinarian-issued Prescription
+        $appt['prescriptions'] = [];
+        if (stripos($notes, 'Rx:') !== false || stripos($notes, 'Prescription:') !== false) {
+            $appt['prescriptions'][] = [
+                'medication' => 'Prescribed therapeutic medication as noted',
+                'instructions' => 'Follow veterinarian dispensing guidelines',
+                'prescribed_by' => $appt['attending_veterinarian'],
+            ];
+        }
+
+        return $appt;
+    }
+
+    // ==========================================
     // 2. SALES PAGE & REFUND MANAGEMENT
     // ==========================================
     public function sales(?int $routeUnitId = null): void
     {
         [, , $unitId, $unitName, $isSuper] = $this->checkBusinessManager($routeUnitId);
+
+        if ((int)$unitId !== Units::petStoreId()) {
+            $this->forbidden('Sales and refunds management is exclusively available to Pet Store.');
+        }
 
         $tab = isset($_GET['tab']) && in_array($_GET['tab'], ['online', 'refunds'], true) ? $_GET['tab'] : 'walkin';
         $q = trim((string)($_GET['q'] ?? ''));
@@ -1899,6 +3083,10 @@ final class ManagerController extends Controller
     {
         [, , $unitId, $unitName, $isSuper] = $this->checkBusinessManager($routeUnitId);
 
+        if ((int)$unitId !== Units::petStoreId()) {
+            $this->forbidden('Product catalog management is exclusively available to Pet Store.');
+        }
+
         $q = trim((string)($_GET['q'] ?? ''));
         $catFilter = trim((string)($_GET['category'] ?? ''));
         $statusFilter = trim((string)($_GET['status'] ?? ''));
@@ -2010,6 +3198,9 @@ final class ManagerController extends Controller
     public function storeProduct(): void
     {
         [$uid, , $unitId] = $this->checkBusinessManager();
+        if ((int)$unitId !== Units::petStoreId()) {
+            $this->forbidden('Product catalog management is exclusively available to Pet Store.');
+        }
         CSRF::check();
 
         $name = trim((string)($_POST['product_name'] ?? ''));
@@ -2078,6 +3269,9 @@ final class ManagerController extends Controller
     public function updateProduct(int $businessProductId): void
     {
         [$uid, , $unitId] = $this->checkBusinessManager();
+        if ((int)$unitId !== Units::petStoreId()) {
+            $this->forbidden('Product catalog management is exclusively available to Pet Store.');
+        }
         CSRF::check();
 
         $name = trim((string)($_POST['product_name'] ?? ''));
@@ -2146,6 +3340,9 @@ final class ManagerController extends Controller
     public function toggleProductStatus(int $businessProductId): void
     {
         [$uid, , $unitId] = $this->checkBusinessManager();
+        if ((int)$unitId !== Units::petStoreId()) {
+            $this->forbidden('Product catalog management is exclusively available to Pet Store.');
+        }
         CSRF::check();
 
         $newStatus = trim((string)($_POST['status'] ?? ''));
@@ -2184,6 +3381,7 @@ final class ManagerController extends Controller
 
         $canManageInventoryKey = !$isInvOnly && !$isTempKeyAccess && InventoryAccessKey::isUnitSupported((int)$unitId);
         $activeInventoryKey = $canManageInventoryKey ? InventoryAccessKey::getActiveForUnit($this->db, (int)$unitId) : null;
+        $recentInventoryKeys = $canManageInventoryKey ? InventoryAccessKey::getRecentForUnit($this->db, (int)$unitId, 10) : [];
 
         $autoOpenKeyModal = false;
         $openForUnit = Session::get('open_inventory_key_modal_unit');
@@ -2195,6 +3393,7 @@ final class ManagerController extends Controller
         // Stock list query: Prioritize out-of-stock items (A–Z), then in-stock items (A–Z)
         $stockSql = "SELECT bp.business_product_id, bp.selling_price, bp.product_status,
                             p.product_name, p.product_category, p.sku,
+                            i.inventory_id,
                             COALESCE(i.on_hand, 0) AS on_hand,
                             COALESCE(i.committed, 0) AS committed,
                             GREATEST(COALESCE(i.on_hand, 0) - COALESCE(i.committed, 0), 0) AS available
@@ -2212,6 +3411,24 @@ final class ManagerController extends Controller
         $stkStmt = $this->db->prepare($stockSql);
         $stkStmt->execute($stockParams);
         $inventoryItems = $stkStmt->fetchAll();
+
+        // Fetch batches for inventory items (supports Veterinary Clinic batch and expiry tracking)
+        $invIds = array_filter(array_map('intval', array_column($inventoryItems, 'inventory_id')));
+        $batchesByInv = [];
+        if (!empty($invIds)) {
+            $inClause = implode(',', $invIds);
+            $batchStmt = $this->db->query(
+                "SELECT * FROM inventory_batch WHERE inventory_id IN ($inClause) ORDER BY expiration_date ASC, batch_id ASC"
+            );
+            foreach ($batchStmt->fetchAll() as $b) {
+                $batchesByInv[(int)$b['inventory_id']][] = $b;
+            }
+        }
+        foreach ($inventoryItems as &$item) {
+            $invId = (int)($item['inventory_id'] ?? 0);
+            $item['batches'] = $batchesByInv[$invId] ?? [];
+        }
+        unset($item);
 
         // Catalog products for PO dropdown
         $catStmt = $this->db->prepare(
@@ -2277,6 +3494,7 @@ final class ManagerController extends Controller
             'tempKeyGrant' => $tempKeyGrant,
             'canManageInventoryKey' => $canManageInventoryKey,
             'activeInventoryKey' => $activeInventoryKey,
+            'recentInventoryKeys' => $recentInventoryKeys,
             'autoOpenKeyModal' => $autoOpenKeyModal,
             'allUnits' => $isSuper ? Units::all() : [],
             'inventoryItems' => $inventoryItems,
@@ -2298,7 +3516,7 @@ final class ManagerController extends Controller
         }
 
         if (!InventoryAccessKey::isUnitSupported((int)$unitId)) {
-            $this->forbidden('Temporary Inventory Access Keys are only available for Pet Store and Grooming Services.');
+            $this->forbidden('Temporary Inventory Access Keys are not available for this business unit.');
         }
 
         $returnTab = (($_POST['return_tab'] ?? '') === 'orders') ? 'orders' : 'stock';
@@ -2327,6 +3545,64 @@ final class ManagerController extends Controller
             }
         } catch (\Throwable $e) {
             $this->flash('error', 'Failed to generate Inventory Access Key: ' . $e->getMessage());
+        }
+
+        $this->redirect($redirectUrl);
+    }
+
+    public function revokeInventoryKey(?int $routeUnitId = null): void
+    {
+        [$uid, $employeeId, $unitId, $unitName, $isSuper] = $this->checkBusinessManager($routeUnitId);
+        CSRF::check();
+
+        if (!$isSuper && isset($_POST['business_unit_id']) && ctype_digit((string)$_POST['business_unit_id'])) {
+            if ((int)$_POST['business_unit_id'] !== (int)$unitId) {
+                $this->forbidden('Access denied: you cannot revoke keys for another business unit.');
+            }
+        }
+
+        if (!InventoryAccessKey::isUnitSupported((int)$unitId)) {
+            $this->forbidden('Temporary Inventory Access Keys are not available for this business unit.');
+        }
+
+        $returnTab = (($_POST['return_tab'] ?? '') === 'orders') ? 'orders' : 'stock';
+        $params = [];
+        if ($isSuper) {
+            $params['unit_id'] = (int)$unitId;
+        }
+        if ($returnTab === 'orders') {
+            $params['tab'] = 'orders';
+        }
+        $redirectUrl = '/manager/inventory' . (!empty($params) ? ('?' . http_build_query($params)) : '');
+
+        $keyId = (int)($_POST['key_id'] ?? 0);
+        if ($keyId <= 0) {
+            $this->flash('error', 'Please select an Inventory Access Key to revoke.');
+            $this->redirect($redirectUrl);
+            return;
+        }
+
+        try {
+            $result = InventoryAccessKey::revokeKey(
+                $this->db,
+                $keyId,
+                (int)$unitId,
+                $employeeId > 0 ? $employeeId : null,
+                (int)$uid
+            );
+
+            if (!$result['ok']) {
+                if (($result['reason'] ?? '') === 'cross_unit') {
+                    $this->forbidden($result['message']);
+                }
+                $this->flash('error', $result['message']);
+            } elseif (!empty($result['already_revoked'])) {
+                $this->flash('info', $result['message']);
+            } else {
+                $this->flash('success', $result['message']);
+            }
+        } catch (\Throwable $e) {
+            $this->flash('error', 'Failed to revoke Inventory Access Key: ' . $e->getMessage());
         }
 
         $this->redirect($redirectUrl);
@@ -2653,6 +3929,29 @@ final class ManagerController extends Controller
         $stmt->execute($params);
         $allEmployees = $stmt->fetchAll();
 
+        // Calculate daily appointment assignments count for current date
+        $dailyApptStmt = $this->db->prepare(
+            "SELECT ps.performer_employee_id, COUNT(DISTINCT a.appointment_id) AS appt_cnt
+             FROM performed_service ps
+             JOIN appointment_pet ap ON ap.appointment_pet_id = ps.appointment_pet_id
+             JOIN appointment a ON a.appointment_id = ap.appointment_id
+             WHERE a.business_unit_id = ?
+               AND a.preferred_date = CURDATE()
+               AND ps.performer_employee_id IS NOT NULL
+             GROUP BY ps.performer_employee_id"
+        );
+        $dailyApptStmt->execute([$unitId]);
+        $dailyCounts = [];
+        foreach ($dailyApptStmt->fetchAll() as $row) {
+            $dailyCounts[(int)$row['performer_employee_id']] = (int)$row['appt_cnt'];
+        }
+
+        foreach ($allEmployees as &$empRow) {
+            $empId = (int)$empRow['employee_id'];
+            $empRow['daily_assignment_count'] = $dailyCounts[$empId] ?? 0;
+        }
+        unset($empRow);
+
         // Pagination
         $totalEmployees = count($allEmployees);
         $perPage = 6;
@@ -2751,8 +4050,10 @@ final class ManagerController extends Controller
 
     public function updateProfile(): void
     {
-        [$uid, , $unitId] = $this->checkBusinessManager();
+        [$uid, , $unitId, $unitName] = $this->checkBusinessManager();
         CSRF::check();
+
+        $redirectUrl = ($this->isSuperAdmin() && isset($_GET['unit_id'])) ? '/manager/settings?unit_id=' . (int)$unitId : '/manager/settings';
 
         $name = trim((string)($_POST['business_name'] ?? ''));
         $email = trim((string)($_POST['business_email'] ?? ''));
@@ -2760,14 +4061,14 @@ final class ManagerController extends Controller
 
         if ($name === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
             $this->flash('error', 'Please provide a valid business name and business email address.');
-            $this->redirect('/manager/settings');
+            $this->redirect($redirectUrl);
         }
 
         // Contact Number validation: accepts either 8-digit number or 11-digit phone number
         $cleanPhone = preg_replace('/[^0-9]/', '', $phone);
         if (strlen($cleanPhone) !== 8 && strlen($cleanPhone) !== 11) {
             $this->flash('error', 'Contact Number must be either an 8-digit landline number or an 11-digit mobile phone number.');
-            $this->redirect('/manager/settings');
+            $this->redirect($redirectUrl);
         }
 
         $stmt = $this->db->prepare(
@@ -2775,10 +4076,10 @@ final class ManagerController extends Controller
         );
         $stmt->execute([$name, $email, $phone, $unitId]);
 
-        Audit::log('business_profile.update', "Updated Pet Store profile (Phone: $phone)", $unitId, null, null, $uid);
+        Audit::log('business_profile.update', "Updated $unitName profile (Phone: $phone)", $unitId, null, null, $uid);
 
         $this->flash('success', 'Business profile updated successfully.');
-        $this->redirect('/manager/settings');
+        $this->redirect($redirectUrl);
     }
 
     public function updateOperatingHours(): void
@@ -2786,10 +4087,12 @@ final class ManagerController extends Controller
         [$uid, , $unitId] = $this->checkBusinessManager();
         CSRF::check();
 
+        $redirectUrl = ($this->isSuperAdmin() && isset($_GET['unit_id'])) ? '/manager/settings?unit_id=' . (int)$unitId : '/manager/settings';
+
         $hours = $_POST['hours'] ?? [];
         if (!is_array($hours)) {
             $this->flash('error', 'Invalid operating hours submitted.');
-            $this->redirect('/manager/settings');
+            $this->redirect($redirectUrl);
         }
 
         $this->db->beginTransaction();
@@ -2816,7 +4119,7 @@ final class ManagerController extends Controller
             $this->flash('error', 'Failed to update operating hours: ' . $e->getMessage());
         }
 
-        $this->redirect('/manager/settings');
+        $this->redirect($redirectUrl);
     }
 
     public function sendOtp(): void

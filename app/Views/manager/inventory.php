@@ -30,7 +30,7 @@ $isInvManager = !empty($isInventoryManagerOnly);
     <!-- Inventory Key Action, Search Field, and Request Order Action -->
     <div class="row" style="gap: 0.75rem; align-items: center;">
       <?php if (!empty($canManageInventoryKey)): ?>
-        <div class="inv-key-header-actions" style="display: inline-flex; align-items: center;">
+        <div class="inv-key-header-actions" style="display: inline-flex; align-items: center; gap: 0.5rem;">
           <?php if (empty($activeInventoryKey)): ?>
             <form method="post" action="/manager/inventory/generate-key<?= $unitQuery ?>" style="margin: 0; display: inline-flex;" id="generate-inv-key-form">
               <?= \App\Core\CSRF::field() ?>
@@ -47,6 +47,16 @@ $isInvManager = !empty($isInventoryManagerOnly);
                     data-modal-open="inventory-key-modal"
                     data-key-seconds="<?= (int)($activeInventoryKey['seconds_remaining'] ?? 0) ?>">
               View Key
+            </button>
+            <button type="button"
+                    class="btn danger btn-sm"
+                    id="header-revoke-inv-key-btn"
+                    style="white-space: nowrap;"
+                    data-modal-open="revoke-key-modal"
+                    data-revoke-key-id="<?= (int)$activeInventoryKey['key_id'] ?>"
+                    data-revoke-key-code="<?= e($activeInventoryKey['key_code']) ?>"
+                    data-revoke-expires="<?= e($activeInventoryKey['expires_at_formatted'] ?? '') ?>">
+              Revoke
             </button>
           <?php endif; ?>
         </div>
@@ -84,13 +94,24 @@ $isInvManager = !empty($isInventoryManagerOnly);
     <div class="row" style="justify-content: space-between; align-items: baseline; margin-bottom: 1rem;">
       <div>
         <h2 style="margin: 0;"><?= e($unitName) ?> Stock Levels</h2>
-        <p class="caption" style="margin: 0.2rem 0 0 0;">Prioritizing out-of-stock items (A–Z) followed by in-stock inventory. Stock adjustments require mandatory audit reasons.</p>
+        <p class="caption" style="margin: 0.2rem 0 0 0;">
+          <?php if ((int)$unitId === \App\Models\Units::vetClinicId()): ?>
+            Veterinary Clinic animal-health inventory with batch number and expiration date tracking. Stock adjustments require mandatory audit reasons.
+          <?php else: ?>
+            Prioritizing out-of-stock items (A–Z) followed by in-stock inventory. Stock adjustments require mandatory audit reasons.
+          <?php endif; ?>
+        </p>
       </div>
       <span class="caption"><?= count($inventoryItems) ?> items</span>
     </div>
 
     <?php if (empty($inventoryItems)): ?>
-      <div class="empty">No inventory items found<?= $q !== '' ? ' matching "' . e($q) . '"' : '' ?>.</div>
+      <div class="empty">
+        No inventory items found<?= $q !== '' ? ' matching "' . e($q) . '"' : '' ?>.
+        <?php if ((int)$unitId === \App\Models\Units::vetClinicId()): ?>
+          <span class="caption muted" style="display: block; margin-top: 0.25rem;">Batches &amp; Expiry tracking active for Veterinary Clinic animal-health stock.</span>
+        <?php endif; ?>
+      </div>
     <?php else: ?>
       <div class="table-wrap">
         <table>
@@ -99,6 +120,9 @@ $isInvManager = !empty($isInventoryManagerOnly);
               <th>Product</th>
               <th>SKU / Code</th>
               <th>Category</th>
+              <?php if ((int)$unitId === \App\Models\Units::vetClinicId()): ?>
+                <th>Batches &amp; Expiry</th>
+              <?php endif; ?>
               <th>On Hand</th>
               <th>Committed</th>
               <th>Available</th>
@@ -119,6 +143,30 @@ $isInvManager = !empty($isInventoryManagerOnly);
                 </td>
                 <td><code><?= e($item['sku'] ?: '—') ?></code></td>
                 <td><span class="badge secondary"><?= e($item['product_category']) ?></span></td>
+                <?php if ((int)$unitId === \App\Models\Units::vetClinicId()): ?>
+                  <td>
+                    <?php if (!empty($item['batches'])): ?>
+                      <div style="display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.78rem;">
+                        <?php foreach ($item['batches'] as $b):
+                          $isExpired = !empty($b['expiration_date']) && strtotime((string)$b['expiration_date']) < time();
+                          $isExpiringSoon = !empty($b['expiration_date']) && !$isExpired && (strtotime((string)$b['expiration_date']) - time() <= 30 * 86400);
+                        ?>
+                          <div style="display: inline-flex; align-items: center; gap: 0.35rem; flex-wrap: wrap;">
+                            <code><?= e($b['batch_number']) ?></code>
+                            <span class="muted">(<?= (int)$b['quantity'] ?>)</span>
+                            <?php if (!empty($b['expiration_date'])): ?>
+                              <span class="badge <?= $isExpired ? 'badge-danger' : ($isExpiringSoon ? 'warn' : 'secondary') ?>" style="font-size: 0.7rem; padding: 0.1rem 0.35rem;">
+                                Exp: <?= date('M j, Y', strtotime((string)$b['expiration_date'])) ?>
+                              </span>
+                            <?php endif; ?>
+                          </div>
+                        <?php endforeach; ?>
+                      </div>
+                    <?php else: ?>
+                      <span class="caption muted">No batch tracked</span>
+                    <?php endif; ?>
+                  </td>
+                <?php endif; ?>
                 <td>
                   <strong style="<?= $isOutOfStock ? 'color: var(--danger, #dc2626); font-size: 1.1rem;' : '' ?>">
                     <?= (int)$item['on_hand'] ?>
@@ -167,7 +215,7 @@ $isInvManager = !empty($isInventoryManagerOnly);
     <dialog class="modal" id="adjust-modal-inc-<?= (int)$item['business_product_id'] ?>" aria-labelledby="inc-title-<?= (int)$item['business_product_id'] ?>">
       <div class="modal-head">
         <h3 id="inc-title-<?= (int)$item['business_product_id'] ?>">Increase Stock: <?= e($item['product_name']) ?></h3>
-        <button type="button" class="btn ghost btn-sm" data-modal-close>&times; Close</button>
+        <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close">&times;</button>
       </div>
       <div class="modal-body">
         <form method="post" action="/manager/inventory/adjust<?= $unitQuery ?>" class="stock-adj-form">
@@ -227,7 +275,7 @@ $isInvManager = !empty($isInventoryManagerOnly);
     <dialog class="modal" id="adjust-modal-dec-<?= (int)$item['business_product_id'] ?>" aria-labelledby="dec-title-<?= (int)$item['business_product_id'] ?>">
       <div class="modal-head">
         <h3 id="dec-title-<?= (int)$item['business_product_id'] ?>">Decrease Stock: <?= e($item['product_name']) ?></h3>
-        <button type="button" class="btn ghost btn-sm" data-modal-close>&times; Close</button>
+        <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close">&times;</button>
       </div>
       <div class="modal-body">
         <form method="post" action="/manager/inventory/adjust<?= $unitQuery ?>">
@@ -351,7 +399,7 @@ $isInvManager = !empty($isInventoryManagerOnly);
           <span class="badge secondary" style="margin-bottom: 0.25rem;">Purchase Order</span>
           <h3 id="view-po-title-<?= (int)$po['purchase_order_id'] ?>" style="margin: 0;"><?= e($po['po_number']) ?></h3>
         </div>
-        <button type="button" class="btn ghost btn-sm" data-modal-close>&times; Close</button>
+        <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close">&times;</button>
       </div>
       <div class="modal-body">
         <div class="grid grid-2" style="background: var(--bg-subtle, #f9fafb); padding: 1rem; border-radius: 6px; margin-bottom: 1.5rem; gap: 1rem;">
@@ -442,7 +490,7 @@ $isInvManager = !empty($isInventoryManagerOnly);
     <dialog class="modal modal-wide" id="receive-po-<?= (int)$po['purchase_order_id'] ?>" aria-labelledby="rcv-po-title-<?= (int)$po['purchase_order_id'] ?>">
       <div class="modal-head">
         <h3 id="rcv-po-title-<?= (int)$po['purchase_order_id'] ?>">Receive Stock for <?= e($po['po_number']) ?></h3>
-        <button type="button" class="btn ghost btn-sm" data-modal-close>&times; Close</button>
+        <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close">&times;</button>
       </div>
       <div class="modal-body">
         <p class="caption" style="margin-bottom: 1rem;">
@@ -517,7 +565,7 @@ $isInvManager = !empty($isInventoryManagerOnly);
       <span class="badge secondary" style="margin-bottom: 0.25rem;">Multi-Step Order</span>
       <h3 id="po-modal-title" style="margin: 0;">Create Purchase Order</h3>
     </div>
-    <button type="button" class="btn ghost btn-sm" data-modal-close>&times; Close</button>
+    <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close">&times;</button>
   </div>
   <div class="modal-body">
     <!-- Step Indicator -->
@@ -640,7 +688,7 @@ $isInvManager = !empty($isInventoryManagerOnly);
         <span class="badge badge-success" style="margin-bottom: 0.25rem;">Active Temporary Key</span>
         <h3 id="inv-key-modal-title" style="margin: 0;">Inventory Access Key</h3>
       </div>
-      <button type="button" class="btn ghost btn-sm" data-modal-close>&times; Close</button>
+      <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close">&times;</button>
     </div>
     <div class="modal-body">
       <div class="inv-key-code-box">
@@ -648,12 +696,23 @@ $isInvManager = !empty($isInventoryManagerOnly);
           <div class="caption" style="margin-bottom: 0.2rem;">Temporary Access Key</div>
           <code id="inv-key-code-value" class="inv-key-code-text"><?= e($activeInventoryKey['key_code']) ?></code>
         </div>
-        <button type="button"
-                class="btn secondary btn-sm"
-                id="copy-inv-key-btn"
-                data-copy-key="<?= e($activeInventoryKey['key_code']) ?>">
-          Copy Key
-        </button>
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+          <button type="button"
+                  class="btn danger btn-sm"
+                  id="modal-revoke-inv-key-btn"
+                  data-modal-open="revoke-key-modal"
+                  data-revoke-key-id="<?= (int)$activeInventoryKey['key_id'] ?>"
+                  data-revoke-key-code="<?= e($activeInventoryKey['key_code']) ?>"
+                  data-revoke-expires="<?= e($activeInventoryKey['expires_at_formatted'] ?? '') ?>">
+            Revoke Key
+          </button>
+          <button type="button"
+                  class="btn secondary btn-sm"
+                  id="copy-inv-key-btn"
+                  data-copy-key="<?= e($activeInventoryKey['key_code']) ?>">
+            Copy Key
+          </button>
+        </div>
       </div>
 
       <div class="inv-key-details-grid">
@@ -679,9 +738,77 @@ $isInvManager = !empty($isInventoryManagerOnly);
         </div>
       </div>
     </div>
-    <div class="modal-foot" style="display: flex; justify-content: flex-end; gap: 0.5rem;">
+    <div class="modal-foot" style="display: flex; justify-content: flex-end; align-items: center; gap: 0.5rem;">
       <button type="button" class="btn primary btn-sm" data-modal-close>Done</button>
     </div>
   </dialog>
+<?php endif; ?>
+
+<?php if (!empty($canManageInventoryKey)): ?>
+  <!-- Revocation Confirmation Dialog -->
+  <dialog class="modal" id="revoke-key-modal" aria-labelledby="revoke-key-modal-title" style="max-width: 520px;">
+    <div class="modal-head">
+      <div>
+        <span class="badge badge-danger" style="margin-bottom: 0.25rem;">Confirm Revocation</span>
+        <h3 id="revoke-key-modal-title" style="margin: 0; color: var(--danger, #dc2626);">Revoke Inventory Access Key</h3>
+      </div>
+      <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size: 0.95rem; margin: 0 0 1rem 0; line-height: 1.5;">
+        Are you sure you want to revoke this Inventory Access Key?
+      </p>
+      <div style="background: var(--surface-subtle, #f8fafc); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 0.85rem 1rem; margin-bottom: 1rem;">
+        <div style="margin-bottom: 0.35rem;">
+          <span class="caption" style="color: var(--muted); display: block;">Key Code</span>
+          <code class="inv-key-code-text" style="font-size: 1.15rem; font-weight: 700;" id="revoke-confirm-key-code">
+            <?= e($activeInventoryKey['key_code'] ?? '—') ?>
+          </code>
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; margin-top: 0.5rem; border-top: 1px solid var(--line); padding-top: 0.5rem;">
+          <div>
+            <span class="caption" style="color: var(--muted); display: block;">Business Unit</span>
+            <strong><?= e($unitName) ?></strong>
+          </div>
+          <div>
+            <span class="caption" style="color: var(--muted); display: block;">Expires At</span>
+            <span id="revoke-confirm-expires"><?= e($activeInventoryKey['expires_at_formatted'] ?? '—') ?></span>
+          </div>
+        </div>
+      </div>
+      <p class="caption muted" style="margin: 0; line-height: 1.45;">
+        Revoking this key immediately invalidates it. Any employee currently logged into temporary inventory access using this key will immediately have their access terminated. The key record will remain preserved in historical logs.
+      </p>
+    </div>
+    <div class="modal-foot" style="display: flex; justify-content: flex-end; gap: 0.5rem;">
+      <button type="button" class="btn ghost btn-sm" data-modal-close>Cancel</button>
+      <form method="post" action="/manager/inventory/revoke-key<?= $unitQuery ?>" style="margin: 0;" id="confirm-revoke-key-form">
+        <?= \App\Core\CSRF::field() ?>
+        <input type="hidden" name="key_id" id="revoke-confirm-key-id" value="<?= (int)($activeInventoryKey['key_id'] ?? 0) ?>">
+        <input type="hidden" name="return_tab" value="<?= e($invTab) ?>">
+        <button type="submit" class="btn danger btn-sm" id="confirm-revoke-key-btn">
+          Confirm Revocation
+        </button>
+      </form>
+    </div>
+  </dialog>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      document.querySelectorAll('[data-revoke-key-id]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var kid = btn.getAttribute('data-revoke-key-id');
+          var kcode = btn.getAttribute('data-revoke-key-code');
+          var kexp = btn.getAttribute('data-revoke-expires');
+          var idInput = document.getElementById('revoke-confirm-key-id');
+          var codeEl = document.getElementById('revoke-confirm-key-code');
+          var expEl = document.getElementById('revoke-confirm-expires');
+          if (idInput && kid) idInput.value = kid;
+          if (codeEl && kcode) codeEl.textContent = kcode;
+          if (expEl && kexp) expEl.textContent = kexp;
+        });
+      });
+    });
+  </script>
 <?php endif; ?>
 

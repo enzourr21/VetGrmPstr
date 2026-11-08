@@ -82,7 +82,7 @@ $renderRosterItem = function (array $emp) use ($unitId, $unitQuery, $positions, 
   <dialog class="modal modal-wide" id="roster-modal" aria-labelledby="roster-modal-title">
     <div class="modal-head">
       <h3 id="roster-modal-title"><?= e($unitName) ?> Employees (<?= count($employees) ?>)</h3>
-      <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close dialog">&times; Close</button>
+      <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close dialog">&times;</button>
     </div>
     <div class="modal-body">
       <?php if (!$employees): ?>

@@ -30,9 +30,9 @@
   </article>
 </section>
 
-<div class="grid grid-2" style="align-items: start; gap: 1.5rem; margin-bottom: 2rem;">
+<div class="grid grid-2 petstore-overview-middle-grid" style="align-items: stretch; gap: 1.5rem; margin-bottom: 2rem;">
   <!-- 1. Stocks Running Low -->
-  <section class="card" id="petstore-stocks-running-low" style="overflow-x: hidden;">
+  <section class="card petstore-overview-equal-card" id="petstore-stocks-running-low" style="overflow-x: hidden; display: flex; flex-direction: column; height: 100%;">
     <div style="margin-bottom: 1rem; display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; flex-wrap: wrap;">
       <div>
         <h2 style="margin: 0;">Stocks Running Low (<?= count($lowStockProducts) ?>)</h2>
@@ -44,9 +44,10 @@
     </div>
 
     <?php if (empty($lowStockProducts)): ?>
-      <div class="empty">No products currently low on stock. All items are sufficiently stocked.</div>
+      <div class="empty" style="flex: 1 1 auto; display: flex; align-items: center; justify-content: center; padding: 1.5rem 1rem;">No products currently low on stock. All items are sufficiently stocked.</div>
     <?php else: ?>
-      <div class="table-wrap" style="max-height: 420px; overflow-y: auto;">
+      <?php $displayedLowStock = array_slice($lowStockProducts, 0, 2); ?>
+      <div class="table-wrap" style="flex: 1 1 auto; min-height: 0; max-height: 420px; overflow-y: auto;">
         <table>
           <thead>
             <tr>
@@ -55,7 +56,7 @@
             </tr>
           </thead>
           <tbody>
-            <?php foreach ($lowStockProducts as $prod): ?>
+            <?php foreach ($displayedLowStock as $prod): ?>
               <tr>
                 <td><strong><?= e($prod['product_name']) ?></strong></td>
                 <td class="tabular" style="text-align: right;">
@@ -68,25 +69,25 @@
           </tbody>
         </table>
       </div>
-      <div style="margin-top: 1rem;">
-        <a href="/manager/inventory<?= $unitQuery ?>" class="btn secondary btn-sm" style="width: 100%; text-align: center; justify-content: center;">
-          Open Inventory Workspace &rarr;
-        </a>
-      </div>
     <?php endif; ?>
+    <div style="margin-top: auto; padding-top: 1rem;">
+      <a href="/manager/inventory<?= $unitQuery ?>" class="btn secondary btn-sm" style="width: 100%; text-align: center; justify-content: center;">
+        Open Inventory &rarr;
+      </a>
+    </div>
   </section>
 
   <!-- 2. Pending Refund Requests -->
-  <section class="card" style="overflow-x: hidden;">
+  <section class="card petstore-overview-equal-card" style="overflow-x: hidden; display: flex; flex-direction: column; height: 100%;">
     <div style="margin-bottom: 1rem;">
       <h2 style="margin: 0;">Pending Refund Requests (<?= count($pendingRefunds) ?>)</h2>
       <p class="caption" style="margin: 0.2rem 0 0 0;">Customer requests awaiting manager review</p>
     </div>
 
     <?php if (empty($pendingRefunds)): ?>
-      <div class="empty">No pending refund requests. All transactions are clear.</div>
+      <div class="empty" style="flex: 1 1 auto; display: flex; align-items: center; justify-content: center; padding: 1.5rem 1rem;">No pending refund requests. All transactions are clear.</div>
     <?php else: ?>
-      <div style="max-height: 420px; overflow-y: auto; overflow-x: hidden; padding-right: 0.25rem;">
+      <div class="petstore-refund-list" style="flex: 1 1 auto; min-height: 0; max-height: 420px; overflow-y: auto; overflow-x: hidden; padding-right: 0.25rem;">
         <?php foreach ($pendingRefunds as $rf): ?>
           <div style="padding: 0.75rem 0.25rem; border-bottom: 1px solid var(--border, #e5e7eb); display: flex; flex-direction: column; gap: 0.4rem;">
             <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; flex-wrap: wrap;">
@@ -107,7 +108,7 @@
           </div>
         <?php endforeach; ?>
       </div>
-      <div style="margin-top: 1rem;">
+      <div style="margin-top: auto; padding-top: 1rem;">
         <a href="/manager/sales<?= $unitQuery ?><?= !empty($unitQuery) ? '&' : '?' ?>tab=refunds" class="btn secondary btn-sm" style="width: 100%; text-align: center; justify-content: center;">
           Open Refund Requests Workspace &rarr;
         </a>

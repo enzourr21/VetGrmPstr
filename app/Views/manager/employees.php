@@ -28,9 +28,9 @@ $pageUrl = function (int $p) use ($unitId, $isSuper, $q, $posFilter, $statusFilt
 
 <div class="page-head">
   <div>
-    <p class="eyebrow">Pet Store Personnel</p>
+    <p class="eyebrow"><?= e($unitName) ?> Personnel</p>
     <h1>Employees</h1>
-    <p class="muted">Read-only personnel roster for Pet Store staff, employment details, and active work presence.</p>
+    <p class="muted">Read-only personnel roster for <?= e($unitName) ?> staff, employment details, active work presence, and daily appointment assignments.</p>
   </div>
 </div>
 
@@ -84,7 +84,7 @@ $pageUrl = function (int $p) use ($unitId, $isSuper, $q, $posFilter, $statusFilt
 <section class="card">
   <div class="row" style="justify-content: space-between; align-items: baseline; margin-bottom: 1rem;">
     <div>
-      <h2 style="margin: 0;">Pet Store Employee Roster (<?= $totalEmployees ?>)</h2>
+      <h2 style="margin: 0;"><?= e($unitName) ?> Employee Roster (<?= $totalEmployees ?>)</h2>
       <p class="caption" style="margin: 0.2rem 0 0 0;">Read-only roster. Employee account administration and role assignments are managed by the System Administrator.</p>
     </div>
     <span class="caption"><?= $totalEmployees ?> staff members</span>
@@ -104,6 +104,7 @@ $pageUrl = function (int $p) use ($unitId, $isSuper, $q, $posFilter, $statusFilt
             <th>Position</th>
             <th>Email</th>
             <th>Work Status</th>
+            <th>Daily Appointments</th>
             <th style="text-align: right;">Action</th>
           </tr>
         </thead>
@@ -112,6 +113,7 @@ $pageUrl = function (int $p) use ($unitId, $isSuper, $q, $posFilter, $statusFilt
             $initials = strtoupper(substr((string)$emp['first_name'], 0, 1) . substr((string)$emp['last_name'], 0, 1));
             $ws = $emp['work_status'] ?? 'Free';
             $wsBadgeClass = $ws === 'On Duty' ? 'badge-success' : ($ws === 'Free' ? 'secondary' : 'badge-danger');
+            $dac = (int)($emp['daily_assignment_count'] ?? 0);
           ?>
             <tr>
               <td>
@@ -128,6 +130,11 @@ $pageUrl = function (int $p) use ($unitId, $isSuper, $q, $posFilter, $statusFilt
               <td>
                 <span class="badge <?= $wsBadgeClass ?>">
                   <?= e($ws) ?>
+                </span>
+              </td>
+              <td>
+                <span class="badge secondary" style="font-weight: 500;">
+                  <?= $dac ?> <?= $dac === 1 ? 'appointment' : 'appointments' ?>
                 </span>
               </td>
               <td style="text-align: right;">
@@ -171,7 +178,7 @@ $pageUrl = function (int $p) use ($unitId, $isSuper, $q, $posFilter, $statusFilt
   <dialog class="modal" id="emp-detail-<?= (int)$emp['employee_id'] ?>" aria-labelledby="emp-title-<?= (int)$emp['employee_id'] ?>">
     <div class="modal-head">
       <h3 id="emp-title-<?= (int)$emp['employee_id'] ?>">Employee Profile</h3>
-      <button type="button" class="btn ghost btn-sm" data-modal-close>&times; Close</button>
+      <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close">&times;</button>
     </div>
     <div class="modal-body">
       <div style="display: flex; gap: 1rem; align-items: center; margin-bottom: 1.5rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border, #e5e7eb);">
@@ -180,7 +187,7 @@ $pageUrl = function (int $p) use ($unitId, $isSuper, $q, $posFilter, $statusFilt
         </div>
         <div>
           <h4 style="margin: 0; font-size: 1.2rem;"><?= e($emp['first_name'] . ' ' . $emp['last_name']) ?></h4>
-          <div class="caption"><?= e($emp['position']) ?> · Pet Store</div>
+          <div class="caption"><?= e($emp['position']) ?> · <?= e($unitName) ?></div>
           <div style="margin-top: 0.25rem;">
             <span class="badge <?= $wsBadgeClass ?>">Work Status: <?= e($ws) ?></span>
           </div>
@@ -212,6 +219,10 @@ $pageUrl = function (int $p) use ($unitId, $isSuper, $q, $posFilter, $statusFilt
         <div class="row" style="justify-content: space-between; margin-bottom: 0.35rem;">
           <span class="caption">Default Position:</span>
           <strong><?= e($emp['position']) ?></strong>
+        </div>
+        <div class="row" style="justify-content: space-between; margin-bottom: 0.35rem;">
+          <span class="caption">Daily Assignments:</span>
+          <strong><?= (int)($emp['daily_assignment_count'] ?? 0) ?> appointments today</strong>
         </div>
         <div class="row" style="justify-content: space-between; margin-bottom: 0.35rem;">
           <span class="caption">Date Hired:</span>

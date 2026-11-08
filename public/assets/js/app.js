@@ -799,11 +799,15 @@
           var linkPath = link.getAttribute('href');
           if (!linkPath || linkPath.startsWith('#') || linkPath.startsWith('javascript:')) return false;
           linkPath = linkPath.split('?')[0].replace(/\/+$/, '') || '/';
-          if (linkPath === '/workspace' && (pathname.startsWith('/sysadmin') || pathname.startsWith('/manager') || pathname.startsWith('/super-admin') || pathname.startsWith('/workspace'))) {
+          var cleanCurrent = pathname.split('?')[0].replace(/\/+$/, '') || '/';
+          if (linkPath === '/workspace' && (cleanCurrent.startsWith('/sysadmin') || cleanCurrent.startsWith('/manager') || cleanCurrent.startsWith('/super-admin') || cleanCurrent.startsWith('/workspace'))) {
             return true;
           }
-          if (linkPath === '/' && pathname === '/') return true;
-          if (linkPath !== '/' && pathname.startsWith(linkPath)) return true;
+          if (linkPath === cleanCurrent) return true;
+          if (linkPath === '/' || linkPath === '/super-admin' || linkPath === '/sysadmin' || linkPath === '/workspace') {
+            return false;
+          }
+          if (cleanCurrent.startsWith(linkPath + '/')) return true;
           return false;
         },
         activeClass: 'is-current'
@@ -851,6 +855,52 @@
         var links = Array.from(container.querySelectorAll('a'));
         var currentPath = window.location.pathname;
         var activeLink = clickedLink || null;
+
+        if (!activeLink) {
+          // 1. Check if server-rendered active class is present
+          for (var i = 0; i < links.length; i++) {
+            if (links[i].classList.contains(cfg.activeClass)) {
+              activeLink = links[i];
+              break;
+            }
+          }
+        }
+
+        if (!activeLink) {
+          // 2. Exact match on URL path
+          var cleanCurrent = currentPath.split('?')[0].replace(/\/+$/, '') || '/';
+          for (var i = 0; i < links.length; i++) {
+            var href = links[i].getAttribute('href');
+            if (!href || href.startsWith('#') || href.startsWith('javascript:')) continue;
+            var cleanHref = href.split('?')[0].replace(/\/+$/, '') || '/';
+            if (cleanHref === cleanCurrent) {
+              activeLink = links[i];
+              break;
+            }
+          }
+        }
+
+        if (!activeLink) {
+          // 3. Longest prefix match (excluding root dashboards unless exact)
+          var bestMatch = null;
+          var bestLen = 0;
+          var cleanCurrent = currentPath.split('?')[0].replace(/\/+$/, '') || '/';
+          for (var i = 0; i < links.length; i++) {
+            var href = links[i].getAttribute('href');
+            if (!href || href.startsWith('#') || href.startsWith('javascript:')) continue;
+            var cleanHref = href.split('?')[0].replace(/\/+$/, '') || '/';
+            if (cleanHref === '/' || cleanHref === '/super-admin' || cleanHref === '/sysadmin' || cleanHref === '/workspace') {
+              continue;
+            }
+            if ((cleanCurrent === cleanHref || cleanCurrent.startsWith(cleanHref + '/')) && cleanHref.length > bestLen) {
+              bestMatch = links[i];
+              bestLen = cleanHref.length;
+            }
+          }
+          if (bestMatch) {
+            activeLink = bestMatch;
+          }
+        }
 
         if (!activeLink) {
           for (var i = 0; i < links.length; i++) {
@@ -2147,4 +2197,83 @@
       }, 1000);
     }
   }
+
+  // ---- Administrator Profile Dropdown & Dark Mode Toggle ----
+  function initAdminProfileDropdown() {
+    var toggleBtn = document.getElementById('admin-profile-toggle');
+    var dropdown = document.getElementById('admin-profile-dropdown');
+    var darkModeBtn = document.getElementById('admin-dark-mode-toggle');
+    var switchBtn = document.getElementById('profile-switch-btn');
+    var switchMenu = document.getElementById('profile-switcher-menu');
+
+    function closeSwitcherMenu() {
+      if (switchMenu && switchBtn) {
+        switchMenu.setAttribute('hidden', '');
+        switchBtn.setAttribute('aria-expanded', 'false');
+      }
+    }
+
+    if (toggleBtn && dropdown) {
+      toggleBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var isOpen = !dropdown.hasAttribute('hidden');
+        if (isOpen) {
+          dropdown.setAttribute('hidden', '');
+          toggleBtn.setAttribute('aria-expanded', 'false');
+          closeSwitcherMenu();
+        } else {
+          dropdown.removeAttribute('hidden');
+          toggleBtn.setAttribute('aria-expanded', 'true');
+        }
+      });
+
+      document.addEventListener('click', function (e) {
+        if (!dropdown.contains(e.target) && !toggleBtn.contains(e.target)) {
+          dropdown.setAttribute('hidden', '');
+          toggleBtn.setAttribute('aria-expanded', 'false');
+          closeSwitcherMenu();
+        }
+      });
+
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && !dropdown.hasAttribute('hidden')) {
+          dropdown.setAttribute('hidden', '');
+          toggleBtn.setAttribute('aria-expanded', 'false');
+          closeSwitcherMenu();
+          toggleBtn.focus();
+        }
+      });
+    }
+
+    if (switchBtn && switchMenu) {
+      switchBtn.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        var isMenuOpen = !switchMenu.hasAttribute('hidden');
+        if (isMenuOpen) {
+          switchMenu.setAttribute('hidden', '');
+          switchBtn.setAttribute('aria-expanded', 'false');
+        } else {
+          switchMenu.removeAttribute('hidden');
+          switchBtn.setAttribute('aria-expanded', 'true');
+        }
+      });
+    }
+
+    if (darkModeBtn) {
+      darkModeBtn.addEventListener('click', function (e) {
+        e.preventDefault();
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        if (isDark) {
+          document.documentElement.removeAttribute('data-theme');
+          try { localStorage.setItem('vetgrpet_theme', 'light'); } catch (err) {}
+        } else {
+          document.documentElement.setAttribute('data-theme', 'dark');
+          try { localStorage.setItem('vetgrpet_theme', 'dark'); } catch (err) {}
+        }
+      });
+    }
+  }
+
+  initAdminProfileDropdown();
 })();

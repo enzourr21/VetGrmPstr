@@ -23,7 +23,7 @@ $initialRolesForSelectedPos = \App\Models\AdminAccountService::initialRolesForPo
 <dialog class="modal modal-wide" id="add-employee-modal" aria-labelledby="add-employee-modal-title" <?= !empty($errors) ? 'data-open-on-load="true"' : '' ?> data-role-picker>
   <div class="modal-head">
     <h3 id="add-employee-modal-title">Create Employee in <?= e($unitName) ?></h3>
-    <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close dialog">&times; Close</button>
+    <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close dialog">&times;</button>
   </div>
   <div class="modal-body">
     <p class="caption" style="margin-bottom: 1rem;">All new accounts created here are automatically bound to <strong><?= e($unitName) ?></strong>.</p>

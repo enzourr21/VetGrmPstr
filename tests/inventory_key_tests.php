@@ -134,6 +134,23 @@ try {
     $insEmp->execute([$tempUid]);
     $tempEmpId = (int)$pdo->lastInsertId();
 
+    $tempImUid = 0;
+    $tempImEmpId = 0;
+    $imChk = $pdo->prepare("SELECT u.user_account_id FROM user_account u JOIN employee e ON e.user_account_id = u.user_account_id WHERE u.email = ?");
+    $imChk->execute(['ja.ompoy@staff.sample.vetgrpet']);
+    if (!$imChk->fetchColumn()) {
+        $insImUa = $pdo->prepare("INSERT INTO user_account (email, password_hash, account_status, email_verified_at) VALUES ('ja.ompoy@staff.sample.vetgrpet', ?, 'active', NOW())");
+        $insImUa->execute([$pwHash]);
+        $tempImUid = (int)$pdo->lastInsertId();
+
+        $insImEmp = $pdo->prepare("INSERT INTO employee (user_account_id, business_unit_id, first_name, last_name, position, employee_status) VALUES (?, 1, 'Janricson', 'Ompoy', 'Inventory Manager', 'active')");
+        $insImEmp->execute([$tempImUid]);
+        $tempImEmpId = (int)$pdo->lastInsertId();
+
+        $insImRole = $pdo->prepare("INSERT INTO account_role (user_account_id, role_id, business_unit_id) VALUES (?, 11, 1)");
+        $insImRole->execute([$tempImUid]);
+    }
+
     // Sign in test actors
     $petBm = new InvKeyHttpClient($base);
     $petBm->staffLogin('david.reyes@staff.sample.vetgrpet', 'Staff123!');

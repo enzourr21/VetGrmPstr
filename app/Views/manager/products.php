@@ -141,7 +141,7 @@ $statusFilter = $statusFilter ?? '';
 <dialog class="modal modal-wide" id="add-product-modal" aria-labelledby="add-prod-title">
   <div class="modal-head">
     <h3 id="add-prod-title">Add New Product to Pet Store</h3>
-    <button type="button" class="btn ghost btn-sm" data-modal-close>&times; Close</button>
+    <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close">&times;</button>
   </div>
   <div class="modal-body">
     <form method="post" action="/manager/products<?= $unitQuery ?>" enctype="multipart/form-data">
@@ -203,7 +203,7 @@ $statusFilter = $statusFilter ?? '';
   <dialog class="modal" id="view-prod-<?= (int)$p['business_product_id'] ?>" aria-labelledby="v-title-<?= (int)$p['business_product_id'] ?>">
     <div class="modal-head">
       <h3 id="v-title-<?= (int)$p['business_product_id'] ?>"><?= e($p['product_name']) ?></h3>
-      <button type="button" class="btn ghost btn-sm" data-modal-close>&times; Close</button>
+      <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close">&times;</button>
     </div>
     <div class="modal-body">
       <div style="display: flex; gap: 1.25rem; margin-bottom: 1rem; align-items: flex-start;">
@@ -255,7 +255,7 @@ $statusFilter = $statusFilter ?? '';
   <dialog class="modal modal-wide" id="edit-prod-<?= (int)$p['business_product_id'] ?>" aria-labelledby="e-title-<?= (int)$p['business_product_id'] ?>">
     <div class="modal-head">
       <h3 id="e-title-<?= (int)$p['business_product_id'] ?>">Edit: <?= e($p['product_name']) ?></h3>
-      <button type="button" class="btn ghost btn-sm" data-modal-close>&times; Close</button>
+      <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close">&times;</button>
     </div>
     <div class="modal-body">
       <form method="post" action="/manager/products/<?= (int)$p['business_product_id'] ?>/update<?= $unitQuery ?>" enctype="multipart/form-data">
@@ -314,7 +314,7 @@ $statusFilter = $statusFilter ?? '';
   <dialog class="modal" id="confirm-status-modal-<?= (int)$p['business_product_id'] ?>" aria-labelledby="status-title-<?= (int)$p['business_product_id'] ?>">
     <div class="modal-head">
       <h3 id="status-title-<?= (int)$p['business_product_id'] ?>"><?= $p['product_status'] === 'active' ? 'Deactivate Product' : 'Activate Product' ?></h3>
-      <button type="button" class="btn ghost btn-sm" data-modal-close>&times; Close</button>
+      <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close">&times;</button>
     </div>
     <div class="modal-body">
       <div style="margin-bottom: 1rem;">

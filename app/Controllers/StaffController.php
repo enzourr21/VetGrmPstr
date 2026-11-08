@@ -258,6 +258,17 @@ final class StaffController extends Controller
                 $this->forbidden($msg);
             }
 
+            if ($reason === 'revoked') {
+                Audit::log(
+                    'inventory.temp_access_denied_revoked',
+                    "Rejected attempt to redeem revoked Inventory Access Key by employee #{$empId}",
+                    $empUnitId,
+                    'employee',
+                    $empId,
+                    (int)$uid
+                );
+            }
+
             Session::flash('error', $msg);
             $this->redirect('/staff/workspace');
         }

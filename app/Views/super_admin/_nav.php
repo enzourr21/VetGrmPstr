@@ -1,4 +1,3 @@
-<?php $tab = $activeTab ?? 'dashboard'; ?>
 <div class="admin-workspace-banner">
   <div class="row" style="justify-content: space-between; width: 100%;">
     <div class="row" style="gap: 0.75rem;">
@@ -13,13 +12,4 @@
     </div>
   </div>
 </div>
-
-<nav class="admin-subnav" aria-label="Super Administrator navigation">
-  <a href="/super-admin" class="segmented-pill <?= $tab === 'dashboard' ? 'is-active' : '' ?>">Dashboard</a>
-  <a href="/super-admin/business-units" class="segmented-pill <?= $tab === 'business-units' ? 'is-active' : '' ?>">Business Units</a>
-  <a href="/super-admin/system-admins" class="segmented-pill <?= $tab === 'system-admins' ? 'is-active' : '' ?>">System Administrators</a>
-  <a href="/super-admin/employees" class="segmented-pill <?= $tab === 'employees' ? 'is-active' : '' ?>">Employee Accounts</a>
-  <a href="/super-admin/roles" class="segmented-pill <?= $tab === 'roles' ? 'is-active' : '' ?>">Roles &amp; Permissions</a>
-  <a href="/super-admin/activity" class="segmented-pill <?= $tab === 'activity' ? 'is-active' : '' ?>">System Activity</a>
-</nav>
 

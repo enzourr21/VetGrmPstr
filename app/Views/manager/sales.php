@@ -135,7 +135,7 @@ $pendingRefundsCount = $pendingRefundsCount ?? 0;
           <span class="badge" style="background: #e0f2fe; color: #0369a1; margin-bottom: 0.25rem;">Walk-in Sale</span>
           <h3 id="walkin-title-<?= (int)$s['sale_id'] ?>" style="margin: 0;">Transaction #REC-S-<?= (int)$s['sale_id'] ?></h3>
         </div>
-        <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close dialog">&times; Close</button>
+        <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close dialog">&times;</button>
       </div>
       <div class="modal-body">
         <div class="grid grid-2" style="gap: 1rem; margin-bottom: 1.5rem; background: var(--bg-subtle, #f9fafb); padding: 1rem; border-radius: 6px;">
@@ -292,7 +292,7 @@ $pendingRefundsCount = $pendingRefundsCount ?? 0;
           <span class="badge" style="background: #fef3c7; color: #92400e; margin-bottom: 0.25rem;">Online Order</span>
           <h3 id="online-title-<?= (int)$o['order_id'] ?>" style="margin: 0;">Order #ORD-<?= (int)$o['order_id'] ?></h3>
         </div>
-        <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close dialog">&times; Close</button>
+        <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close dialog">&times;</button>
       </div>
       <div class="modal-body">
         <div class="grid grid-2" style="gap: 1rem; margin-bottom: 1.5rem; background: var(--bg-subtle, #f9fafb); padding: 1rem; border-radius: 6px;">
@@ -490,7 +490,7 @@ $pendingRefundsCount = $pendingRefundsCount ?? 0;
           </div>
           <h3 id="refund-title-<?= (int)$rf['refund_request_id'] ?>" style="margin: 0;">Request <?= e($rf['refund_reference']) ?></h3>
         </div>
-        <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close dialog">&times; Close</button>
+        <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close dialog">&times;</button>
       </div>
 
       <div class="modal-body">
