@@ -182,12 +182,18 @@ final class ManagerController extends Controller
                 return;
             }
             $chkRole = $this->db->prepare(
-                "SELECT r.role_name FROM account_role ar JOIN role r ON r.role_id = ar.role_id WHERE ar.user_account_id = ? AND r.role_name IN ('BUSINESS_MANAGER', 'INVENTORY_MANAGER')"
+                "SELECT ar.business_unit_id, r.role_name FROM account_role ar JOIN role r ON r.role_id = ar.role_id WHERE ar.user_account_id = ? AND r.role_name IN ('BUSINESS_MANAGER', 'INVENTORY_MANAGER')"
             );
             $chkRole->execute([(int)$uid]);
-            $userRoles = $chkRole->fetchAll(PDO::FETCH_COLUMN);
+            $userRoleRows = $chkRole->fetchAll();
+            $userRoles = array_column($userRoleRows, 'role_name');
             if (in_array('INVENTORY_MANAGER', $userRoles, true) && !in_array('BUSINESS_MANAGER', $userRoles, true)) {
-                $this->redirect('/manager/orders');
+                $userUnitId = (int)($userRoleRows[0]['business_unit_id'] ?? 1);
+                if ($userUnitId === 1) {
+                    $this->redirect('/manager/orders');
+                } else {
+                    $this->redirect('/manager/inventory');
+                }
                 return;
             }
         }
@@ -3993,30 +3999,70 @@ final class ManagerController extends Controller
         if (!is_array($items) || empty($items)) {
             $this->flash('error', 'At least one product must be added to request a purchase order.');
             $this->redirect($invRedirect);
+            return;
         }
 
         $validItems = [];
+        $seenProducts = [];
         foreach ($items as $it) {
             $bpId = (int)($it['business_product_id'] ?? 0);
             $qty = (int)($it['quantity_requested'] ?? 0);
-            if ($bpId > 0 && $qty > 0) {
-                $validItems[] = [
-                    'business_product_id' => $bpId,
-                    'quantity_requested' => $qty,
-                    'notes' => trim((string)($it['notes'] ?? '')),
-                ];
+            if ($bpId > 0) {
+                if (isset($seenProducts[$bpId])) {
+                    $this->flash('error', 'Duplicate product entries are not permitted in a single purchase order request.');
+                    $this->redirect($invRedirect);
+                    return;
+                }
+                $seenProducts[$bpId] = true;
+                if ($qty > 0) {
+                    $validItems[] = [
+                        'business_product_id' => $bpId,
+                        'quantity_requested' => $qty,
+                        'notes' => trim((string)($it['notes'] ?? '')),
+                    ];
+                }
             }
         }
 
         if (empty($validItems)) {
             $this->flash('error', 'Please provide a valid quantity greater than zero for at least one product.');
             $this->redirect($invRedirect);
+            return;
+        }
+
+        // Validate product ownership for the unit
+        $bpIds = array_column($validItems, 'business_product_id');
+        $inClause = implode(',', array_map('intval', $bpIds));
+        $chkStmt = $this->db->query("SELECT business_product_id FROM business_product WHERE business_product_id IN ($inClause) AND business_unit_id = " . (int)$unitId);
+        $validUnitBpIds = $chkStmt ? $chkStmt->fetchAll(PDO::FETCH_COLUMN) : [];
+        if (count($validUnitBpIds) !== count($bpIds)) {
+            $this->flash('error', 'One or more requested products do not belong to the selected business unit.');
+            $this->redirect($invRedirect);
+            return;
         }
 
         $reason = trim((string)($_POST['reason'] ?? ''));
         if ($reason === '') {
             $this->flash('error', 'Please specify a reason for requesting stock replenishment.');
             $this->redirect($invRedirect);
+            return;
+        }
+
+        // Validate approved reasons for Grooming Services
+        if ((int)$unitId === 3) {
+            $groomingReasons = [
+                'Low Stock',
+                'Increased Usage',
+                'Increased Service Demand',
+                'Routine Restocking',
+                'Damaged / Unusable Supplies',
+                'New Service Requirements',
+            ];
+            if (!in_array($reason, $groomingReasons, true)) {
+                $this->flash('error', 'Invalid reason for Grooming Services stock replenishment.');
+                $this->redirect($invRedirect);
+                return;
+            }
         }
 
         $priority = trim((string)($_POST['priority'] ?? 'Medium'));
@@ -4127,7 +4173,7 @@ final class ManagerController extends Controller
             $this->forbidden('Temporary inventory access keys do not grant access to the employee roster.');
         }
 
-        if ($isInventoryManagerOnly && (int)$unitId !== 1) {
+        if ($isInventoryManagerOnly && !in_array((int)$unitId, [1, 3], true)) {
             $this->forbidden('Access denied: you cannot access another business unit.');
         }
 

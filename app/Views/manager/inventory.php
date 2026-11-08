@@ -941,12 +941,21 @@ $isInvManager = !empty($isInventoryManagerOnly);
           <label for="por-reason" class="caption" style="display: block; margin-bottom: 0.25rem;">Reason for Request <span style="color: var(--danger, #dc2626);">*</span></label>
           <select id="por-reason" name="reason" required style="width: 100%;">
             <option value="">Select a reason...</option>
-            <option value="Low stock replenishment">Low stock replenishment</option>
-            <option value="Out of stock emergency">Out of stock emergency</option>
-            <option value="Upcoming seasonal demand">Upcoming seasonal demand</option>
-            <option value="Anticipated customer pre-orders">Anticipated customer pre-orders</option>
-            <option value="Supplier minimum order quantity threshold">Supplier minimum order quantity threshold</option>
-            <option value="Routine stock replenishment">Routine stock replenishment</option>
+            <?php if ((int)$unitId === 3): ?>
+              <option value="Low Stock">Low Stock</option>
+              <option value="Increased Usage">Increased Usage</option>
+              <option value="Increased Service Demand">Increased Service Demand</option>
+              <option value="Routine Restocking">Routine Restocking</option>
+              <option value="Damaged / Unusable Supplies">Damaged / Unusable Supplies</option>
+              <option value="New Service Requirements">New Service Requirements</option>
+            <?php else: ?>
+              <option value="Low stock replenishment">Low stock replenishment</option>
+              <option value="Out of stock emergency">Out of stock emergency</option>
+              <option value="Upcoming seasonal demand">Upcoming seasonal demand</option>
+              <option value="Anticipated customer pre-orders">Anticipated customer pre-orders</option>
+              <option value="Supplier minimum order quantity threshold">Supplier minimum order quantity threshold</option>
+              <option value="Routine stock replenishment">Routine stock replenishment</option>
+            <?php endif; ?>
           </select>
         </div>
 

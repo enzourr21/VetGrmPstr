@@ -91,8 +91,13 @@ final class AuthController extends Controller
         if (in_array('BUSINESS_MANAGER', $roleNames, true)) {
             return '/manager';
         }
-        if (in_array('INVENTORY_MANAGER', $roleNames, true)) {
-            return '/manager/orders';
+        foreach ($roles as $r) {
+            if ($r['role_name'] === 'INVENTORY_MANAGER') {
+                if ($r['business_unit_name'] === Units::GROOMING) {
+                    return '/manager/inventory';
+                }
+                return '/manager/orders';
+            }
         }
         foreach ($roles as $r) {
             if ($r['role_name'] === 'RECEPTIONIST' && $r['business_unit_name'] === Units::GROOMING) {
@@ -526,13 +531,19 @@ final class AuthController extends Controller
             Session::forget('inventory_manager_mode');
             if (!$isSuper) {
                 $chkRole = $this->db->prepare(
-                    "SELECT r.role_name FROM account_role ar JOIN role r ON r.role_id = ar.role_id WHERE ar.user_account_id = ? AND r.role_name IN ('BUSINESS_MANAGER', 'INVENTORY_MANAGER')"
+                    "SELECT ar.business_unit_id, r.role_name FROM account_role ar JOIN role r ON r.role_id = ar.role_id WHERE ar.user_account_id = ? AND r.role_name IN ('BUSINESS_MANAGER', 'INVENTORY_MANAGER')"
                 );
                 $chkRole->execute([(int)$uid]);
-                $userRoles = $chkRole->fetchAll(PDO::FETCH_COLUMN);
+                $userRoleRows = $chkRole->fetchAll();
+                $userRoles = array_column($userRoleRows, 'role_name');
                 if (in_array('INVENTORY_MANAGER', $userRoles, true) && !in_array('BUSINESS_MANAGER', $userRoles, true)) {
                     Session::set('inventory_manager_mode', true);
-                    $this->redirect('/manager/orders' . $unitQuery);
+                    $uId = (int)($unitId ?? $userRoleRows[0]['business_unit_id'] ?? 1);
+                    if ($uId === 1) {
+                        $this->redirect('/manager/orders' . $unitQuery);
+                    } else {
+                        $this->redirect('/manager/inventory' . $unitQuery);
+                    }
                     return;
                 }
             }

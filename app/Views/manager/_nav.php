@@ -77,15 +77,20 @@ $isTempInv = !empty($isTempKeyAccess);
     <?php endif; ?>
   </nav>
 <?php elseif ($isGrooming): ?>
-  <nav class="admin-subnav" aria-label="Grooming Services Business Manager navigation">
-    <a href="/manager<?= $unitQuery ?>" class="segmented-pill <?= $tab === 'overview' ? 'is-active' : '' ?>">Overview</a>
-    <a href="/manager/appointments<?= $unitQuery ?>" class="segmented-pill <?= $tab === 'appointments' ? 'is-active' : '' ?>">Appointments</a>
-    <a href="/manager/employees<?= $unitQuery ?>" class="segmented-pill <?= $tab === 'employees' ? 'is-active' : '' ?>">Employees</a>
-    <a href="/manager/services<?= $unitQuery ?>" class="segmented-pill <?= $tab === 'services' ? 'is-active' : '' ?>">Services</a>
-    <a href="/manager/inventory<?= $unitQuery ?>" class="segmented-pill <?= $tab === 'inventory' ? 'is-active' : '' ?>">Inventory</a>
-    <?php if (empty($isInventoryManagerOnly)): ?>
+  <?php if (!empty($isInventoryManagerOnly)): ?>
+    <nav class="admin-subnav" aria-label="Grooming Services Inventory Manager navigation">
+      <a href="/manager/inventory<?= $unitQuery ?>" class="segmented-pill <?= $tab === 'inventory' ? 'is-active' : '' ?>">Inventory</a>
+      <a href="/manager/employees<?= $unitQuery ?>" class="segmented-pill <?= $tab === 'employees' ? 'is-active' : '' ?>">Employees</a>
+    </nav>
+  <?php else: ?>
+    <nav class="admin-subnav" aria-label="Grooming Services Business Manager navigation">
+      <a href="/manager<?= $unitQuery ?>" class="segmented-pill <?= $tab === 'overview' ? 'is-active' : '' ?>">Overview</a>
+      <a href="/manager/appointments<?= $unitQuery ?>" class="segmented-pill <?= $tab === 'appointments' ? 'is-active' : '' ?>">Appointments</a>
+      <a href="/manager/employees<?= $unitQuery ?>" class="segmented-pill <?= $tab === 'employees' ? 'is-active' : '' ?>">Employees</a>
+      <a href="/manager/services<?= $unitQuery ?>" class="segmented-pill <?= $tab === 'services' ? 'is-active' : '' ?>">Services</a>
+      <a href="/manager/inventory<?= $unitQuery ?>" class="segmented-pill <?= $tab === 'inventory' ? 'is-active' : '' ?>">Inventory</a>
       <a href="/manager/settings<?= $unitQuery ?>" class="segmented-pill <?= $tab === 'settings' ? 'is-active' : '' ?>">Business Settings</a>
-    <?php endif; ?>
-  </nav>
+    </nav>
+  <?php endif; ?>
 <?php endif; ?>
 <?php endif; ?>
