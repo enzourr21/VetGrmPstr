@@ -3333,7 +3333,7 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
 /* Speech-Bubble Dialogue Box with Pointer / Tail */
 .grooming-speech-bubble {
   position: absolute;
-  z-index: 30;
+  z-index: 100;
   width: 360px;
   max-width: calc(100vw - 2rem);
   background: #ffffff;

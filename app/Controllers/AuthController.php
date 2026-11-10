@@ -104,6 +104,9 @@ final class AuthController extends Controller
                 if ($r['business_unit_name'] === Units::PET_STORE || (int)($r['business_unit_id'] ?? 0) === 1) {
                     return '/petstore/receptionist/sales';
                 }
+                if ($r['business_unit_name'] === Units::VET_CLINIC || (int)($r['business_unit_id'] ?? 0) === 2) {
+                    return '/vetclinic/receptionist/overview';
+                }
                 if ($r['business_unit_name'] === Units::GROOMING || (int)($r['business_unit_id'] ?? 0) === 3) {
                     return '/grooming/receptionist/overview';
                 }
@@ -636,11 +639,33 @@ final class AuthController extends Controller
             return;
         }
 
-        // 4e. General Receptionist Switcher Target with unit_id
+        // 4e. Veterinary Clinic Receptionist Interface
+        if ($target === 'vetclinic-receptionist' || $target === 'vetclinic_receptionist' || $target === 'vet-receptionist') {
+            if (!$isSuper) {
+                $stmt = $this->db->prepare(
+                    "SELECT 1 FROM account_role ar
+                     JOIN role r ON r.role_id = ar.role_id
+                     WHERE ar.user_account_id = ? AND ar.business_unit_id = 2 AND r.role_name = 'RECEPTIONIST'
+                     LIMIT 1"
+                );
+                $stmt->execute([(int)$uid]);
+                if (!$stmt->fetchColumn()) {
+                    $this->forbidden('Veterinary Clinic Receptionist authorization is required.');
+                }
+            }
+            Session::set('active_context', 'employee');
+            Session::forget('inventory_manager_mode');
+            $this->redirect('/vetclinic/receptionist/overview');
+            return;
+        }
+
+        // 4f. General Receptionist Switcher Target with unit_id
         if ($target === 'receptionist') {
             $uId = isset($_GET['unit_id']) ? (int)$_GET['unit_id'] : 1;
             if ($uId === 3) {
                 $this->redirect('/switch-interface?target=grooming-receptionist');
+            } elseif ($uId === 2) {
+                $this->redirect('/switch-interface?target=vetclinic-receptionist');
             } else {
                 $this->redirect('/switch-interface?target=petstore-receptionist');
             }

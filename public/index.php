@@ -187,6 +187,24 @@ $r->get('/grooming/receptionist/records', 'GroomingReceptionistController', 'rec
 $r->get('/grooming/receptionist/records/{id}', 'GroomingReceptionistController', 'recordDetails');
 $r->get('/grooming/receptionist/employees', 'GroomingReceptionistController', 'employees');
 
+// Veterinary Clinic Receptionist Interface
+$r->get('/vetclinic/receptionist', 'VetClinicReceptionistController', 'overview');
+$r->get('/vetclinic/receptionist/overview', 'VetClinicReceptionistController', 'overview');
+$r->get('/vetclinic/receptionist/appointments', 'VetClinicReceptionistController', 'appointments');
+$r->post('/vetclinic/receptionist/appointments/requests/{id}/accept', 'VetClinicReceptionistController', 'acceptRequest');
+$r->post('/vetclinic/receptionist/appointments/requests/{id}/propose', 'VetClinicReceptionistController', 'proposeSchedule');
+$r->post('/vetclinic/receptionist/appointments/requests/{id}/reject', 'VetClinicReceptionistController', 'rejectRequest');
+$r->post('/vetclinic/receptionist/appointments/walk-in', 'VetClinicReceptionistController', 'createWalkIn');
+$r->get('/vetclinic/receptionist/customers/search', 'VetClinicReceptionistController', 'searchCustomers');
+$r->get('/vetclinic/receptionist/customers/{id}/pets', 'VetClinicReceptionistController', 'customerPets');
+$r->get('/vetclinic/receptionist/billing', 'VetClinicReceptionistController', 'billing');
+$r->get('/vetclinic/receptionist/billing/search-appointments', 'VetClinicReceptionistController', 'searchBillingAppointments');
+$r->get('/vetclinic/receptionist/billing/appointments/{id}', 'VetClinicReceptionistController', 'billingAppointmentDetails');
+$r->post('/vetclinic/receptionist/billing/settle', 'VetClinicReceptionistController', 'settleBilling');
+$r->get('/vetclinic/receptionist/records', 'VetClinicReceptionistController', 'records');
+$r->get('/vetclinic/receptionist/records/{id}', 'VetClinicReceptionistController', 'recordDetails');
+$r->get('/vetclinic/receptionist/employees', 'VetClinicReceptionistController', 'employees');
+
 // System Administrator Interface (Business-Unit Scoped)
 $r->get('/sysadmin', 'SysAdminController', 'dashboard');
 $r->get('/sysadmin/units/{id}', 'SysAdminController', 'dashboard');

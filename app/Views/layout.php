@@ -8,6 +8,7 @@ $isWorkspaceRoute = str_starts_with($curPath, '/super-admin')
     || str_starts_with($curPath, '/manager')
     || str_starts_with($curPath, '/petstore/receptionist')
     || str_starts_with($curPath, '/grooming/receptionist')
+    || str_starts_with($curPath, '/vetclinic/receptionist')
     || (str_starts_with($curPath, '/staff') && !str_starts_with($curPath, '/staffs') && $curPath !== '/staff/login');
 
 // Staff / Administrator identification & role resolution
@@ -90,6 +91,8 @@ if ($isSignedIn && $baseContext === 'employee') {
 // Active Business Unit identification
 if (str_starts_with($curPath, '/petstore/receptionist')) {
     $activeUnitId = 1;
+} elseif (str_starts_with($curPath, '/vetclinic/receptionist')) {
+    $activeUnitId = 2;
 } elseif (str_starts_with($curPath, '/grooming/receptionist')) {
     $activeUnitId = 3;
 } elseif (preg_match('#/units/(\d+)#', $curPath, $matches)) {
@@ -197,9 +200,9 @@ if ($isSignedIn && $baseContext === 'employee') {
                 ],
                 [
                     'id' => 2,
-                    'name' => 'Veterinary Clinic (Coming Soon)',
-                    'url' => '#',
-                    'disabled' => true,
+                    'name' => 'Veterinary Clinic',
+                    'url' => '/switch-interface?target=vetclinic-receptionist',
+                    'disabled' => false,
                 ],
                 [
                     'id' => 3,
@@ -208,7 +211,7 @@ if ($isSignedIn && $baseContext === 'employee') {
                     'disabled' => false,
                 ],
             ],
-            'active' => (str_starts_with($curPath, '/petstore/receptionist') || str_starts_with($curPath, '/grooming/receptionist')) && $activeContext !== 'customer',
+            'active' => (str_starts_with($curPath, '/petstore/receptionist') || str_starts_with($curPath, '/grooming/receptionist') || str_starts_with($curPath, '/vetclinic/receptionist')) && $activeContext !== 'customer',
         ];
         $authorizedInterfaces[] = [
             'id' => 'employee',
@@ -295,6 +298,13 @@ if ($isSignedIn && $baseContext === 'employee') {
                         'url' => '/switch-interface?target=petstore-receptionist',
                         'disabled' => false,
                     ];
+                } elseif ($buId === 2) {
+                    $receptionistUnits[] = [
+                        'id' => 2,
+                        'name' => 'Veterinary Clinic',
+                        'url' => '/switch-interface?target=vetclinic-receptionist',
+                        'disabled' => false,
+                    ];
                 } elseif ($buId === 3) {
                     $receptionistUnits[] = [
                         'id' => 3,
@@ -311,7 +321,7 @@ if ($isSignedIn && $baseContext === 'employee') {
                 'label' => 'Receptionist',
                 'hasUnits' => true,
                 'units' => $receptionistUnits,
-                'active' => (str_starts_with($curPath, '/petstore/receptionist') || str_starts_with($curPath, '/grooming/receptionist')) && $activeContext !== 'customer',
+                'active' => (str_starts_with($curPath, '/petstore/receptionist') || str_starts_with($curPath, '/grooming/receptionist') || str_starts_with($curPath, '/vetclinic/receptionist')) && $activeContext !== 'customer',
             ];
         }
         $authorizedInterfaces[] = [
@@ -328,6 +338,7 @@ $inStaffWorkspace = $isSignedIn && $baseContext === 'employee' && $activeContext
 $showCustomerNav = $isSignedIn && ((bool)\App\Core\Session::get('customer_id') || $activeContext === 'customer' || !$isWorkspaceRoute);
 $isAuthSignInOrOut = str_starts_with($curPath, '/login') || str_starts_with($curPath, '/staff/login') || str_starts_with($curPath, '/logout');
 $isCalendarView = str_starts_with($curPath, '/grooming/receptionist/appointments')
+    || str_starts_with($curPath, '/vetclinic/receptionist/appointments')
     || str_starts_with($curPath, '/manager/appointments');
 $unitQuery = ($isSuperAdmin && isset($_GET['unit_id']) && ctype_digit((string)$_GET['unit_id'])) ? '?unit_id=' . (int)$_GET['unit_id'] : '';
 ?>
@@ -425,6 +436,13 @@ $unitQuery = ($isSuperAdmin && isset($_GET['unit_id']) && ctype_digit((string)$_
       <a href="/grooming/receptionist/billing" class="<?= str_starts_with($curPath, '/grooming/receptionist/billing') ? 'is-current' : '' ?>">Billing</a>
       <a href="/grooming/receptionist/records" class="<?= str_starts_with($curPath, '/grooming/receptionist/records') ? 'is-current' : '' ?>">Records</a>
       <a href="/grooming/receptionist/employees" class="<?= str_starts_with($curPath, '/grooming/receptionist/employees') ? 'is-current' : '' ?>">Employees</a>
+
+  <?php elseif (str_starts_with($curPath, '/vetclinic/receptionist')): ?>
+      <a href="/vetclinic/receptionist/overview" class="<?= str_starts_with($curPath, '/vetclinic/receptionist/overview') ? 'is-current' : '' ?>">Overview</a>
+      <a href="/vetclinic/receptionist/appointments" class="<?= str_starts_with($curPath, '/vetclinic/receptionist/appointments') ? 'is-current' : '' ?>">Appointments</a>
+      <a href="/vetclinic/receptionist/billing" class="<?= str_starts_with($curPath, '/vetclinic/receptionist/billing') ? 'is-current' : '' ?>">Billing</a>
+      <a href="/vetclinic/receptionist/records" class="<?= str_starts_with($curPath, '/vetclinic/receptionist/records') ? 'is-current' : '' ?>">Records</a>
+      <a href="/vetclinic/receptionist/employees" class="<?= str_starts_with($curPath, '/vetclinic/receptionist/employees') ? 'is-current' : '' ?>">Employees</a>
 
   <?php elseif (str_starts_with($curPath, '/staff') || $curPath === '/workspace'): ?>
       <a href="/staff/workspace" class="<?= ($curPath === '/staff/workspace' || $curPath === '/workspace') ? 'is-current' : '' ?>">Workspace</a>
