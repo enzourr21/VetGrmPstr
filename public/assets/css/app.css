@@ -359,6 +359,7 @@ main {
   opacity: 1;
   transform: translateY(0);
   transition: opacity var(--dur-ui) var(--ease-out), transform var(--dur-ui) var(--ease-out);
+  scroll-margin-top: 5rem;
 }
 
 @starting-style {
@@ -378,17 +379,43 @@ main {
   margin: 1.5rem auto;
 }
 
+/* Page Header & Spacing below Floating Topbar */
+.page-head,
 .page-header {
   display: flex;
   flex-wrap: wrap;
   gap: 1rem;
-  align-items: flex-end;
+  align-items: flex-start;
   justify-content: space-between;
-  margin-bottom: 1.65rem;
+  margin-top: 0.25rem;
+  margin-bottom: 1.5rem;
 }
 
+.page-head .eyebrow,
+.page-header .eyebrow {
+  margin: 0 0 0.25rem 0;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--brand, #0e8a75);
+  line-height: 1.2;
+}
+
+.page-head h1,
 .page-header h1 {
-  margin-bottom: 0.2rem;
+  margin: 0 0 0.35rem 0;
+  font-size: 1.85rem;
+  font-weight: 750;
+  line-height: 1.2;
+  color: var(--ink, #111827);
+}
+
+.page-head .muted,
+.page-header .muted {
+  margin: 0;
+  color: var(--muted, #6b7280);
+  line-height: 1.4;
 }
 
 .section-header {
@@ -1801,29 +1828,6 @@ body:not(.js-pet-world-ready) .anim-bunny-ear-right {
 /* ==========================================================================
    Super Administrator, System Administrator & Workspace Components
    ========================================================================== */
-.admin-workspace-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.75rem 1.15rem;
-  margin-bottom: 1rem;
-  background: var(--surface-tint);
-  border: 1px solid rgba(13, 110, 87, 0.2);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-xs);
-}
-
-.admin-subnav {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 0.35rem;
-  padding: 0.35rem;
-  margin-bottom: 1.65rem;
-  background: var(--bg-subtle);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-}
-
 .unit-pill {
   display: inline-flex;
   align-items: center;
@@ -2466,21 +2470,17 @@ body.has-modal-open {
    - Both Main Website Navigation (.topbar nav) & Admin Subnav (.admin-subnav)
    ========================================================================== */
 
-.topbar nav,
-.admin-subnav {
+.topbar nav {
   position: relative;
 }
 
-.topbar nav a,
-.admin-subnav a {
+.topbar nav a {
   position: relative;
 }
 
 /* Green dot beside active navigation item */
 .topbar nav a.is-current::before,
 .topbar nav a.is-active::before,
-.admin-subnav a.is-active::before,
-.admin-subnav a.is-current::before,
 .segmented-bar a.segmented-pill.is-active::before,
 .segmented-bar .segmented-pill.is-active::before {
   content: "";
@@ -2503,9 +2503,7 @@ body.has-modal-open {
 
 /* Static fallback underline (SSR or non-JS) */
 .topbar nav:not(.has-nav-indicator) a.is-current::after,
-.topbar nav:not(.has-nav-indicator) a.is-active::after,
-.admin-subnav:not(.has-nav-indicator) a.is-active::after,
-.admin-subnav:not(.has-nav-indicator) a.is-current::after {
+.topbar nav:not(.has-nav-indicator) a.is-active::after {
   content: "";
   position: absolute;
   left: 0.65rem;
@@ -2539,10 +2537,6 @@ body.has-modal-open {
   z-index: 2;
 }
 
-.admin-subnav .nav-active-indicator {
-  bottom: 2px;
-}
-
 @media (hover: hover) and (pointer: fine) {
   .role-option:hover:not([disabled]) {
     border-color: var(--brand);
@@ -2570,8 +2564,7 @@ body.has-modal-open {
   .role-option,
   .role-chip-remove,
   .nav-active-indicator,
-  .topbar nav a.is-current::before,
-  .admin-subnav a.is-active::before {
+  .topbar nav a.is-current::before {
     transform: none !important;
     animation: none !important;
     transition: opacity 120ms linear !important;
@@ -3090,14 +3083,44 @@ body.has-modal-open {
   }
 }
 
+/* =========================================================================
+   Spacious, Readable Weekly Calendar Layout (Unconstrained by side rails)
+   ========================================================================= */
+body.has-calendar-view main,
+body:has(.grooming-weekly-calendar-card) main {
+  max-width: min(96vw, 1440px);
+  width: 100%;
+  padding-left: 1.5rem;
+  padding-right: 1.5rem;
+  padding-top: 1.5rem;
+  scroll-margin-top: 5rem;
+}
+
+body.has-calendar-view .topbar-inner,
+body:has(.grooming-weekly-calendar-card) .topbar-inner {
+  max-width: min(96vw, 1440px);
+  padding-left: 1.5rem;
+  padding-right: 1.5rem;
+}
+
+body.has-calendar-view .scenic-rail,
+body:has(.grooming-weekly-calendar-card) .scenic-rail {
+  display: none !important;
+}
+
 .grooming-weekly-calendar-card {
   padding: 0;
-  overflow: visible;
+  overflow-x: auto;
+  overflow-y: visible;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  background: #ffffff;
 }
 
 .grooming-cal-header-grid {
   display: grid;
-  grid-template-columns: 72px repeat(7, minmax(0, 1fr));
+  grid-template-columns: 72px repeat(7, minmax(115px, 1fr));
+  min-width: 880px;
   border-bottom: 1px solid var(--line-strong);
   background: var(--surface-subtle);
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
@@ -3123,6 +3146,7 @@ body.has-modal-open {
   flex-direction: column;
   align-items: center;
   gap: 0.2rem;
+  min-width: 0;
 }
 
 .grooming-cal-day-head:last-child {
@@ -3139,6 +3163,7 @@ body.has-modal-open {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--muted);
+  white-space: nowrap;
 }
 
 .grooming-cal-day-num {
@@ -3147,6 +3172,7 @@ body.has-modal-open {
   color: var(--ink);
   padding: 0.15rem 0.5rem;
   border-radius: 999px;
+  white-space: nowrap;
 }
 
 .grooming-cal-day-num.is-today-pill {
@@ -3156,11 +3182,12 @@ body.has-modal-open {
 
 .grooming-cal-body-wrap {
   position: relative;
+  min-width: 880px;
 }
 
 .grooming-cal-body-grid {
   display: grid;
-  grid-template-columns: 72px repeat(7, minmax(0, 1fr));
+  grid-template-columns: 72px repeat(7, minmax(115px, 1fr));
   position: relative;
 }
 
@@ -3213,42 +3240,65 @@ body.has-modal-open {
   flex-direction: column;
   align-items: flex-start;
   justify-content: flex-start;
-  padding: 0.3rem 0.45rem;
+  padding: 0.28rem 0.45rem;
   border-radius: 6px;
   text-align: left;
   cursor: pointer;
-  overflow: hidden;
-  box-shadow: var(--shadow-xs);
-  transition: transform var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+  box-sizing: border-box;
+  min-height: 46px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  transition: transform var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out), z-index var(--dur-fast);
   font-family: inherit;
+  overflow: hidden;
 }
 
 .grooming-cal-appt-block:hover,
 .grooming-cal-appt-block.is-selected {
-  z-index: 5;
+  z-index: 10;
   transform: translateY(-1px);
-  box-shadow: var(--shadow-md);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
 .grooming-cal-appt-block.is-selected {
-  outline: 2px solid var(--ink);
+  outline: 2px solid var(--brand, #0e8a75);
   outline-offset: 1px;
 }
 
 .grooming-cal-block-id {
   display: block;
-  font-size: 0.82rem;
+  font-size: 0.78rem;
   font-weight: 800;
   line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 100%;
 }
 
 .grooming-cal-block-time {
   display: block;
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   font-weight: 600;
-  line-height: 1.2;
-  margin-top: 0.1rem;
+  line-height: 1.15;
+  margin-top: 0.12rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 100%;
   opacity: 0.92;
+}
+
+.grooming-cal-block-customer {
+  display: block;
+  font-size: 0.66rem;
+  font-weight: 500;
+  line-height: 1.1;
+  margin-top: 0.1rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 100%;
+  opacity: 0.85;
 }
 
 /* 4 Established Appointment Status Colors: Red, Green, Yellow, Transparent */

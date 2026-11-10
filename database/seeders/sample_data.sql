@@ -146,3 +146,43 @@ UPDATE employee e
 JOIN account_role ar ON ar.user_account_id = e.user_account_id
 SET e.business_unit_id = ar.business_unit_id
 WHERE e.business_unit_id IS NULL;
+
+-- [SAMPLE] Registered Customers and Registered Pets for Development & Testing
+-- Idempotent: safe to run repeatedly; uses NOT EXISTS / UNIQUE email checks.
+INSERT IGNORE INTO user_account (email, password_hash, account_status) VALUES
+ ('oliver.vance.sample@vetgrpet.local', '$2y$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ01234', 'active'),
+ ('sophia.martinez.sample@vetgrpet.local', '$2y$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ01234', 'active'),
+ ('liam.gallagher.sample@vetgrpet.local', '$2y$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ01234', 'active'),
+ ('emma.watson.sample@vetgrpet.local', '$2y$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ01234', 'active'),
+ ('noah.bennett.sample@vetgrpet.local', '$2y$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ01234', 'active');
+
+INSERT INTO customer (user_account_id, first_name, last_name, phone, address_line1, city, province, postal_code, customer_status)
+SELECT ua.user_account_id, c.first_name, c.last_name, c.phone, c.address_line1, c.city, c.province, c.postal_code, 'active'
+FROM (
+  SELECT 'oliver.vance.sample@vetgrpet.local' AS email, 'Oliver' AS first_name, 'Vance' AS last_name, '555-0101' AS phone, '123 Pinecrest Ave' AS address_line1, 'Sample City' AS city, 'Metro Province' AS province, '1001' AS postal_code
+  UNION ALL SELECT 'sophia.martinez.sample@vetgrpet.local', 'Sophia', 'Martinez', '555-0102', '456 Oakwood Blvd', 'Sample City', 'Metro Province', '1002'
+  UNION ALL SELECT 'liam.gallagher.sample@vetgrpet.local', 'Liam', 'Gallagher', '555-0103', '789 Birch Lane', 'Sample City', 'Metro Province', '1003'
+  UNION ALL SELECT 'emma.watson.sample@vetgrpet.local', 'Emma', 'Watson', '555-0104', '321 Maple St', 'Sample City', 'Metro Province', '1004'
+  UNION ALL SELECT 'noah.bennett.sample@vetgrpet.local', 'Noah', 'Bennett', '555-0105', '654 Cedar Way', 'Sample City', 'Metro Province', '1005'
+) c
+JOIN user_account ua ON ua.email = c.email
+WHERE NOT EXISTS (
+  SELECT 1 FROM customer cust WHERE cust.user_account_id = ua.user_account_id
+);
+
+INSERT INTO pet (customer_id, pet_name, species, breed, sex, date_of_birth, weight_kg, color_markings, notes, pet_status)
+SELECT cust.customer_id, p.pet_name, p.species, p.breed, p.sex, p.date_of_birth, p.weight_kg, p.color_markings, p.notes, 'active'
+FROM (
+  SELECT 'oliver.vance.sample@vetgrpet.local' AS email, 'Barnaby' AS pet_name, 'Dog' AS species, 'Golden Retriever' AS breed, 'male' AS sex, '2021-04-12' AS date_of_birth, 28.50 AS weight_kg, 'Golden cream' AS color_markings, '[SAMPLE] Friendly retriever.' AS notes
+  UNION ALL SELECT 'oliver.vance.sample@vetgrpet.local', 'Whiskers', 'Cat', 'Domestic Shorthair', 'female', '2023-01-10', 4.20, 'Calico', '[SAMPLE] Quiet and curious.'
+  UNION ALL SELECT 'sophia.martinez.sample@vetgrpet.local', 'Bella', 'Dog', 'French Bulldog', 'female', '2022-08-19', 11.00, 'Brindle', '[SAMPLE] Playful frenchie.'
+  UNION ALL SELECT 'liam.gallagher.sample@vetgrpet.local', 'Milo', 'Cat', 'Maine Coon', 'male', '2020-11-05', 7.80, 'Tabby grey', '[SAMPLE] Large gentle giant.'
+  UNION ALL SELECT 'liam.gallagher.sample@vetgrpet.local', 'Pip', 'Bird', 'Canary', 'unknown', '2023-05-14', 0.05, 'Yellow feathering', '[SAMPLE] Healthy canary.'
+  UNION ALL SELECT 'emma.watson.sample@vetgrpet.local', 'Daisy', 'Rabbit', 'Holland Lop', 'female', '2022-03-22', 1.80, 'White & brown patches', '[SAMPLE] Sweet pet rabbit.'
+  UNION ALL SELECT 'noah.bennett.sample@vetgrpet.local', 'Rocky', 'Dog', 'German Shepherd', 'male', '2021-09-30', 34.00, 'Black & tan', '[SAMPLE] Active working dog.'
+) p
+JOIN user_account ua ON ua.email = p.email
+JOIN customer cust ON cust.user_account_id = ua.user_account_id
+WHERE NOT EXISTS (
+  SELECT 1 FROM pet existing WHERE existing.customer_id = cust.customer_id AND existing.pet_name = p.pet_name
+);

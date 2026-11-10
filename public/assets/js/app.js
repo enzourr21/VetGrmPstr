@@ -811,19 +811,6 @@
           return false;
         },
         activeClass: 'is-current'
-      },
-      {
-        container: document.querySelector('.admin-subnav'),
-        storageKey: 'vetgrpet_subnav_active_rect',
-        isCurrent: function (link, pathname) {
-          if (link.classList.contains('is-active')) return true;
-          var linkPath = link.getAttribute('href');
-          if (!linkPath || linkPath.startsWith('#')) return false;
-          linkPath = linkPath.split('?')[0].replace(/\/+$/, '') || '/';
-          var cleanCurrent = pathname.replace(/\/+$/, '') || '/';
-          return linkPath === cleanCurrent;
-        },
-        activeClass: 'is-active'
       }
     ];
 

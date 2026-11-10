@@ -262,6 +262,52 @@ require __DIR__ . '/_nav.php';
       </article>
     <?php endif; ?>
   </div>
+
+  <?php if ((int)$unitId !== \App\Models\Units::petStoreId()): ?>
+    <div style="margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--line, #e2e8f0);">
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; margin-bottom: 0.85rem;">
+        <div>
+          <h3 style="margin: 0 0 0.25rem 0; font-size: 1.05rem; font-weight: 700; color: var(--ink);">
+            Appointment Scheduling &amp; Overlap Policy
+          </h3>
+          <p class="caption muted" style="margin: 0; line-height: 1.45; font-size: 0.84rem;">
+            Configure the allowed appointment time overlap for <?= e($unitName) ?>.
+          </p>
+        </div>
+        <span class="badge secondary" style="font-weight: 600;">Configurable Policy</span>
+      </div>
+
+      <form method="post" action="/manager/settings/overlap<?= $unitQuery ?>" id="appointment-overlap-form" style="background: var(--surface-subtle, #f8fafc); border: 1px solid var(--line, #e2e8f0); border-radius: var(--radius-md, 8px); padding: 1.25rem;">
+        <?= \App\Core\CSRF::field() ?>
+
+        <div class="field" style="margin-bottom: 1rem; max-width: 440px;">
+          <label for="max-appointment-overlap-minutes" style="display: block; font-weight: 600; font-size: 0.88rem; margin-bottom: 0.35rem;">
+            Maximum Appointment Overlap (Minutes) *
+          </label>
+          <input type="number"
+                 id="max-appointment-overlap-minutes"
+                 name="max_appointment_overlap_minutes"
+                 min="0"
+                 step="1"
+                 required
+                 value="<?= (int)($settings['max_appointment_overlap_minutes'] ?? 15) ?>"
+                 style="width: 100%; height: 40px; font-size: 0.92rem;">
+          <p class="caption" style="margin: 0.4rem 0 0 0; color: var(--muted); font-size: 0.82rem; line-height: 1.45;">
+            Defines the maximum number of minutes that two appointments may overlap. Appointments with identical start times are always prohibited.
+          </p>
+        </div>
+
+        <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
+          <button type="submit" class="btn primary" id="save-overlap-btn" style="height: 38px; padding: 0 1.25rem; font-weight: 600;">
+            Save Overlap Setting
+          </button>
+          <span class="caption muted" style="font-size: 0.84rem;">
+            Currently saved: <strong id="current-overlap-val"><?= (int)($settings['max_appointment_overlap_minutes'] ?? 15) ?> minutes</strong>
+          </span>
+        </div>
+      </form>
+    </div>
+  <?php endif; ?>
 </section>
 
 <!-- SECTION 4: TRANSACTION SETTINGS -->

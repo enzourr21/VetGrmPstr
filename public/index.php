@@ -154,6 +154,38 @@ $r->post('/manager/settings/verify-otp', 'ManagerController', 'verifyOtp');
 $r->post('/manager/units/{id}/settings/verify-otp', 'ManagerController', 'verifyOtp');
 $r->post('/manager/settings/payment', 'ManagerController', 'updatePaymentSettings');
 $r->post('/manager/units/{id}/settings/payment', 'ManagerController', 'updatePaymentSettings');
+$r->post('/manager/settings/overlap', 'ManagerController', 'updateOverlapSettings');
+$r->post('/manager/units/{id}/settings/overlap', 'ManagerController', 'updateOverlapSettings');
+
+// Pet Store Receptionist Interface
+$r->get('/petstore/receptionist', 'PetStoreReceptionistController', 'sales');
+$r->get('/petstore/receptionist/sales', 'PetStoreReceptionistController', 'sales');
+$r->post('/petstore/receptionist/sales', 'PetStoreReceptionistController', 'createSale');
+$r->get('/petstore/receptionist/customers/search', 'PetStoreReceptionistController', 'searchCustomers');
+$r->get('/petstore/receptionist/products/search', 'PetStoreReceptionistController', 'searchProducts');
+$r->get('/petstore/receptionist/orders', 'PetStoreReceptionistController', 'orders');
+$r->get('/petstore/receptionist/orders/{id}', 'PetStoreReceptionistController', 'showOrder');
+$r->post('/petstore/receptionist/orders/{id}/status', 'PetStoreReceptionistController', 'updatePickupStatus');
+$r->post('/petstore/receptionist/orders/{id}/reschedule', 'PetStoreReceptionistController', 'rescheduleDelivery');
+$r->get('/petstore/receptionist/employees', 'PetStoreReceptionistController', 'employees');
+
+// Grooming Services Receptionist Interface
+$r->get('/grooming/receptionist', 'GroomingReceptionistController', 'overview');
+$r->get('/grooming/receptionist/overview', 'GroomingReceptionistController', 'overview');
+$r->get('/grooming/receptionist/appointments', 'GroomingReceptionistController', 'appointments');
+$r->post('/grooming/receptionist/appointments/requests/{id}/accept', 'GroomingReceptionistController', 'acceptRequest');
+$r->post('/grooming/receptionist/appointments/requests/{id}/propose', 'GroomingReceptionistController', 'proposeSchedule');
+$r->post('/grooming/receptionist/appointments/requests/{id}/reject', 'GroomingReceptionistController', 'rejectRequest');
+$r->post('/grooming/receptionist/appointments/walk-in', 'GroomingReceptionistController', 'createWalkIn');
+$r->get('/grooming/receptionist/customers/search', 'GroomingReceptionistController', 'searchCustomers');
+$r->get('/grooming/receptionist/customers/{id}/pets', 'GroomingReceptionistController', 'customerPets');
+$r->get('/grooming/receptionist/billing', 'GroomingReceptionistController', 'billing');
+$r->get('/grooming/receptionist/billing/search-appointments', 'GroomingReceptionistController', 'searchBillingAppointments');
+$r->get('/grooming/receptionist/billing/appointments/{id}', 'GroomingReceptionistController', 'billingAppointmentDetails');
+$r->post('/grooming/receptionist/billing/settle', 'GroomingReceptionistController', 'settleBilling');
+$r->get('/grooming/receptionist/records', 'GroomingReceptionistController', 'records');
+$r->get('/grooming/receptionist/records/{id}', 'GroomingReceptionistController', 'recordDetails');
+$r->get('/grooming/receptionist/employees', 'GroomingReceptionistController', 'employees');
 
 // System Administrator Interface (Business-Unit Scoped)
 $r->get('/sysadmin', 'SysAdminController', 'dashboard');

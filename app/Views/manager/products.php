@@ -8,9 +8,18 @@ $statusFilter = $statusFilter ?? '';
 <div class="page-head">
   <div>
     <p class="eyebrow">Catalog Administration</p>
-    <h1>Products</h1>
+    <h1>Products &amp; Inventory</h1>
     <p class="muted">Manage Pet Store retail catalog items, product codes, descriptions, and pricing.</p>
   </div>
+</div>
+
+<div class="segmented-bar" role="tablist" style="margin-bottom: 1.5rem;" aria-label="Products & Inventory Sections">
+  <a href="/manager/products<?= $unitQuery ?>" class="segmented-pill is-active" role="tab" aria-selected="true">
+    Product Catalog (<?= count($products) ?>)
+  </a>
+  <a href="/manager/inventory<?= $unitQuery ?>" class="segmented-pill" role="tab" aria-selected="false">
+    Inventory &amp; Stock Control
+  </a>
 </div>
 
 <!-- Search & Filtering Bar (Automatic Filtering on Selection; No Green Filter Button) -->

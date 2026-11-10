@@ -100,8 +100,13 @@ final class AuthController extends Controller
             }
         }
         foreach ($roles as $r) {
-            if ($r['role_name'] === 'RECEPTIONIST' && $r['business_unit_name'] === Units::GROOMING) {
-                return '/staff/appointments';
+            if ($r['role_name'] === 'RECEPTIONIST') {
+                if ($r['business_unit_name'] === Units::PET_STORE || (int)($r['business_unit_id'] ?? 0) === 1) {
+                    return '/petstore/receptionist/sales';
+                }
+                if ($r['business_unit_name'] === Units::GROOMING || (int)($r['business_unit_id'] ?? 0) === 3) {
+                    return '/grooming/receptionist/overview';
+                }
             }
         }
         return '/staff/workspace';
@@ -587,6 +592,57 @@ final class AuthController extends Controller
                 $this->redirect('/manager/orders' . $unitQuery);
             } else {
                 $this->redirect('/manager/inventory' . $unitQuery);
+            }
+            return;
+        }
+
+        // 4c. Pet Store Receptionist Interface
+        if ($target === 'petstore-receptionist' || $target === 'petstore_receptionist') {
+            if (!$isSuper) {
+                $stmt = $this->db->prepare(
+                    "SELECT 1 FROM account_role ar
+                     JOIN role r ON r.role_id = ar.role_id
+                     WHERE ar.user_account_id = ? AND ar.business_unit_id = 1 AND r.role_name = 'RECEPTIONIST'
+                     LIMIT 1"
+                );
+                $stmt->execute([(int)$uid]);
+                if (!$stmt->fetchColumn()) {
+                    $this->forbidden('Pet Store Receptionist authorization is required.');
+                }
+            }
+            Session::set('active_context', 'employee');
+            Session::forget('inventory_manager_mode');
+            $this->redirect('/petstore/receptionist/sales');
+            return;
+        }
+
+        // 4d. Grooming Services Receptionist Interface
+        if ($target === 'grooming-receptionist' || $target === 'grooming_receptionist') {
+            if (!$isSuper) {
+                $stmt = $this->db->prepare(
+                    "SELECT 1 FROM account_role ar
+                     JOIN role r ON r.role_id = ar.role_id
+                     WHERE ar.user_account_id = ? AND ar.business_unit_id = 3 AND r.role_name = 'RECEPTIONIST'
+                     LIMIT 1"
+                );
+                $stmt->execute([(int)$uid]);
+                if (!$stmt->fetchColumn()) {
+                    $this->forbidden('Grooming Services Receptionist authorization is required.');
+                }
+            }
+            Session::set('active_context', 'employee');
+            Session::forget('inventory_manager_mode');
+            $this->redirect('/grooming/receptionist/overview');
+            return;
+        }
+
+        // 4e. General Receptionist Switcher Target with unit_id
+        if ($target === 'receptionist') {
+            $uId = isset($_GET['unit_id']) ? (int)$_GET['unit_id'] : 1;
+            if ($uId === 3) {
+                $this->redirect('/switch-interface?target=grooming-receptionist');
+            } else {
+                $this->redirect('/switch-interface?target=petstore-receptionist');
             }
             return;
         }

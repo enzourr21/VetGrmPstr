@@ -13,7 +13,7 @@
     <p class="caption">Products offered in <?= e($unitName) ?></p>
   </article>
   <article class="card stat-card">
-    <span class="eyebrow">Recent Orders</span>
+    <span class="eyebrow">Orders</span>
     <strong class="stat-value"><?= count($orders) ?></strong>
     <p class="caption">Orders placed in <?= e($unitName) ?></p>
   </article>
@@ -23,15 +23,21 @@
     <p class="caption">Scheduled visits for <?= e($unitName) ?></p>
   </article>
   <article class="card stat-card">
-    <span class="eyebrow">Unit Staff</span>
+    <span class="eyebrow">Employees</span>
     <strong class="stat-value"><?= count($unitStaff) ?></strong>
     <p class="caption">Employees assigned to <?= e($unitName) ?></p>
   </article>
 </section>
 
-<div class="grid grid-2" style="align-items: start; gap: 1.5rem;">
+<div style="margin-bottom: 2rem;">
   <section class="card">
-    <h2>Products &amp; Inventory (<?= count($products) ?>)</h2>
+    <div class="row" style="justify-content: space-between; align-items: baseline; margin-bottom: 1rem;">
+      <div>
+        <h2 style="margin: 0;">Products &amp; Inventory (<?= count($products) ?>)</h2>
+        <p class="caption" style="margin: 0.2rem 0 0 0;">Dedicated product catalog and inventory monitoring.</p>
+      </div>
+      <a href="/manager/inventory" class="btn secondary btn-sm">Open Inventory &rarr;</a>
+    </div>
     <?php if (!$products): ?>
       <div class="empty">No retail products configured for <?= e($unitName) ?>.</div>
     <?php else: ?>
@@ -57,36 +63,6 @@
                 <td><?= (int)$p['on_hand'] ?></td>
                 <td><strong><?= (int)$p['available'] ?></strong></td>
                 <td><span class="badge status-<?= e($p['product_status']) ?>"><?= e($p['product_status']) ?></span></td>
-              </tr>
-            <?php endforeach; ?>
-          </tbody>
-        </table>
-      </div>
-    <?php endif; ?>
-  </section>
-
-  <section class="card">
-    <h2>Unit Staff Roster (<?= count($unitStaff) ?>)</h2>
-    <?php if (!$unitStaff): ?>
-      <div class="empty">No staff assigned to <?= e($unitName) ?>.</div>
-    <?php else: ?>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Employee</th>
-              <th>Position</th>
-              <th>Roles</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            <?php foreach ($unitStaff as $st): ?>
-              <tr>
-                <td><strong><?= e($st['first_name'] . ' ' . $st['last_name']) ?></strong></td>
-                <td><?= e($st['position']) ?></td>
-                <td class="caption"><?= e($st['roles'] ?: '—') ?></td>
-                <td><span class="badge status-<?= e($st['employee_status']) ?>"><?= e($st['employee_status']) ?></span></td>
               </tr>
             <?php endforeach; ?>
           </tbody>

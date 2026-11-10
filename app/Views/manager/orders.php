@@ -9,12 +9,17 @@ $ordersList = $orders ?? [];
 $totalOrders = count($ordersList);
 ?>
 
-<div class="page-head">
+<div class="page-head" style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 1rem;">
   <div>
     <p class="eyebrow"><?= e($unitName) ?> Order Monitoring</p>
     <h1>Orders</h1>
     <p class="muted">Read-only monitoring of customer online pickup and delivery orders for <?= e($unitName) ?>.</p>
   </div>
+  <?php if (empty($isInventoryManagerOnly)): ?>
+    <div>
+      <a href="/manager/sales<?= $unitQuery ?>" class="btn secondary btn-sm">Walk-in Sales &amp; Refunds &rarr;</a>
+    </div>
+  <?php endif; ?>
 </div>
 
 <!-- Filtering & Search Bar -->

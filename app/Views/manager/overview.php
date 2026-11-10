@@ -30,6 +30,42 @@
   </article>
 </section>
 
+<?php if (!empty($confirmedAppointments)): ?>
+  <section class="card" style="margin-bottom: 2rem;">
+    <div class="row" style="justify-content: space-between; align-items: baseline; margin-bottom: 1rem;">
+      <div>
+        <h2 style="margin: 0;">Confirmed Appointments (<?= count($confirmedAppointments) ?>)</h2>
+        <p class="caption" style="margin: 0.2rem 0 0 0;">Upcoming confirmed customer appointments for Pet Store.</p>
+      </div>
+      <span class="badge badge-success"><?= count($confirmedAppointments) ?> Confirmed</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Appointment #</th>
+            <th>Date &amp; Time</th>
+            <th>Customer</th>
+            <th>Contact</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <?php foreach ($confirmedAppointments as $ca): ?>
+            <tr>
+              <td><strong>#<?= (int)$ca['appointment_id'] ?></strong></td>
+              <td><?= e(date('M j, Y', strtotime((string)$ca['preferred_date']))) ?> · <?= e((string)$ca['preferred_time']) ?></td>
+              <td><strong><?= e($ca['customer_name']) ?></strong></td>
+              <td class="caption"><?= e($ca['customer_phone'] ?: '—') ?></td>
+              <td><span class="badge badge-success"><?= e($ca['status_name']) ?></span></td>
+            </tr>
+          <?php endforeach; ?>
+        </tbody>
+      </table>
+    </div>
+  </section>
+<?php endif; ?>
+
 <div class="grid grid-2 petstore-overview-middle-grid" style="align-items: stretch; gap: 1.5rem; margin-bottom: 2rem;">
   <!-- 1. Stocks Running Low -->
   <section class="card petstore-overview-equal-card" id="petstore-stocks-running-low" style="overflow-x: hidden; display: flex; flex-direction: column; height: 100%;">

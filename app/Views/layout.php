@@ -6,6 +6,8 @@ $activeContext = (string)\App\Core\Session::get('active_context', $baseContext);
 $isWorkspaceRoute = str_starts_with($curPath, '/super-admin')
     || str_starts_with($curPath, '/sysadmin')
     || str_starts_with($curPath, '/manager')
+    || str_starts_with($curPath, '/petstore/receptionist')
+    || str_starts_with($curPath, '/grooming/receptionist')
     || (str_starts_with($curPath, '/staff') && !str_starts_with($curPath, '/staffs') && $curPath !== '/staff/login');
 
 // Staff / Administrator identification & role resolution
@@ -86,7 +88,11 @@ if ($isSignedIn && $baseContext === 'employee') {
 }
 
 // Active Business Unit identification
-if (preg_match('#/units/(\d+)#', $curPath, $matches)) {
+if (str_starts_with($curPath, '/petstore/receptionist')) {
+    $activeUnitId = 1;
+} elseif (str_starts_with($curPath, '/grooming/receptionist')) {
+    $activeUnitId = 3;
+} elseif (preg_match('#/units/(\d+)#', $curPath, $matches)) {
     $activeUnitId = (int)$matches[1];
 } elseif (isset($_GET['unit_id']) && ctype_digit((string)$_GET['unit_id'])) {
     $activeUnitId = (int)$_GET['unit_id'];
@@ -179,6 +185,32 @@ if ($isSignedIn && $baseContext === 'employee') {
             'active' => str_starts_with($curPath, '/manager') && $activeContext !== 'customer' && $isInvMode,
         ];
         $authorizedInterfaces[] = [
+            'id' => 'receptionist',
+            'label' => 'Receptionist',
+            'hasUnits' => true,
+            'units' => [
+                [
+                    'id' => 1,
+                    'name' => 'Pet Store',
+                    'url' => '/switch-interface?target=petstore-receptionist',
+                    'disabled' => false,
+                ],
+                [
+                    'id' => 2,
+                    'name' => 'Veterinary Clinic (Coming Soon)',
+                    'url' => '#',
+                    'disabled' => true,
+                ],
+                [
+                    'id' => 3,
+                    'name' => 'Grooming Services',
+                    'url' => '/switch-interface?target=grooming-receptionist',
+                    'disabled' => false,
+                ],
+            ],
+            'active' => (str_starts_with($curPath, '/petstore/receptionist') || str_starts_with($curPath, '/grooming/receptionist')) && $activeContext !== 'customer',
+        ];
+        $authorizedInterfaces[] = [
             'id' => 'employee',
             'label' => 'Employee Workspace',
             'hasUnits' => true,
@@ -252,6 +284,36 @@ if ($isSignedIn && $baseContext === 'employee') {
                 'active' => (str_starts_with($curPath, '/staff') || $curPath === '/workspace') && $activeContext !== 'customer',
             ];
         }
+        $receptionistUnits = [];
+        foreach ($userRoles as $r) {
+            if ($r['role_name'] === 'RECEPTIONIST') {
+                $buId = (int)($r['business_unit_id'] ?? 0);
+                if ($buId === 1) {
+                    $receptionistUnits[] = [
+                        'id' => 1,
+                        'name' => 'Pet Store',
+                        'url' => '/switch-interface?target=petstore-receptionist',
+                        'disabled' => false,
+                    ];
+                } elseif ($buId === 3) {
+                    $receptionistUnits[] = [
+                        'id' => 3,
+                        'name' => 'Grooming Services',
+                        'url' => '/switch-interface?target=grooming-receptionist',
+                        'disabled' => false,
+                    ];
+                }
+            }
+        }
+        if (!empty($receptionistUnits)) {
+            $authorizedInterfaces[] = [
+                'id' => 'receptionist',
+                'label' => 'Receptionist',
+                'hasUnits' => true,
+                'units' => $receptionistUnits,
+                'active' => (str_starts_with($curPath, '/petstore/receptionist') || str_starts_with($curPath, '/grooming/receptionist')) && $activeContext !== 'customer',
+            ];
+        }
         $authorizedInterfaces[] = [
             'id' => 'customer',
             'label' => 'Customer Interface',
@@ -265,6 +327,8 @@ if ($isSignedIn && $baseContext === 'employee') {
 $inStaffWorkspace = $isSignedIn && $baseContext === 'employee' && $activeContext === 'employee' && $isWorkspaceRoute;
 $showCustomerNav = $isSignedIn && ((bool)\App\Core\Session::get('customer_id') || $activeContext === 'customer' || !$isWorkspaceRoute);
 $isAuthSignInOrOut = str_starts_with($curPath, '/login') || str_starts_with($curPath, '/staff/login') || str_starts_with($curPath, '/logout');
+$isCalendarView = str_starts_with($curPath, '/grooming/receptionist/appointments')
+    || str_starts_with($curPath, '/manager/appointments');
 $unitQuery = ($isSuperAdmin && isset($_GET['unit_id']) && ctype_digit((string)$_GET['unit_id'])) ? '?unit_id=' . (int)$_GET['unit_id'] : '';
 ?>
 <!DOCTYPE html>
@@ -284,7 +348,7 @@ $unitQuery = ($isSuperAdmin && isset($_GET['unit_id']) && ctype_digit((string)$_
 </script>
 <link rel="stylesheet" href="/assets/css/app.css?v=<?= file_exists(APP_ROOT . '/public/assets/css/app.css') ? filemtime(APP_ROOT . '/public/assets/css/app.css') : time() ?>">
 </head>
-<body>
+<body class="<?= !empty($isCalendarView) ? 'has-calendar-view' : '' ?>">
 <a class="skip" href="#main">Skip to content</a>
 <header class="topbar">
   <div class="topbar-inner">
@@ -326,12 +390,11 @@ $unitQuery = ($isSuperAdmin && isset($_GET['unit_id']) && ctype_digit((string)$_
         <a href="/manager/employees<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/employees') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Employees</a>
       <?php endif; ?>
     <?php else: /* Business Manager */ ?>
-      <?php if ((int)$currentUnitId === 1): /* Pet Store Business Manager */ ?>
+      <?php if ((int)$currentUnitId === 1): /* Pet Store Business Manager: 5 Main Pages */ ?>
         <a href="/manager<?= $unitQuery ?>" class="<?= ($curPath === '/manager' || preg_match('#^/manager/units/\d+(/overview)?$#', $curPath) || $curPath === '/manager/overview') ? 'is-current' : '' ?>">Overview</a>
-        <a href="/manager/sales<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/sales') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Sales</a>
-        <a href="/manager/products<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/products') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Products</a>
-        <a href="/manager/inventory<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/inventory') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Inventory</a>
+        <a href="/manager/orders<?= $unitQuery ?>" class="<?= ((str_contains($curPath, '/orders') || str_contains($curPath, '/sales')) && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Orders</a>
         <a href="/manager/employees<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/employees') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Employees</a>
+        <a href="/manager/products<?= $unitQuery ?>" class="<?= ((str_contains($curPath, '/products') || str_contains($curPath, '/inventory')) && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Products &amp; Inventory</a>
         <a href="/manager/settings<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/settings') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Business Settings</a>
       <?php elseif ((int)$currentUnitId === 2): /* Veterinary Clinic Business Manager */ ?>
         <a href="/manager<?= $unitQuery ?>" class="<?= ($curPath === '/manager' || preg_match('#^/manager/units/\d+(/overview)?$#', $curPath) || $curPath === '/manager/overview') ? 'is-current' : '' ?>">Overview</a>
@@ -350,6 +413,18 @@ $unitQuery = ($isSuperAdmin && isset($_GET['unit_id']) && ctype_digit((string)$_
         <a href="/manager/settings<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/settings') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Business Settings</a>
       <?php endif; ?>
     <?php endif; ?>
+
+  <?php elseif (str_starts_with($curPath, '/petstore/receptionist')): ?>
+      <a href="/petstore/receptionist/sales" class="<?= str_starts_with($curPath, '/petstore/receptionist/sales') ? 'is-current' : '' ?>">Sales</a>
+      <a href="/petstore/receptionist/orders" class="<?= str_starts_with($curPath, '/petstore/receptionist/orders') ? 'is-current' : '' ?>">Orders</a>
+      <a href="/petstore/receptionist/employees" class="<?= str_starts_with($curPath, '/petstore/receptionist/employees') ? 'is-current' : '' ?>">Employees</a>
+
+  <?php elseif (str_starts_with($curPath, '/grooming/receptionist')): ?>
+      <a href="/grooming/receptionist/overview" class="<?= str_starts_with($curPath, '/grooming/receptionist/overview') ? 'is-current' : '' ?>">Overview</a>
+      <a href="/grooming/receptionist/appointments" class="<?= str_starts_with($curPath, '/grooming/receptionist/appointments') ? 'is-current' : '' ?>">Appointments</a>
+      <a href="/grooming/receptionist/billing" class="<?= str_starts_with($curPath, '/grooming/receptionist/billing') ? 'is-current' : '' ?>">Billing</a>
+      <a href="/grooming/receptionist/records" class="<?= str_starts_with($curPath, '/grooming/receptionist/records') ? 'is-current' : '' ?>">Records</a>
+      <a href="/grooming/receptionist/employees" class="<?= str_starts_with($curPath, '/grooming/receptionist/employees') ? 'is-current' : '' ?>">Employees</a>
 
   <?php elseif (str_starts_with($curPath, '/staff') || $curPath === '/workspace'): ?>
       <a href="/staff/workspace" class="<?= ($curPath === '/staff/workspace' || $curPath === '/workspace') ? 'is-current' : '' ?>">Workspace</a>
@@ -371,24 +446,28 @@ $unitQuery = ($isSuperAdmin && isset($_GET['unit_id']) && ctype_digit((string)$_
               <?php foreach ($authorizedInterfaces as $iface): ?>
                 <?php if (!empty($iface['hasUnits']) && !empty($iface['units'])): ?>
                   <div class="profile-switcher-group">
-                    <button type="button" class="profile-switcher-parent-btn <?= $iface['active'] ? 'is-current-parent is-current-interface' : '' ?>" data-target="<?= e($iface['id']) ?>" aria-expanded="false" aria-controls="switcher-units-<?= e($iface['id']) ?>">
+                    <button type="button" class="profile-switcher-parent-btn <?= $iface['active'] ? 'is-current-parent' : '' ?>" data-target="<?= e($iface['id']) ?>" aria-expanded="<?= $iface['active'] ? 'true' : 'false' ?>" aria-controls="switcher-units-<?= e($iface['id']) ?>">
                       <span class="switcher-opt-indicator" aria-hidden="true"><?= $iface['active'] ? '●' : '○' ?></span>
                       <span class="switcher-opt-name"><?= e($iface['label']) ?></span>
-                      <?php if ($iface['active']): ?>
-                        <span class="switcher-opt-badge">Current</span>
-                      <?php endif; ?>
                       <svg class="profile-switcher-parent-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg>
                     </button>
-                    <div class="profile-switcher-units" id="switcher-units-<?= e($iface['id']) ?>" hidden>
+                    <div class="profile-switcher-units" id="switcher-units-<?= e($iface['id']) ?>" <?= $iface['active'] ? '' : 'hidden' ?>>
                       <?php foreach ($iface['units'] as $u): ?>
                         <?php $isUnitCurrent = $iface['active'] && ((int)$u['id'] === (int)$currentUnitId); ?>
-                        <a href="<?= e($u['url']) ?>" class="profile-switcher-unit-link <?= $isUnitCurrent ? 'is-current-unit' : '' ?>" role="menuitem">
-                          <span class="unit-dot" aria-hidden="true"><?= $isUnitCurrent ? '●' : '▪' ?></span>
-                          <span class="unit-name"><?= e($u['name']) ?></span>
-                          <?php if ($isUnitCurrent): ?>
-                            <span class="unit-badge">Active</span>
-                          <?php endif; ?>
-                        </a>
+                        <?php if (!empty($u['disabled'])): ?>
+                          <span class="profile-switcher-unit-link is-disabled" role="menuitem" aria-disabled="true" style="opacity: 0.55; cursor: not-allowed;">
+                            <span class="unit-dot" aria-hidden="true">▪</span>
+                            <span class="unit-name"><?= e($u['name']) ?></span>
+                          </span>
+                        <?php else: ?>
+                          <a href="<?= e($u['url']) ?>" class="profile-switcher-unit-link <?= $isUnitCurrent ? 'is-current-unit' : '' ?>" role="menuitem">
+                            <span class="unit-dot" aria-hidden="true"><?= $isUnitCurrent ? '●' : '▪' ?></span>
+                            <span class="unit-name"><?= e($u['name']) ?></span>
+                            <?php if ($isUnitCurrent): ?>
+                              <span class="unit-badge">Current</span>
+                            <?php endif; ?>
+                          </a>
+                        <?php endif; ?>
                       <?php endforeach; ?>
                     </div>
                   </div>
@@ -447,24 +526,28 @@ $unitQuery = ($isSuperAdmin && isset($_GET['unit_id']) && ctype_digit((string)$_
               <?php foreach ($authorizedInterfaces as $iface): ?>
                 <?php if (!empty($iface['hasUnits']) && !empty($iface['units'])): ?>
                   <div class="profile-switcher-group">
-                    <button type="button" class="profile-switcher-parent-btn <?= $iface['active'] ? 'is-current-parent is-current-interface' : '' ?>" data-target="<?= e($iface['id']) ?>" aria-expanded="false" aria-controls="switcher-units-<?= e($iface['id']) ?>">
+                    <button type="button" class="profile-switcher-parent-btn <?= $iface['active'] ? 'is-current-parent' : '' ?>" data-target="<?= e($iface['id']) ?>" aria-expanded="<?= $iface['active'] ? 'true' : 'false' ?>" aria-controls="switcher-units-<?= e($iface['id']) ?>">
                       <span class="switcher-opt-indicator" aria-hidden="true"><?= $iface['active'] ? '●' : '○' ?></span>
                       <span class="switcher-opt-name"><?= e($iface['label']) ?></span>
-                      <?php if ($iface['active']): ?>
-                        <span class="switcher-opt-badge">Current</span>
-                      <?php endif; ?>
                       <svg class="profile-switcher-parent-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg>
                     </button>
-                    <div class="profile-switcher-units" id="switcher-units-<?= e($iface['id']) ?>" hidden>
+                    <div class="profile-switcher-units" id="switcher-units-<?= e($iface['id']) ?>" <?= $iface['active'] ? '' : 'hidden' ?>>
                       <?php foreach ($iface['units'] as $u): ?>
                         <?php $isUnitCurrent = $iface['active'] && ((int)$u['id'] === (int)$currentUnitId); ?>
-                        <a href="<?= e($u['url']) ?>" class="profile-switcher-unit-link <?= $isUnitCurrent ? 'is-current-unit' : '' ?>" role="menuitem">
-                          <span class="unit-dot" aria-hidden="true"><?= $isUnitCurrent ? '●' : '▪' ?></span>
-                          <span class="unit-name"><?= e($u['name']) ?></span>
-                          <?php if ($isUnitCurrent): ?>
-                            <span class="unit-badge">Active</span>
-                          <?php endif; ?>
-                        </a>
+                        <?php if (!empty($u['disabled'])): ?>
+                          <span class="profile-switcher-unit-link is-disabled" role="menuitem" aria-disabled="true" style="opacity: 0.55; cursor: not-allowed;">
+                            <span class="unit-dot" aria-hidden="true">▪</span>
+                            <span class="unit-name"><?= e($u['name']) ?></span>
+                          </span>
+                        <?php else: ?>
+                          <a href="<?= e($u['url']) ?>" class="profile-switcher-unit-link <?= $isUnitCurrent ? 'is-current-unit' : '' ?>" role="menuitem">
+                            <span class="unit-dot" aria-hidden="true"><?= $isUnitCurrent ? '●' : '▪' ?></span>
+                            <span class="unit-name"><?= e($u['name']) ?></span>
+                            <?php if ($isUnitCurrent): ?>
+                              <span class="unit-badge">Current</span>
+                            <?php endif; ?>
+                          </a>
+                        <?php endif; ?>
                       <?php endforeach; ?>
                     </div>
                   </div>
@@ -502,7 +585,7 @@ $unitQuery = ($isSuperAdmin && isset($_GET['unit_id']) && ctype_digit((string)$_
     </nav>
   </div>
 </header>
-<?php if (!$isAuthSignInOrOut): ?>
+<?php if (!$isAuthSignInOrOut && empty($isCalendarView)): ?>
   <?php require APP_ROOT . '/app/Views/partials/scenic_rails.php'; ?>
 <?php endif; ?>
 <main id="main">

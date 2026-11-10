@@ -7,11 +7,22 @@ $isInvManager = !empty($isInventoryManagerOnly);
 
 <div class="page-head">
   <div>
-    <p class="eyebrow">Inventory Control</p>
-    <h1>Inventory</h1>
+    <p class="eyebrow"><?= (int)$unitId === 1 ? 'Catalog & Stock Administration' : 'Inventory Control' ?></p>
+    <h1><?= (int)$unitId === 1 && empty($isInvManager) ? 'Products &amp; Inventory' : 'Inventory' ?></h1>
     <p class="muted">Stock level monitoring, verified adjustments, purchase order tracking, and stock receiving records.</p>
   </div>
 </div>
+
+<?php if ((int)$unitId === 1 && empty($isInvManager)): ?>
+  <div class="segmented-bar" role="tablist" style="margin-bottom: 1.5rem;" aria-label="Products & Inventory Sections">
+    <a href="/manager/products<?= $unitQuery ?>" class="segmented-pill" role="tab" aria-selected="false">
+      Product Catalog
+    </a>
+    <a href="/manager/inventory<?= $unitQuery ?>" class="segmented-pill is-active" role="tab" aria-selected="true">
+      Inventory &amp; Stock Control
+    </a>
+  </div>
+<?php endif; ?>
 
 <?php if ((int)$unitId === \App\Models\Units::vetClinicId() && !empty($inventorySummary) && !$isInvManager): ?>
   <!-- Veterinary Clinic Inventory Overview -->

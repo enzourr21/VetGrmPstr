@@ -289,6 +289,23 @@ final class ManagerController extends Controller
         $onlineStmt->execute([$unitId]);
         $recentOnlineOrders = $onlineStmt->fetchAll();
 
+        // 4. Confirmed Appointments where applicable
+        $apptStmt = $this->db->prepare(
+            "SELECT a.appointment_id, a.preferred_date, a.preferred_time, a.appointment_begin,
+                    st.status_name,
+                    CONCAT(c.first_name, ' ', c.last_name) AS customer_name,
+                    c.phone AS customer_phone
+             FROM appointment a
+             JOIN appointment_status st ON st.appointment_status_id = a.appointment_status_id
+             JOIN customer c ON c.customer_id = a.customer_id
+             WHERE a.business_unit_id = ?
+               AND st.status_name = 'Confirmed'
+             ORDER BY a.preferred_date DESC, a.appointment_id DESC
+             LIMIT 5"
+        );
+        $apptStmt->execute([$unitId]);
+        $confirmedAppointments = $apptStmt->fetchAll();
+
         // Build unified Recent Sales list (one row per sale, newest first)
         $recentSales = [];
         foreach ($recentWalkInSales as $ws) {
@@ -335,6 +352,7 @@ final class ManagerController extends Controller
             'recentWalkInSales' => $recentWalkInSales,
             'recentOnlineOrders' => $recentOnlineOrders,
             'recentSales' => $recentSales,
+            'confirmedAppointments' => $confirmedAppointments,
         ]);
     }
 
@@ -1451,6 +1469,7 @@ final class ManagerController extends Controller
             'allVisibleAppointments' => $allVisibleAppointments,
             'vetClinicians' => $vetClinicians,
             'selectedApptId' => $selectedApptId,
+            'maxOverlapMinutes' => \App\Models\AppointmentScheduleValidator::getMaxOverlapMinutes($this->db, $unitId),
         ]);
     }
 
@@ -1541,6 +1560,7 @@ final class ManagerController extends Controller
             'allVisibleAppointments' => $allVisibleAppointments,
             'groomingStylists' => $groomingStylists,
             'selectedApptId' => $selectedApptId,
+            'maxOverlapMinutes' => \App\Models\AppointmentScheduleValidator::getMaxOverlapMinutes($this->db, $unitId),
         ]);
     }
 
@@ -2417,12 +2437,50 @@ final class ManagerController extends Controller
 
         $this->db->beginTransaction();
         try {
-            $upd = $this->db->prepare(
-                "UPDATE appointment
-                 SET appointment_status_id = (SELECT appointment_status_id FROM appointment_status WHERE status_name = ?)
-                 WHERE appointment_id = ? AND business_unit_id = ?"
-            );
-            $upd->execute([$newStatus, $id, $unitId]);
+            if ($newStatus === 'Confirmed') {
+                $targetDate = (string)$appt['preferred_date'];
+                $targetTime = (string)($appt['preferred_time'] ?: '09:00:00');
+                $hydrated = $isVet ? $this->hydrateVetAppointmentDetails($appt) : $this->hydrateGroomingAppointmentDetails($appt);
+                $durationMinutes = (int)($hydrated['duration_minutes'] ?: 30);
+
+                // Authoritative overlap validation with business unit lock (FOR UPDATE)
+                $valResult = \App\Models\AppointmentScheduleValidator::validateAppointment(
+                    $this->db,
+                    $unitId,
+                    $targetDate,
+                    $targetTime,
+                    $durationMinutes,
+                    $id,
+                    null,
+                    true
+                );
+
+                if (!$valResult['valid']) {
+                    $this->db->rollBack();
+                    $this->flash('error', "Cannot confirm appointment #$id: " . $valResult['error']);
+                    $this->redirect($redirectUrl);
+                    return;
+                }
+
+                $beginDt = date('Y-m-d H:i:s', strtotime("$targetDate $targetTime"));
+                $endDt = date('Y-m-d H:i:s', strtotime("$targetDate $targetTime + {$durationMinutes} minutes"));
+
+                $upd = $this->db->prepare(
+                    "UPDATE appointment
+                     SET appointment_status_id = (SELECT appointment_status_id FROM appointment_status WHERE status_name = ?),
+                         appointment_begin = COALESCE(appointment_begin, ?),
+                         appointment_end = COALESCE(appointment_end, ?)
+                     WHERE appointment_id = ? AND business_unit_id = ?"
+                );
+                $upd->execute([$newStatus, $beginDt, $endDt, $id, $unitId]);
+            } else {
+                $upd = $this->db->prepare(
+                    "UPDATE appointment
+                     SET appointment_status_id = (SELECT appointment_status_id FROM appointment_status WHERE status_name = ?)
+                     WHERE appointment_id = ? AND business_unit_id = ?"
+                );
+                $upd->execute([$newStatus, $id, $unitId]);
+            }
 
             // If confirming a veterinary appointment and an employee was optionally assigned
             $optEmpId = (int)($_POST['employee_id'] ?? 0);
@@ -4892,5 +4950,42 @@ final class ManagerController extends Controller
 
         $this->flash('error', 'Invalid payment configuration request.');
         $this->redirect('/manager/settings');
+    }
+
+    public function updateOverlapSettings(?int $routeUnitId = null): void
+    {
+        [$uid, , $unitId, $unitName, $isSuper] = $this->checkBusinessManager($routeUnitId);
+        CSRF::check();
+
+        $redirectUrl = ($this->isSuperAdmin() && isset($_GET['unit_id'])) ? '/manager/settings?unit_id=' . (int)$unitId : '/manager/settings';
+
+        if ((int)$unitId === Units::petStoreId()) {
+            $this->flash('error', 'Appointment overlap settings are only applicable to service-based business units.');
+            $this->redirect($redirectUrl);
+            return;
+        }
+
+        $raw = trim((string)($_POST['max_appointment_overlap_minutes'] ?? ''));
+
+        // Validate that the value is a non-negative whole number (reject negative, fractional, or non-numeric)
+        if ($raw === '' || !ctype_digit($raw)) {
+            $this->flash('error', 'Maximum Appointment Overlap must be a valid non-negative whole number (in minutes).');
+            $this->redirect($redirectUrl);
+            return;
+        }
+
+        $overlapMinutes = (int)$raw;
+        if ($overlapMinutes < 0) {
+            $this->flash('error', 'Maximum Appointment Overlap cannot be negative.');
+            $this->redirect($redirectUrl);
+            return;
+        }
+
+        \App\Models\AppointmentScheduleValidator::updateMaxOverlapMinutes($this->db, $unitId, $overlapMinutes);
+
+        Audit::log('business_settings.overlap', "Updated Maximum Appointment Overlap to {$overlapMinutes} minutes for {$unitName}", $unitId, null, null, $uid);
+
+        $this->flash('success', "Maximum Appointment Overlap setting updated successfully ({$overlapMinutes} minutes).");
+        $this->redirect($redirectUrl);
     }
 }

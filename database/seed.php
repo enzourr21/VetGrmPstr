@@ -22,4 +22,6 @@ foreach (provisionUnitSystemAdmins($pdo) as $line) {
     echo 'ADMIN ' . $line . "\n";
 }
 
+require_once __DIR__ . '/seed_vet_appointments.php';
+
 echo "Done.\n";

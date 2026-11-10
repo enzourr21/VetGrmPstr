@@ -32,6 +32,9 @@ $unitQuery = !empty($isSuper) ? '?unit_id=' . (int)$unitId : '';
       <strong class="grooming-cal-range-label" id="grooming-cal-range-label">
         <?= e($rangeHeading) ?>
       </strong>
+      <span class="badge secondary" style="font-size: 0.76rem; font-weight: 600;" id="vet-cal-overlap-badge" title="Maximum allowed appointment overlap configured for <?= e($unitName) ?>">
+        Max Overlap: <?= (int)($maxOverlapMinutes ?? 15) ?>m
+      </span>
 
       <form method="get" action="/manager/appointments" class="grooming-cal-month-form" id="grooming-cal-month-form">
         <?php if (!empty($isSuper)): ?>
