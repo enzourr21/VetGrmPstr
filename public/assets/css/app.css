@@ -1061,6 +1061,136 @@ input[type=number].qty {
   display: none !important;
 }
 
+/* Email Verification & 6-Digit OTP Group */
+.email-input-group {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+
+.email-input-group input {
+  flex: 1;
+  min-width: 0;
+}
+
+.email-input-group .btn {
+  white-space: nowrap;
+  flex-shrink: 0;
+  padding: 0 1.05rem;
+  font-size: 0.88rem;
+  font-weight: 550;
+}
+
+@media (max-width: 520px) {
+  .email-input-group {
+    flex-direction: column;
+  }
+}
+
+.otp-verification-section {
+  margin-top: 1.15rem;
+  margin-bottom: 0.5rem;
+}
+
+.otp-inputs-wrap {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 0.55rem;
+  margin: 0.65rem 0 0.5rem;
+}
+
+.otp-digit-box {
+  width: 2.9rem;
+  height: 3.35rem;
+  text-align: center;
+  font-size: 1.45rem;
+  font-weight: 650;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1.5px solid var(--line-strong);
+  border-radius: 0.55rem;
+  padding: 0;
+  box-sizing: border-box;
+  transition: border-color var(--dur-ui) var(--ease-out), box-shadow var(--dur-ui) var(--ease-out), background-color var(--dur-ui) var(--ease-out);
+}
+
+.otp-digit-box:focus {
+  border-color: var(--brand);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2);
+}
+
+.otp-digit-box.is-filled {
+  border-color: var(--brand);
+}
+
+.otp-digit-box.is-invalid {
+  border-color: var(--err);
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.15);
+}
+
+.otp-digit-box:disabled {
+  background: var(--surface-tint);
+  cursor: not-allowed;
+  opacity: 0.8;
+}
+
+@media (max-width: 420px) {
+  .otp-inputs-wrap {
+    gap: 0.35rem;
+  }
+  .otp-digit-box {
+    width: 2.35rem;
+    height: 2.85rem;
+    font-size: 1.25rem;
+    border-radius: 0.45rem;
+  }
+}
+
+.otp-feedback-msg {
+  font-size: 0.85rem;
+  font-weight: 520;
+  padding: 0.6rem 0.85rem;
+  border-radius: var(--radius-sm, 6px);
+  margin-top: 0.6rem;
+  line-height: 1.4;
+}
+
+.otp-feedback-msg[hidden] {
+  display: none !important;
+}
+
+.otp-feedback-msg.is-info {
+  color: var(--brand);
+  background: var(--brand-soft);
+  border: 1px solid rgba(13, 110, 87, 0.18);
+}
+
+.otp-feedback-msg.is-success {
+  color: #065f46;
+  background: #d1fae5;
+  border: 1px solid rgba(5, 150, 105, 0.25);
+}
+
+.otp-feedback-msg.is-error {
+  color: var(--err);
+  background: #fee2e2;
+  border: 1px solid rgba(220, 38, 38, 0.2);
+}
+
+[data-theme="dark"] .otp-feedback-msg.is-success {
+  color: #34d399;
+  background: rgba(16, 185, 129, 0.15);
+  border-color: rgba(52, 211, 153, 0.25);
+}
+
+[data-theme="dark"] .otp-feedback-msg.is-error {
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(248, 113, 113, 0.25);
+}
+
 /* Checkboxes & Radio Controls with Instant Press Feedback */
 .check {
   display: flex;

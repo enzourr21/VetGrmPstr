@@ -9,15 +9,15 @@ if (!empty($errors)) {
     <div class="step-tracker" aria-label="Registration progress">
       <div class="step-chip <?= $stage > 1 ? 'is-done' : 'is-active' ?>" data-step-chip="1">
         <div class="step-chip-bar"></div>
-        <span class="step-chip-label">1. Account Email</span>
+        <span class="step-chip-label">1. Full Name</span>
       </div>
       <div class="step-chip <?= $stage > 2 ? 'is-done' : ($stage === 2 ? 'is-active' : '') ?>" data-step-chip="2">
         <div class="step-chip-bar"></div>
-        <span class="step-chip-label">2. Full Name</span>
+        <span class="step-chip-label">2. Details</span>
       </div>
       <div class="step-chip <?= $stage > 3 ? 'is-done' : ($stage === 3 ? 'is-active' : '') ?>" data-step-chip="3">
         <div class="step-chip-bar"></div>
-        <span class="step-chip-label">3. Details</span>
+        <span class="step-chip-label">3. Verify Email</span>
       </div>
       <div class="step-chip <?= $stage === 4 ? 'is-active' : '' ?>" data-step-chip="4">
         <div class="step-chip-bar"></div>
@@ -31,37 +31,19 @@ if (!empty($errors)) {
     <form method="post" action="/register" data-progressive-register novalidate>
       <?= \App\Core\CSRF::field() ?>
 
-      <!-- Step 1: Account Email -->
+      <!-- Step 1: Full Name (First, Middle, Last aligned evenly) -->
       <div id="reg-stage-1" data-progressive-stage="1">
         <div class="progressive-stage-header">
-          <span class="stage-pill">Step 1 · Account Email</span>
+          <span class="stage-pill">Step 1 · Full Name</span>
           <span class="stage-status-badge" data-stage1-done <?= $stage > 1 ? '' : 'hidden' ?>>Completed</span>
-        </div>
-        <div class="field">
-          <div class="field-label-row">
-            <label for="email" style="margin:0">Email address</label>
-            <span class="label-optional">Required</span>
-          </div>
-          <input id="email" name="email" type="email" autocomplete="email" placeholder="name@example.com" required <?= $stage === 1 ? 'autofocus' : '' ?> value="<?= e($email ?? '') ?>">
-          <div class="field-error" data-reg-email-error <?= isset($errors['email']) ? '' : 'hidden' ?>><?= e($errors['email'] ?? '') ?></div>
-        </div>
-        <div class="stage-actions" data-reg-step1-actions <?= $stage >= 2 ? 'hidden' : '' ?>>
-          <button type="button" class="btn full" data-reg-unlock-2>Continue</button>
-        </div>
-      </div>
-
-      <!-- Step 2: Full Name (First, Middle, Last aligned evenly) -->
-      <div id="reg-stage-2" class="progressive-stage" data-progressive-stage="2" <?= $stage >= 2 ? '' : 'hidden' ?>>
-        <div class="progressive-stage-header">
-          <span class="stage-pill">Step 2 · Full Name</span>
-          <span class="stage-status-badge" data-stage2-done <?= $stage > 2 ? '' : 'hidden' ?>>Completed</span>
         </div>
         <div class="form-grid-3">
           <div class="field">
             <div class="field-label-row">
               <label for="first_name" style="margin:0">First name</label>
+              <span class="label-optional">Required</span>
             </div>
-            <input id="first_name" name="first_name" type="text" autocomplete="given-name" placeholder="First" required value="<?= e($old['first_name'] ?? '') ?>">
+            <input id="first_name" name="first_name" type="text" autocomplete="given-name" placeholder="First" required <?= $stage === 1 ? 'autofocus' : '' ?> value="<?= e($old['first_name'] ?? '') ?>">
             <?php if (isset($errors['first_name'])): ?><div class="field-error"><?= e($errors['first_name']) ?></div><?php endif; ?>
           </div>
           <div class="field">
@@ -75,22 +57,23 @@ if (!empty($errors)) {
           <div class="field">
             <div class="field-label-row">
               <label for="last_name" style="margin:0">Last name</label>
+              <span class="label-optional">Required</span>
             </div>
             <input id="last_name" name="last_name" type="text" autocomplete="family-name" placeholder="Last" required value="<?= e($old['last_name'] ?? '') ?>">
             <?php if (isset($errors['last_name'])): ?><div class="field-error"><?= e($errors['last_name']) ?></div><?php endif; ?>
           </div>
         </div>
         <div class="field-error" data-reg-name-error hidden></div>
-        <div class="stage-actions" data-reg-step2-actions <?= $stage >= 3 ? 'hidden' : '' ?>>
-          <button type="button" class="btn full" data-reg-unlock-3>Continue</button>
+        <div class="stage-actions" data-reg-step1-actions <?= $stage >= 2 ? 'hidden' : '' ?>>
+          <button type="button" class="btn full" data-reg-unlock-2>Continue</button>
         </div>
       </div>
 
-      <!-- Step 3: Additional Details (Never auto-reveals Step 4 while typing) -->
-      <div id="reg-stage-3" class="progressive-stage" data-progressive-stage="3" <?= $stage >= 3 ? '' : 'hidden' ?>>
+      <!-- Step 2: Additional Details -->
+      <div id="reg-stage-2" class="progressive-stage" data-progressive-stage="2" <?= $stage >= 2 ? '' : 'hidden' ?>>
         <div class="progressive-stage-header">
-          <span class="stage-pill">Step 3 · Additional Details</span>
-          <span class="stage-status-badge" data-stage3-done <?= $stage > 3 ? '' : 'hidden' ?>>Completed</span>
+          <span class="stage-pill">Step 2 · Additional Details</span>
+          <span class="stage-status-badge" data-stage2-done <?= $stage > 2 ? '' : 'hidden' ?>>Completed</span>
         </div>
         <div class="form-grid-2">
           <div class="field">
@@ -121,19 +104,62 @@ if (!empty($errors)) {
           </div>
           <div class="field">
             <div class="field-label-row">
-              <label for="province" style="margin:0">Province / State</label>
+              <label for="province" style="margin:0">Province</label>
               <span class="label-optional">Optional</span>
             </div>
             <input id="province" name="province" type="text" autocomplete="address-level1" placeholder="Province" value="<?= e($old['province'] ?? '') ?>">
+            <?php if (isset($errors['province'])): ?><div class="field-error"><?= e($errors['province']) ?></div><?php endif; ?>
           </div>
           <div class="field">
             <div class="field-label-row">
               <label for="postal_code" style="margin:0">Postal code</label>
               <span class="label-optional">Optional</span>
             </div>
-            <input id="postal_code" name="postal_code" type="text" autocomplete="postal-code" placeholder="Postal code" value="<?= e($old['postal_code'] ?? '') ?>">
+            <input id="postal_code" name="postal_code" type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="postal-code" placeholder="4 digits" value="<?= e($old['postal_code'] ?? '') ?>">
+            <div class="field-error" data-reg-postal-error <?= isset($errors['postal_code']) ? '' : 'hidden' ?>><?= e($errors['postal_code'] ?? '') ?></div>
           </div>
         </div>
+        <div class="stage-actions" data-reg-step2-actions <?= $stage >= 3 ? 'hidden' : '' ?>>
+          <button type="button" class="btn full" data-reg-unlock-3>Continue</button>
+        </div>
+      </div>
+
+      <!-- Step 3: Set and Verify Email -->
+      <div id="reg-stage-3" class="progressive-stage" data-progressive-stage="3" <?= $stage >= 3 ? '' : 'hidden' ?>>
+        <div class="progressive-stage-header">
+          <span class="stage-pill">Step 3 · Set and Verify Email</span>
+          <span class="stage-status-badge" data-stage3-done <?= $stage > 3 ? '' : 'hidden' ?>>Completed</span>
+        </div>
+        <div class="field">
+          <div class="field-label-row">
+            <label for="email" style="margin:0">Email address</label>
+            <span class="label-optional">Required</span>
+          </div>
+          <div class="email-input-group">
+            <input id="email" name="email" type="email" autocomplete="email" placeholder="name@example.com" required value="<?= e($email ?? '') ?>">
+            <button type="button" class="btn secondary" data-send-otp-btn>Send Verification Code</button>
+          </div>
+          <div class="field-error" data-reg-email-error <?= isset($errors['email']) ? '' : 'hidden' ?>><?= e($errors['email'] ?? '') ?></div>
+        </div>
+
+        <div class="otp-verification-section" data-otp-section>
+          <div class="field-label-row">
+            <label style="margin:0">Verification code</label>
+            <span class="label-optional" data-otp-timer-hint>6-digit code</span>
+          </div>
+          <p class="muted" style="margin:0.25rem 0 0.75rem; font-size:0.85rem">Enter the 6-digit code sent to your email address.</p>
+          <div class="otp-inputs-wrap" role="group" aria-label="6-digit verification code">
+            <input type="text" class="otp-digit-box" data-otp-box="0" inputmode="numeric" pattern="[0-9]" maxlength="1" autocomplete="off" aria-label="Digit 1">
+            <input type="text" class="otp-digit-box" data-otp-box="1" inputmode="numeric" pattern="[0-9]" maxlength="1" autocomplete="off" aria-label="Digit 2">
+            <input type="text" class="otp-digit-box" data-otp-box="2" inputmode="numeric" pattern="[0-9]" maxlength="1" autocomplete="off" aria-label="Digit 3">
+            <input type="text" class="otp-digit-box" data-otp-box="3" inputmode="numeric" pattern="[0-9]" maxlength="1" autocomplete="off" aria-label="Digit 4">
+            <input type="text" class="otp-digit-box" data-otp-box="4" inputmode="numeric" pattern="[0-9]" maxlength="1" autocomplete="off" aria-label="Digit 5">
+            <input type="text" class="otp-digit-box" data-otp-box="5" inputmode="numeric" pattern="[0-9]" maxlength="1" autocomplete="off" aria-label="Digit 6">
+          </div>
+          <input type="hidden" name="email_otp" id="email_otp" value="">
+          <div class="otp-feedback-msg" data-otp-feedback hidden></div>
+        </div>
+
         <div class="stage-actions" data-reg-step3-actions <?= $stage >= 4 ? 'hidden' : '' ?>>
           <button type="button" class="btn full" data-reg-unlock-4>Continue</button>
         </div>

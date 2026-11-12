@@ -172,27 +172,44 @@
   var regForm = document.querySelector('[data-progressive-register]');
   if (regForm) {
     var regCard = regForm.closest('.auth-card') || regForm;
-    var regEmail = regForm.querySelector('#email');
-    var regEmailError = regForm.querySelector('[data-reg-email-error]');
+
+    // Step 1: Full Name
+    var stage1 = regForm.querySelector('#reg-stage-1');
+    var firstName = regForm.querySelector('#first_name');
+    var middleName = regForm.querySelector('#middle_name');
+    var lastName = regForm.querySelector('#last_name');
+    var regNameError = regForm.querySelector('[data-reg-name-error]');
     var step1Actions = regForm.querySelector('[data-reg-step1-actions]');
     var unlock2Btn = regForm.querySelector('[data-reg-unlock-2]');
     var step1Badge = regForm.querySelector('[data-stage1-done]');
 
+    // Step 2: Additional Details
     var stage2 = regForm.querySelector('#reg-stage-2');
-    var firstName = regForm.querySelector('#first_name');
-    var lastName = regForm.querySelector('#last_name');
-    var regNameError = regForm.querySelector('[data-reg-name-error]');
+    var phoneInput = regForm.querySelector('#phone');
+    var regPhoneError = regForm.querySelector('[data-reg-phone-error]');
+    var addressInput = regForm.querySelector('#address_line1');
+    var cityInput = regForm.querySelector('#city');
+    var provinceInput = regForm.querySelector('#province');
+    var postalCodeInput = regForm.querySelector('#postal_code');
+    var regPostalError = regForm.querySelector('[data-reg-postal-error]');
     var step2Actions = regForm.querySelector('[data-reg-step2-actions]');
     var unlock3Btn = regForm.querySelector('[data-reg-unlock-3]');
     var step2Badge = regForm.querySelector('[data-stage2-done]');
 
+    // Step 3: Set and Verify Email
     var stage3 = regForm.querySelector('#reg-stage-3');
-    var phoneInput = regForm.querySelector('#phone');
-    var regPhoneError = regForm.querySelector('[data-reg-phone-error]');
+    var regEmail = regForm.querySelector('#email');
+    var regEmailError = regForm.querySelector('[data-reg-email-error]');
+    var sendOtpBtn = regForm.querySelector('[data-send-otp-btn]');
+    var otpSection = regForm.querySelector('[data-otp-section]');
+    var otpBoxes = regForm.querySelectorAll('[data-otp-box]');
+    var hiddenOtpInput = regForm.querySelector('#email_otp');
+    var otpFeedback = regForm.querySelector('[data-otp-feedback]');
     var step3Actions = regForm.querySelector('[data-reg-step3-actions]');
     var unlock4Btn = regForm.querySelector('[data-reg-unlock-4]');
     var step3Badge = regForm.querySelector('[data-stage3-done]');
 
+    // Step 4: Set Password
     var stage4 = regForm.querySelector('#reg-stage-4');
     var pwInput = regForm.querySelector('#password');
     var pwConfirmInput = regForm.querySelector('#password_confirm');
@@ -201,45 +218,142 @@
     var ruleMatchText = regForm.querySelector('[data-pw-match-text]');
     var submitBtn = regForm.querySelector('#reg-submit-btn');
 
+    // Email verification state (Step 4 is strictly inaccessible until verification succeeds)
+    var isEmailVerified = stage4 && !stage4.hasAttribute('hidden');
+    var isSendingOtp = false;
+
+    function showOtpFeedback(msg, type) {
+      if (!otpFeedback) return;
+      otpFeedback.textContent = msg;
+      otpFeedback.className = 'otp-feedback-msg is-' + type;
+      otpFeedback.removeAttribute('hidden');
+    }
+
+    function getEnteredOtp() {
+      var code = '';
+      otpBoxes.forEach(function (b) {
+        code += (b.value || '').trim();
+      });
+      return code;
+    }
+
+    function clearOtpBoxes() {
+      otpBoxes.forEach(function (b) {
+        b.value = '';
+        b.classList.remove('is-filled', 'is-invalid');
+        b.removeAttribute('disabled');
+      });
+      if (hiddenOtpInput) hiddenOtpInput.value = '';
+    }
+
     function proceedToStep2() {
-      var val = (regEmail.value || '').trim();
-      if (!emailPattern.test(val)) {
-        showErrorSmooth(regEmailError, 'Enter a valid email address, for example name@example.com.');
-        regEmail.focus();
+      var fn = (firstName ? firstName.value : '').trim();
+      var ln = (lastName ? lastName.value : '').trim();
+      if (fn.length < 1 || ln.length < 1) {
+        showErrorSmooth(regNameError, 'Please enter both your first name and last name to continue.');
+        if (fn.length < 1) {
+          if (firstName) firstName.focus();
+        } else {
+          if (lastName) lastName.focus();
+        }
         return false;
       }
-      if (regEmailError) regEmailError.setAttribute('hidden', 'hidden');
+      if (regNameError) regNameError.setAttribute('hidden', 'hidden');
       if (step1Actions) step1Actions.setAttribute('hidden', 'hidden');
       if (step1Badge) animateStageIn(step1Badge);
-      animateStageIn(stage2, '#first_name');
+      animateStageIn(stage2, '#phone');
       updateStepTracker(regCard, 2);
       return true;
     }
 
     function proceedToStep3() {
-      var fn = (firstName.value || '').trim();
-      var ln = (lastName.value || '').trim();
-      if (fn.length < 1 || ln.length < 1) {
-        showErrorSmooth(regNameError, 'Please enter both your first name and last name to continue.');
-        (fn.length < 1 ? firstName : lastName).focus();
-        return false;
-      }
-      if (regNameError) regNameError.setAttribute('hidden', 'hidden');
-      if (step2Actions) step2Actions.setAttribute('hidden', 'hidden');
-      if (step2Badge) animateStageIn(step2Badge);
-      animateStageIn(stage3, '#phone');
-      updateStepTracker(regCard, 3);
-      return true;
-    }
-
-    function proceedToStep4() {
-      var ph = (phoneInput.value || '').trim();
+      var ph = (phoneInput ? phoneInput.value : '').trim();
       if (ph !== '' && !phonePattern.test(ph)) {
         showErrorSmooth(regPhoneError, 'Please enter a valid phone number (6–30 digits) or leave optional.');
         phoneInput.focus();
         return false;
       }
+      var pc = (postalCodeInput ? postalCodeInput.value : '').trim();
+      if (pc !== '' && !/^[0-9]{4}$/.test(pc)) {
+        showErrorSmooth(regPostalError, 'Postal code must accept exactly four numeric digits.');
+        postalCodeInput.focus();
+        return false;
+      }
       if (regPhoneError) regPhoneError.setAttribute('hidden', 'hidden');
+      if (regPostalError) regPostalError.setAttribute('hidden', 'hidden');
+      if (step2Actions) step2Actions.setAttribute('hidden', 'hidden');
+      if (step2Badge) animateStageIn(step2Badge);
+      animateStageIn(stage3, '#email');
+      updateStepTracker(regCard, 3);
+      return true;
+    }
+
+    function handleSendOtp() {
+      var emailVal = (regEmail ? regEmail.value : '').trim();
+      if (!emailPattern.test(emailVal)) {
+        showErrorSmooth(regEmailError, 'Enter a valid email address, for example name@example.com.');
+        if (regEmail) regEmail.focus();
+        return;
+      }
+      if (regEmailError) regEmailError.setAttribute('hidden', 'hidden');
+      if (isSendingOtp) return;
+
+      isSendingOtp = true;
+      if (sendOtpBtn) {
+        sendOtpBtn.setAttribute('disabled', 'disabled');
+        sendOtpBtn.textContent = 'Sending...';
+      }
+      showOtpFeedback('Sending verification code...', 'info');
+
+      // Boundary: Reuse existing OTP functionality if available. Do not invent endpoints or simulate successful email verification.
+      // If backend OTP integration is not yet available, implement the interface states without falsely marking an email as verified.
+      setTimeout(function () {
+        isSendingOtp = false;
+        if (sendOtpBtn) {
+          sendOtpBtn.removeAttribute('disabled');
+          sendOtpBtn.textContent = 'Resend Code';
+        }
+        showOtpFeedback('Verification code service is pending backend integration. Email cannot be verified at this time.', 'error');
+        if (otpBoxes.length > 0) {
+          otpBoxes[0].focus();
+        }
+      }, 500);
+    }
+
+    function proceedToStep4() {
+      var emailVal = (regEmail ? regEmail.value : '').trim();
+      if (!emailPattern.test(emailVal)) {
+        showErrorSmooth(regEmailError, 'Enter a valid email address, for example name@example.com.');
+        if (regEmail) regEmail.focus();
+        return false;
+      }
+      if (regEmailError) regEmailError.setAttribute('hidden', 'hidden');
+
+      if (!isEmailVerified) {
+        var code = getEnteredOtp();
+        if (code.length < 6) {
+          showOtpFeedback('Please enter all 6 digits of the verification code.', 'error');
+          var firstEmpty = null;
+          otpBoxes.forEach(function (b) {
+            if (!b.value) {
+              b.classList.add('is-invalid');
+              if (!firstEmpty) firstEmpty = b;
+            }
+          });
+          if (firstEmpty) firstEmpty.focus();
+          return false;
+        }
+
+        // A 6-digit code has been entered, but email verification backend is not integrated
+        // Step 4 must remain strictly inaccessible until email verification succeeds
+        showOtpFeedback('Email verification service is pending backend integration. Email cannot be verified at this time.', 'error');
+        otpBoxes.forEach(function (b) {
+          b.classList.add('is-invalid');
+        });
+        return false;
+      }
+
+      // Reached only after email verification succeeds
       if (step3Actions) step3Actions.setAttribute('hidden', 'hidden');
       if (step3Badge) animateStageIn(step3Badge);
       animateStageIn(stage4, '#password');
@@ -288,37 +402,47 @@
       }
     }
 
+    // Step 1 event listeners
     if (unlock2Btn) {
       unlock2Btn.addEventListener('click', proceedToStep2);
     }
-    if (unlock3Btn) {
-      unlock3Btn.addEventListener('click', proceedToStep3);
-    }
-    if (unlock4Btn) {
-      unlock4Btn.addEventListener('click', proceedToStep4);
-    }
-
-    if (regEmail) {
-      regEmail.addEventListener('input', function () {
-        if (regEmailError && !regEmailError.hasAttribute('hidden')) {
-          regEmailError.setAttribute('hidden', 'hidden');
-        }
-      });
-      regEmail.addEventListener('keydown', function (ev) {
-        if (ev.key === 'Enter' && stage2 && stage2.hasAttribute('hidden')) {
-          ev.preventDefault();
-          proceedToStep2();
-        }
-      });
-    }
-
-    [firstName, lastName].forEach(function (inp) {
+    [firstName, middleName, lastName].forEach(function (inp) {
       if (!inp) return;
       inp.addEventListener('input', function () {
         if (regNameError && !regNameError.hasAttribute('hidden')) {
           regNameError.setAttribute('hidden', 'hidden');
         }
       });
+      inp.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter' && stage2 && stage2.hasAttribute('hidden')) {
+          ev.preventDefault();
+          proceedToStep2();
+        }
+      });
+    });
+
+    // Step 2 event listeners
+    if (unlock3Btn) {
+      unlock3Btn.addEventListener('click', proceedToStep3);
+    }
+    if (postalCodeInput) {
+      postalCodeInput.addEventListener('input', function () {
+        // Enforce exactly numeric digits; reject letters, spaces, and special characters
+        this.value = this.value.replace(/[^0-9]/g, '').slice(0, 4);
+        if (regPostalError && !regPostalError.hasAttribute('hidden')) {
+          regPostalError.setAttribute('hidden', 'hidden');
+        }
+      });
+    }
+    if (phoneInput) {
+      phoneInput.addEventListener('input', function () {
+        if (regPhoneError && !regPhoneError.hasAttribute('hidden')) {
+          regPhoneError.setAttribute('hidden', 'hidden');
+        }
+      });
+    }
+    [phoneInput, addressInput, cityInput, provinceInput, postalCodeInput].forEach(function (inp) {
+      if (!inp) return;
       inp.addEventListener('keydown', function (ev) {
         if (ev.key === 'Enter' && stage3 && stage3.hasAttribute('hidden')) {
           ev.preventDefault();
@@ -327,16 +451,120 @@
       });
     });
 
-    if (phoneInput) {
-      phoneInput.addEventListener('input', function () {
-        if (regPhoneError && !regPhoneError.hasAttribute('hidden')) {
-          regPhoneError.setAttribute('hidden', 'hidden');
+    // Step 3 event listeners
+    if (sendOtpBtn) {
+      sendOtpBtn.addEventListener('click', handleSendOtp);
+    }
+    if (unlock4Btn) {
+      unlock4Btn.addEventListener('click', proceedToStep4);
+    }
+    if (regEmail) {
+      regEmail.addEventListener('input', function () {
+        if (regEmailError && !regEmailError.hasAttribute('hidden')) {
+          regEmailError.setAttribute('hidden', 'hidden');
+        }
+        if (isEmailVerified) {
+          isEmailVerified = false;
+          clearOtpBoxes();
+          if (step3Badge) step3Badge.setAttribute('hidden', 'hidden');
+          if (stage4) stage4.setAttribute('hidden', 'hidden');
+          if (step3Actions) step3Actions.removeAttribute('hidden');
+          updateStepTracker(regCard, 3);
+          showOtpFeedback('Email address changed. Please request a new verification code.', 'info');
+        }
+      });
+      regEmail.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter') {
+          ev.preventDefault();
+          handleSendOtp();
         }
       });
     }
 
+    // 6 OTP boxes: numeric input, auto-advance, backspace navigation, paste complete code
+    otpBoxes.forEach(function (box, idx) {
+      box.addEventListener('focus', function () {
+        box.select();
+      });
+
+      box.addEventListener('input', function () {
+        var raw = (box.value || '').replace(/\D/g, '');
+        if (raw.length > 0) {
+          box.value = raw.charAt(raw.length - 1);
+          box.classList.add('is-filled');
+          box.classList.remove('is-invalid');
+          if (idx < otpBoxes.length - 1) {
+            otpBoxes[idx + 1].focus();
+            otpBoxes[idx + 1].select();
+          }
+        } else {
+          box.value = '';
+          box.classList.remove('is-filled');
+        }
+        if (hiddenOtpInput) hiddenOtpInput.value = getEnteredOtp();
+        if (otpFeedback && !otpFeedback.hasAttribute('hidden')) {
+          otpFeedback.setAttribute('hidden', 'hidden');
+        }
+      });
+
+      box.addEventListener('keydown', function (e) {
+        if (e.key === 'Backspace') {
+          if (!box.value && idx > 0) {
+            e.preventDefault();
+            var prevBox = otpBoxes[idx - 1];
+            prevBox.focus();
+            prevBox.value = '';
+            prevBox.classList.remove('is-filled');
+            if (hiddenOtpInput) hiddenOtpInput.value = getEnteredOtp();
+          } else {
+            box.value = '';
+            box.classList.remove('is-filled');
+            if (hiddenOtpInput) hiddenOtpInput.value = getEnteredOtp();
+          }
+        } else if (e.key === 'ArrowLeft' && idx > 0) {
+          e.preventDefault();
+          otpBoxes[idx - 1].focus();
+          otpBoxes[idx - 1].select();
+        } else if (e.key === 'ArrowRight' && idx < otpBoxes.length - 1) {
+          e.preventDefault();
+          otpBoxes[idx + 1].focus();
+          otpBoxes[idx + 1].select();
+        } else if (e.key === 'Enter') {
+          e.preventDefault();
+          proceedToStep4();
+        }
+      });
+
+      box.addEventListener('paste', function (e) {
+        e.preventDefault();
+        var clipboard = e.clipboardData || window.clipboardData;
+        var text = clipboard ? clipboard.getData('text') : '';
+        var digits = (text || '').replace(/\D/g, '').slice(0, 6);
+        if (!digits) return;
+
+        var start = digits.length === 6 ? 0 : idx;
+        for (var i = 0; i < digits.length && (start + i) < otpBoxes.length; i++) {
+          var targetBox = otpBoxes[start + i];
+          targetBox.value = digits[i];
+          targetBox.classList.add('is-filled');
+          targetBox.classList.remove('is-invalid');
+        }
+        if (hiddenOtpInput) hiddenOtpInput.value = getEnteredOtp();
+        if (otpFeedback && !otpFeedback.hasAttribute('hidden')) {
+          otpFeedback.setAttribute('hidden', 'hidden');
+        }
+        var nextIdx = Math.min(start + digits.length, otpBoxes.length - 1);
+        otpBoxes[nextIdx].focus();
+        if (nextIdx === otpBoxes.length - 1 && digits.length === 6) {
+          otpBoxes[nextIdx].select();
+        }
+      });
+    });
+
+    // Step 4 password listeners
     if (pwInput) pwInput.addEventListener('input', evaluatePasswordState);
     if (pwConfirmInput) pwConfirmInput.addEventListener('input', evaluatePasswordState);
+    if (isEmailVerified) evaluatePasswordState();
   }
 
   // ---- Services Segmented Filter Bar ----------------------------------

@@ -831,8 +831,8 @@ final class AuthController extends Controller
         if (mb_strlen($old['province']) > 100) {
             $errors['province'] = 'Maximum 100 characters.';
         }
-        if (mb_strlen($old['postal_code']) > 20) {
-            $errors['postal_code'] = 'Maximum 20 characters.';
+        if ($old['postal_code'] !== '' && !preg_match('/^[0-9]{4}$/', $old['postal_code'])) {
+            $errors['postal_code'] = 'Postal code must be exactly 4 numeric digits.';
         }
         if (strlen($password) < 10) {
             $errors['password'] = 'Use at least 10 characters.';
