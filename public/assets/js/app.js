@@ -219,8 +219,86 @@
     var submitBtn = regForm.querySelector('#reg-submit-btn');
 
     // Email verification state (Step 4 is strictly inaccessible until verification succeeds)
+    var csrfInput = regForm.querySelector('input[name="csrf_token"]');
     var isEmailVerified = stage4 && !stage4.hasAttribute('hidden');
     var isSendingOtp = false;
+    var isVerifyingOtp = false;
+    var otpSentForEmail = '';
+    var cooldownTimerId = null;
+    var cooldownRemaining = 0;
+
+    if (!isEmailVerified && otpSection) {
+      otpSection.setAttribute('hidden', 'hidden');
+    }
+
+    function getCsrfToken() {
+      return csrfInput ? (csrfInput.value || '') : '';
+    }
+
+    function updateCsrfToken(data) {
+      if (data && typeof data.csrf_token === 'string' && data.csrf_token !== '' && csrfInput) {
+        csrfInput.value = data.csrf_token;
+      }
+    }
+
+    function postFormJson(url, params) {
+      return fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Accept': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest'
+        },
+        body: params.toString()
+      }).then(function (resp) {
+        return resp.json().catch(function () {
+          return { ok: false, status: resp.status, error: 'Unexpected server response. Please try again.' };
+        }).then(function (data) {
+          if (typeof data.status !== 'number') {
+            data.status = resp.status;
+          }
+          updateCsrfToken(data);
+          return data;
+        });
+      });
+    }
+
+    function stopResendCooldown() {
+      if (cooldownTimerId !== null) {
+        clearInterval(cooldownTimerId);
+        cooldownTimerId = null;
+      }
+      cooldownRemaining = 0;
+      if (sendOtpBtn && !isSendingOtp) {
+        sendOtpBtn.removeAttribute('disabled');
+        sendOtpBtn.textContent = otpSentForEmail !== '' ? 'Resend Code' : 'Send Verification Code';
+      }
+    }
+
+    function startResendCooldown(seconds) {
+      stopResendCooldown();
+      cooldownRemaining = Math.max(1, parseInt(seconds, 10) || 60);
+      if (sendOtpBtn) {
+        sendOtpBtn.setAttribute('disabled', 'disabled');
+        sendOtpBtn.textContent = 'Resend (' + cooldownRemaining + 's)';
+      }
+      cooldownTimerId = setInterval(function () {
+        cooldownRemaining -= 1;
+        if (cooldownRemaining <= 0) {
+          stopResendCooldown();
+        } else if (sendOtpBtn) {
+          sendOtpBtn.textContent = 'Resend (' + cooldownRemaining + 's)';
+        }
+      }, 1000);
+    }
+
+    function unlockStep4Ui() {
+      if (step3Actions) step3Actions.setAttribute('hidden', 'hidden');
+      if (step3Badge) animateStageIn(step3Badge);
+      animateStageIn(stage4, '#password');
+      updateStepTracker(regCard, 4);
+      evaluatePasswordState();
+    }
 
     function showOtpFeedback(msg, type) {
       if (!otpFeedback) return;
@@ -296,28 +374,93 @@
         return;
       }
       if (regEmailError) regEmailError.setAttribute('hidden', 'hidden');
-      if (isSendingOtp) return;
+      if (isSendingOtp || isVerifyingOtp || cooldownRemaining > 0) return;
+
+      var isResend = otpSentForEmail !== '' && otpSentForEmail === emailVal;
+      var endpoint = isResend ? '/register/otp/resend' : '/register/otp/send';
+      var params = new URLSearchParams();
+      params.append('csrf_token', getCsrfToken());
+
+      if (!isResend) {
+        params.append('first_name', firstName ? firstName.value.trim() : '');
+        params.append('middle_name', middleName ? middleName.value.trim() : '');
+        params.append('last_name', lastName ? lastName.value.trim() : '');
+        params.append('phone', phoneInput ? phoneInput.value.trim() : '');
+        params.append('address_line1', addressInput ? addressInput.value.trim() : '');
+        params.append('city', cityInput ? cityInput.value.trim() : '');
+        params.append('province', provinceInput ? provinceInput.value.trim() : '');
+        params.append('postal_code', postalCodeInput ? postalCodeInput.value.trim() : '');
+        params.append('email', emailVal);
+      }
 
       isSendingOtp = true;
       if (sendOtpBtn) {
         sendOtpBtn.setAttribute('disabled', 'disabled');
-        sendOtpBtn.textContent = 'Sending...';
+        sendOtpBtn.textContent = isResend ? 'Resending...' : 'Sending...';
       }
-      showOtpFeedback('Sending verification code...', 'info');
+      if (otpSection && !otpSection.hasAttribute('hidden')) {
+        showOtpFeedback('Sending verification code...', 'info');
+      }
 
-      // Boundary: Reuse existing OTP functionality if available. Do not invent endpoints or simulate successful email verification.
-      // If backend OTP integration is not yet available, implement the interface states without falsely marking an email as verified.
-      setTimeout(function () {
-        isSendingOtp = false;
-        if (sendOtpBtn) {
-          sendOtpBtn.removeAttribute('disabled');
-          sendOtpBtn.textContent = 'Resend Code';
-        }
-        showOtpFeedback('Verification code service is pending backend integration. Email cannot be verified at this time.', 'error');
-        if (otpBoxes.length > 0) {
-          otpBoxes[0].focus();
-        }
-      }, 500);
+      postFormJson(endpoint, params)
+        .then(function (data) {
+          isSendingOtp = false;
+          if (data && data.ok) {
+            otpSentForEmail = emailVal;
+            if (data.already_verified) {
+              isEmailVerified = true;
+              stopResendCooldown();
+              if (otpSection) otpSection.removeAttribute('hidden');
+              showOtpFeedback(data.message || 'Email is already verified.', 'info');
+              unlockStep4Ui();
+              return;
+            }
+            if (otpSection) otpSection.removeAttribute('hidden');
+            clearOtpBoxes();
+            showOtpFeedback(data.message || 'A 6-digit verification code has been sent to your email.', 'info');
+            startResendCooldown(60);
+            if (otpBoxes.length > 0) {
+              otpBoxes[0].focus();
+            }
+            return;
+          }
+
+          var errMsg = (data && data.error) ? data.error : 'Unable to send verification code. Please try again.';
+          if (data && data.errors && typeof data.errors === 'object') {
+            if (data.errors.email) errMsg = data.errors.email;
+            else if (data.errors.first_name) errMsg = data.errors.first_name;
+            else if (data.errors.last_name) errMsg = data.errors.last_name;
+            else if (data.errors.phone) errMsg = data.errors.phone;
+            else if (data.errors.postal_code) errMsg = data.errors.postal_code;
+          }
+
+          if (data && typeof data.retry_after === 'number' && data.retry_after > 0) {
+            if (otpSection) otpSection.removeAttribute('hidden');
+            startResendCooldown(data.retry_after);
+          } else if (sendOtpBtn) {
+            sendOtpBtn.removeAttribute('disabled');
+            sendOtpBtn.textContent = isResend ? 'Resend Code' : 'Send Verification Code';
+          }
+
+          if (otpSection && !otpSection.hasAttribute('hidden')) {
+            showOtpFeedback(errMsg, 'error');
+          } else {
+            showErrorSmooth(regEmailError, errMsg);
+          }
+        })
+        .catch(function () {
+          isSendingOtp = false;
+          if (sendOtpBtn) {
+            sendOtpBtn.removeAttribute('disabled');
+            sendOtpBtn.textContent = isResend ? 'Resend Code' : 'Send Verification Code';
+          }
+          var netErr = 'Network error while sending verification code. Please try again.';
+          if (otpSection && !otpSection.hasAttribute('hidden')) {
+            showOtpFeedback(netErr, 'error');
+          } else {
+            showErrorSmooth(regEmailError, netErr);
+          }
+        });
     }
 
     function proceedToStep4() {
@@ -329,37 +472,85 @@
       }
       if (regEmailError) regEmailError.setAttribute('hidden', 'hidden');
 
-      if (!isEmailVerified) {
-        var code = getEnteredOtp();
-        if (code.length < 6) {
-          showOtpFeedback('Please enter all 6 digits of the verification code.', 'error');
-          var firstEmpty = null;
-          otpBoxes.forEach(function (b) {
-            if (!b.value) {
-              b.classList.add('is-invalid');
-              if (!firstEmpty) firstEmpty = b;
-            }
-          });
-          if (firstEmpty) firstEmpty.focus();
-          return false;
-        }
+      if (isEmailVerified) {
+        unlockStep4Ui();
+        return true;
+      }
 
-        // A 6-digit code has been entered, but email verification backend is not integrated
-        // Step 4 must remain strictly inaccessible until email verification succeeds
-        showOtpFeedback('Email verification service is pending backend integration. Email cannot be verified at this time.', 'error');
-        otpBoxes.forEach(function (b) {
-          b.classList.add('is-invalid');
-        });
+      if (otpSentForEmail === '' || otpSentForEmail !== emailVal) {
+        showErrorSmooth(regEmailError, 'Please click Send Verification Code to verify your email address.');
+        if (sendOtpBtn) sendOtpBtn.focus();
         return false;
       }
 
-      // Reached only after email verification succeeds
-      if (step3Actions) step3Actions.setAttribute('hidden', 'hidden');
-      if (step3Badge) animateStageIn(step3Badge);
-      animateStageIn(stage4, '#password');
-      updateStepTracker(regCard, 4);
-      evaluatePasswordState();
-      return true;
+      var code = getEnteredOtp();
+      if (code.length < 6) {
+        showOtpFeedback('Please enter all 6 digits of the verification code.', 'error');
+        var firstEmpty = null;
+        otpBoxes.forEach(function (b) {
+          if (!b.value) {
+            b.classList.add('is-invalid');
+            if (!firstEmpty) firstEmpty = b;
+          }
+        });
+        if (firstEmpty) firstEmpty.focus();
+        return false;
+      }
+
+      if (isVerifyingOtp || isSendingOtp) return false;
+      isVerifyingOtp = true;
+      if (unlock4Btn) {
+        unlock4Btn.setAttribute('disabled', 'disabled');
+        unlock4Btn.textContent = 'Verifying...';
+      }
+
+      var verifyParams = new URLSearchParams();
+      verifyParams.append('csrf_token', getCsrfToken());
+      verifyParams.append('otp', code);
+
+      postFormJson('/register/otp/verify', verifyParams)
+        .then(function (data) {
+          isVerifyingOtp = false;
+          if (unlock4Btn) {
+            unlock4Btn.removeAttribute('disabled');
+            unlock4Btn.textContent = 'Continue';
+          }
+
+          if (data && data.ok) {
+            isEmailVerified = true;
+            stopResendCooldown();
+            otpBoxes.forEach(function (b) {
+              b.classList.remove('is-invalid');
+            });
+            showOtpFeedback(data.message || 'Email verified successfully.', 'info');
+            unlockStep4Ui();
+            return;
+          }
+
+          otpBoxes.forEach(function (b) {
+            b.classList.add('is-invalid');
+          });
+          var errMsg = (data && data.error) ? data.error : 'Verification failed. Please check the code and try again.';
+          showOtpFeedback(errMsg, 'error');
+          if (data && (data.invalidated || data.expired)) {
+            clearOtpBoxes();
+            if (sendOtpBtn && cooldownRemaining <= 0) {
+              sendOtpBtn.focus();
+            }
+          } else if (otpBoxes.length > 0) {
+            otpBoxes[0].focus();
+          }
+        })
+        .catch(function () {
+          isVerifyingOtp = false;
+          if (unlock4Btn) {
+            unlock4Btn.removeAttribute('disabled');
+            unlock4Btn.textContent = 'Continue';
+          }
+          showOtpFeedback('Network error while verifying code. Please try again.', 'error');
+        });
+
+      return false;
     }
 
     function evaluatePasswordState() {
@@ -463,14 +654,23 @@
         if (regEmailError && !regEmailError.hasAttribute('hidden')) {
           regEmailError.setAttribute('hidden', 'hidden');
         }
+        var currentEmail = (regEmail.value || '').trim();
+        if (otpSentForEmail !== '' && currentEmail !== otpSentForEmail) {
+          otpSentForEmail = '';
+          stopResendCooldown();
+          clearOtpBoxes();
+          if (otpSection) otpSection.setAttribute('hidden', 'hidden');
+        }
         if (isEmailVerified) {
           isEmailVerified = false;
+          otpSentForEmail = '';
+          stopResendCooldown();
           clearOtpBoxes();
+          if (otpSection) otpSection.setAttribute('hidden', 'hidden');
           if (step3Badge) step3Badge.setAttribute('hidden', 'hidden');
           if (stage4) stage4.setAttribute('hidden', 'hidden');
           if (step3Actions) step3Actions.removeAttribute('hidden');
           updateStepTracker(regCard, 3);
-          showOtpFeedback('Email address changed. Please request a new verification code.', 'info');
         }
       });
       regEmail.addEventListener('keydown', function (ev) {

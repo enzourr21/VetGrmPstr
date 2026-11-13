@@ -8,8 +8,10 @@ use App\Core\CSRF;
 use App\Core\Session;
 use App\Models\Audit;
 use App\Models\Units;
+use App\Services\CustomerRegistrationPendingService;
 use PDO;
 use PDOException;
+use Throwable;
 
 final class AuthController extends Controller
 {
@@ -710,6 +712,32 @@ final class AuthController extends Controller
 
     public function registerEmailForm(): void
     {
+        $existingToken = (string)Session::get('register_session_token', '');
+        if ($existingToken !== '') {
+            $cleaned = false;
+            try {
+                $pendingService = new CustomerRegistrationPendingService($this->db);
+                $cleaned = $pendingService->deletePendingRegistration($existingToken);
+            } catch (Throwable $e) {
+                $cleaned = false;
+            }
+
+            if (!$cleaned) {
+                http_response_code(500);
+                Session::flash('error', 'Unable to reset your previous registration session cleanly. Please try again.');
+                $this->render('auth/register', [
+                    'title' => 'Create account',
+                    'email' => (string)Session::get('register_email', ''),
+                    'unlockedStage' => 1,
+                    'errors' => [],
+                    'old' => [],
+                ]);
+                return;
+            }
+
+            Session::forget('register_session_token');
+        }
+
         Session::forget('register_email');
         $this->render('auth/register', [
             'title' => 'Create account',
@@ -718,6 +746,68 @@ final class AuthController extends Controller
             'errors' => [],
             'old' => [],
         ]);
+    }
+
+    public function registerSendOtp(): void
+    {
+        CSRF::check();
+        $token = (string)Session::get('register_session_token', '');
+        if ($token === '') {
+            $token = CustomerRegistrationPendingService::generateSessionToken();
+            Session::set('register_session_token', $token);
+        }
+
+        $email = strtolower($this->post('email'));
+        $data = [
+            'first_name' => $this->post('first_name'),
+            'middle_name' => $this->post('middle_name'),
+            'last_name' => $this->post('last_name'),
+            'username' => $this->post('username'),
+            'phone' => $this->post('phone'),
+            'address_line1' => $this->post('address_line1'),
+            'city' => $this->post('city'),
+            'province' => $this->post('province'),
+            'postal_code' => $this->post('postal_code'),
+            'email' => $email,
+        ];
+
+        $service = new CustomerRegistrationPendingService($this->db);
+        $result = $service->initiateRegistration($token, $data, (string)($_SERVER['REMOTE_ADDR'] ?? ''));
+
+        if (($result['ok'] ?? false) === true && $email !== '') {
+            Session::set('register_email', $email);
+        }
+
+        $this->jsonServiceResult($result);
+    }
+
+    public function registerResendOtp(): void
+    {
+        CSRF::check();
+        $token = (string)Session::get('register_session_token', '');
+        if ($token === '') {
+            $this->jsonError('No active registration session. Please start registration again.', 400);
+        }
+
+        $service = new CustomerRegistrationPendingService($this->db);
+        $result = $service->resendOtp($token, (string)($_SERVER['REMOTE_ADDR'] ?? ''));
+
+        $this->jsonServiceResult($result);
+    }
+
+    public function registerVerifyOtp(): void
+    {
+        CSRF::check();
+        $token = (string)Session::get('register_session_token', '');
+        if ($token === '') {
+            $this->jsonError('No active registration session. Please start registration again.', 400);
+        }
+
+        $otp = $this->post('otp') !== '' ? $this->post('otp') : $this->post('email_otp');
+        $service = new CustomerRegistrationPendingService($this->db);
+        $result = $service->verifyOtp($token, $otp, (string)($_SERVER['REMOTE_ADDR'] ?? ''));
+
+        $this->jsonServiceResult($result);
     }
 
     public function registerEmail(): void
@@ -856,57 +946,78 @@ final class AuthController extends Controller
             return;
         }
 
-        $n = fn(string $v): ?string => $v === '' ? null : $v;
-
-        try {
-            $this->db->beginTransaction();
-            $this->db->prepare('INSERT INTO user_account (email, username, password_hash) VALUES (?, ?, ?)')
-                ->execute([$email, $n($old['username']), password_hash($password, PASSWORD_DEFAULT)]);
-            $uid = (int)$this->db->lastInsertId();
-            $this->db->prepare('INSERT INTO customer (user_account_id, first_name, middle_name, last_name, phone, address_line1, city, province, postal_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-                ->execute([
-                    $uid,
-                    $old['first_name'],
-                    $n($old['middle_name']),
-                    $old['last_name'],
-                    $n($old['phone']),
-                    $n($old['address_line1']),
-                    $n($old['city']),
-                    $n($old['province']),
-                    $n($old['postal_code']),
-                ]);
-            $cid = (int)$this->db->lastInsertId();
-            $this->db->commit();
-        } catch (PDOException $e) {
-            if ($this->db->inTransaction()) {
-                $this->db->rollBack();
-            }
-            http_response_code(422);
-            Session::flash('error', 'We could not create an account with those details. If you already registered, sign in instead.');
+        $token = (string)Session::get('register_session_token', '');
+        if ($token === '') {
+            http_response_code(400);
+            Session::flash('error', 'Please verify your email address before creating your account.');
             $this->render('auth/register', [
                 'title' => 'Create account',
                 'email' => $email,
-                'unlockedStage' => 4,
+                'unlockedStage' => 3,
                 'errors' => [],
                 'old' => $old,
             ]);
             return;
         }
 
+        $service = new CustomerRegistrationPendingService($this->db);
+        $result = $service->provisionVerifiedAccount($token, $password);
+
+        if (($result['ok'] ?? false) !== true) {
+            $status = (int)($result['status'] ?? 422);
+            $conflictField = (string)($result['conflict_field'] ?? '');
+            $stage = match (true) {
+                $status === 403 => 3,
+                $status === 409 && $conflictField === 'email' => 3,
+                $status === 409 && $conflictField === 'username' => 4,
+                $status === 422 => 4,
+                $status === 404 || $status === 410 => 1,
+                default => 3,
+            };
+
+            http_response_code($status);
+            Session::flash('error', (string)($result['error'] ?? 'We could not create an account with those details. Please try again.'));
+            $this->render('auth/register', [
+                'title' => 'Create account',
+                'email' => $email,
+                'unlockedStage' => $stage,
+                'errors' => is_array($result['errors'] ?? null) ? $result['errors'] : [],
+                'old' => $old,
+            ]);
+            return;
+        }
+
         Session::login([
-            'user_id' => $uid,
-            'email' => $email,
-            'username' => $n($old['username']),
-            'customer_id' => $cid,
+            'user_id' => (int)$result['user_id'],
+            'email' => (string)$result['email'],
+            'username' => $result['username'] ?? null,
+            'customer_id' => (int)$result['customer_id'],
             'employee_id' => null,
             'auth_method' => 'email',
             'base_context' => 'customer',
             'active_context' => 'customer',
             'is_super_admin' => false,
         ]);
+        Session::forget('register_session_token');
         Session::forget('register_email');
         Session::flash('success', 'Account created. Welcome!');
         $this->redirect('/profile');
+    }
+
+    /**
+     * Emit a JSON response preserving the service's HTTP status and fields plus a refreshed CSRF token.
+     *
+     * @param array<string, mixed> $result
+     */
+    private function jsonServiceResult(array $result): never
+    {
+        $status = (int)($result['status'] ?? 200);
+        $payload = $result;
+        $payload['csrf_token'] = CSRF::token();
+        http_response_code($status);
+        header('Content-Type: application/json; charset=UTF-8');
+        echo json_encode($payload);
+        exit;
     }
 
     private function jsonError(string $msg, int $status): never
