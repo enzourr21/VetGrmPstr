@@ -288,42 +288,7 @@ echo json_encode(\$res);
 ";
 }
 
-function safelyTerminateAndClose($proc, array &$pipes = [], float $timeoutSeconds = 2.0): int
-{
-    if (!is_resource($proc)) {
-        return -1;
-    }
-
-    foreach ($pipes as $pipe) {
-        if (is_resource($pipe)) {
-            @fclose($pipe);
-        }
-    }
-    $pipes = [];
-
-    $status = @proc_get_status($proc);
-    if (!$status || !$status['running']) {
-        return (int)@proc_close($proc);
-    }
-
-    @proc_terminate($proc);
-
-    $deadline = microtime(true) + $timeoutSeconds;
-    while (microtime(true) < $deadline) {
-        usleep(20000); // 20ms
-        $status = @proc_get_status($proc);
-        if (!$status || !$status['running']) {
-            break;
-        }
-    }
-
-    if ($status && $status['running']) {
-        @proc_terminate($proc);
-        usleep(20000);
-    }
-
-    return (int)@proc_close($proc);
-}
+require_once __DIR__ . '/process_cleanup_helper.php';
 
 function collectWorkerOutput($proc, array &$pipes, float $timeoutSeconds = 5.0): array
 {
