@@ -6,6 +6,7 @@ namespace App\Services;
 use App\Core\Database;
 use App\Core\EnvConfig;
 use PDO;
+use PDOException;
 use RuntimeException;
 use Throwable;
 
@@ -616,45 +617,73 @@ final class CustomerRegistrationPendingService
     {
         $cleanIp = self::sanitizeIp($ipAddress);
         $tokenHash = self::hashSessionToken($sessionToken);
-
-        // Pre-fetch pending row email for rate limit lock
-        $pre = $this->db->prepare('SELECT email FROM customer_registration_pending WHERE session_token_hash = ?');
-        $pre->execute([$tokenHash]);
-        $preEmail = (string)$pre->fetchColumn();
-
-        $emailLock = $preEmail !== '' ? ('pc_em_' . md5($preEmail)) : null;
         $ipLock = 'pc_ip_' . md5($cleanIp);
         $locksAcquired = [];
+        $maxLockAttempts = 3;
 
         try {
-            if ($emailLock !== null) {
-                $stmtLock1 = $this->db->prepare('SELECT GET_LOCK(?, 10)');
-                $stmtLock1->execute([$emailLock]);
-                if ((int)$stmtLock1->fetchColumn() !== 1) {
+            $row = null;
+            $lockedEmail = '';
+
+            for ($attempt = 0; $attempt < $maxLockAttempts; $attempt++) {
+                // Pre-fetch pending row email inside exception handling before acquiring advisory locks
+                $pre = $this->db->prepare('SELECT email FROM customer_registration_pending WHERE session_token_hash = ?');
+                $pre->execute([$tokenHash]);
+                $fetchedEmail = $pre->fetchColumn();
+                $preEmail = is_string($fetchedEmail) ? $fetchedEmail : '';
+
+                // Preserve email-then-IP advisory lock acquisition order
+                $emailLock = $preEmail !== '' ? ('pc_em_' . md5($preEmail)) : null;
+                if ($emailLock !== null) {
+                    $stmtLock1 = $this->db->prepare('SELECT GET_LOCK(?, 10)');
+                    $stmtLock1->execute([$emailLock]);
+                    if ((int)$stmtLock1->fetchColumn() !== 1) {
+                        return ['ok' => false, 'error' => 'Rate limit verification timeout. Please try again.', 'status' => 429];
+                    }
+                    $locksAcquired[] = $emailLock;
+                }
+
+                $stmtLock2 = $this->db->prepare('SELECT GET_LOCK(?, 10)');
+                $stmtLock2->execute([$ipLock]);
+                if ((int)$stmtLock2->fetchColumn() !== 1) {
                     return ['ok' => false, 'error' => 'Rate limit verification timeout. Please try again.', 'status' => 429];
                 }
-                $locksAcquired[] = $emailLock;
-            }
+                $locksAcquired[] = $ipLock;
 
-            $stmtLock2 = $this->db->prepare('SELECT GET_LOCK(?, 10)');
-            $stmtLock2->execute([$ipLock]);
-            if ((int)$stmtLock2->fetchColumn() !== 1) {
-                return ['ok' => false, 'error' => 'Rate limit verification timeout. Please try again.', 'status' => 429];
-            }
-            $locksAcquired[] = $ipLock;
+                $this->db->beginTransaction();
 
-            $this->db->beginTransaction();
+                $stmt = $this->db->prepare('SELECT * FROM customer_registration_pending WHERE session_token_hash = ? FOR UPDATE');
+                $stmt->execute([$tokenHash]);
+                $row = $stmt->fetch(PDO::FETCH_ASSOC);
 
-            $stmt = $this->db->prepare('SELECT * FROM customer_registration_pending WHERE session_token_hash = ? FOR UPDATE');
-            $stmt->execute([$tokenHash]);
-            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+                if (!$row) {
+                    $this->db->rollBack();
+                    return [
+                        'ok' => false,
+                        'error' => 'No pending registration found. Please start registration again.',
+                        'status' => 404,
+                    ];
+                }
 
-            if (!$row) {
+                $rowEmail = (string)$row['email'];
+                if ($preEmail !== '' && $rowEmail === $preEmail) {
+                    $lockedEmail = $rowEmail;
+                    break;
+                }
+
+                // Email changed (or row appeared) between pre-fetch and row lock:
+                // release row lock/transaction and advisory locks before retrying.
                 $this->db->rollBack();
+                $this->releaseAdvisoryLocks($locksAcquired);
+                $locksAcquired = [];
+                $row = null;
+            }
+
+            if ($row === null || $lockedEmail === '' || (string)$row['email'] !== $lockedEmail) {
                 return [
                     'ok' => false,
-                    'error' => 'No pending registration found. Please start registration again.',
-                    'status' => 404,
+                    'error' => 'Registration email changed during resend. Please try again.',
+                    'status' => 409,
                 ];
             }
 
@@ -703,10 +732,10 @@ final class CustomerRegistrationPendingService
                 }
             }
 
-            // Enforce hourly send limits
+            // Enforce hourly send limits under the verified email advisory lock
             $oneHourAgo = gmdate('Y-m-d H:i:s', $now - 3600);
             $chkEmail = $this->db->prepare('SELECT COUNT(*) FROM email_otp_send_log WHERE email = ? AND sent_at >= ?');
-            $chkEmail->execute([$row['email'], $oneHourAgo]);
+            $chkEmail->execute([$lockedEmail, $oneHourAgo]);
             if ((int)$chkEmail->fetchColumn() >= self::MAX_HOURLY_SENDS_PER_EMAIL) {
                 $this->db->rollBack();
                 return [
@@ -735,7 +764,7 @@ final class CustomerRegistrationPendingService
 
             // Dispatch email via MailService (if not email conflict decoy)
             if (($row['conflict_field'] ?? null) !== 'email') {
-                MailService::sendCustomerRegistrationOtp($row['email'], $otp, $row['first_name']);
+                MailService::sendCustomerRegistrationOtp($lockedEmail, $otp, $row['first_name']);
             }
 
             // Update pending record and reset per-OTP attempts (preserve cumulative)
@@ -753,7 +782,7 @@ final class CustomerRegistrationPendingService
 
             // Log outbound send with consistent cleanIp
             $insLog = $this->db->prepare('INSERT INTO email_otp_send_log (email, ip_address, sent_at) VALUES (?, ?, ?)');
-            $insLog->execute([$row['email'], $cleanIp, $nowUtc]);
+            $insLog->execute([$lockedEmail, $cleanIp, $nowUtc]);
 
             $this->db->commit();
             $this->cleanExpiredRecords();
@@ -780,13 +809,208 @@ final class CustomerRegistrationPendingService
                 'status' => 502,
             ];
         } finally {
-            foreach ($locksAcquired as $lockName) {
+            $this->releaseAdvisoryLocks($locksAcquired);
+        }
+    }
+
+    /**
+     * Release MySQL user-level advisory locks held by the current connection.
+     *
+     * @param array<int, string> $locksAcquired
+     */
+    private function releaseAdvisoryLocks(array $locksAcquired): void
+    {
+        foreach ($locksAcquired as $lockName) {
+            try {
+                $stmtRel = $this->db->prepare('SELECT RELEASE_LOCK(?)');
+                $stmtRel->execute([$lockName]);
+            } catch (Throwable $ignore) {
+            }
+        }
+    }
+
+    /**
+     * Convert an OTP-verified pending registration into permanent user_account and customer records.
+     *
+     * @param string $sessionToken Plain registration session token
+     * @param string $password Plaintext password chosen by the customer
+     * @return array{
+     *   ok: bool,
+     *   message?: string,
+     *   error?: string,
+     *   errors?: array<string, string>,
+     *   conflict_field?: string,
+     *   expired?: bool,
+     *   user_id?: int,
+     *   customer_id?: int,
+     *   email?: string,
+     *   username?: string|null,
+     *   status: int
+     * }
+     */
+    public function provisionVerifiedAccount(string $sessionToken, string $password): array
+    {
+        if (trim($sessionToken) === '') {
+            return ['ok' => false, 'error' => 'Invalid registration session token.', 'status' => 400];
+        }
+
+        if (strlen($password) < 10) {
+            return [
+                'ok' => false,
+                'error' => 'Please correct the highlighted errors.',
+                'errors' => ['password' => 'Use at least 10 characters.'],
+                'status' => 422,
+            ];
+        }
+
+        if (strlen($password) > 200) {
+            return [
+                'ok' => false,
+                'error' => 'Please correct the highlighted errors.',
+                'errors' => ['password' => 'Password is too long.'],
+                'status' => 422,
+            ];
+        }
+
+        $tokenHash = self::hashSessionToken($sessionToken);
+        $row = null;
+
+        try {
+            $this->db->beginTransaction();
+
+            $stmt = $this->db->prepare('SELECT * FROM customer_registration_pending WHERE session_token_hash = ? FOR UPDATE');
+            $stmt->execute([$tokenHash]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$row) {
+                $this->db->rollBack();
+                return [
+                    'ok' => false,
+                    'error' => 'No pending registration found. Please start registration again.',
+                    'status' => 404,
+                ];
+            }
+
+            if ($row['otp_verified_at'] === null) {
+                $this->db->rollBack();
+                return [
+                    'ok' => false,
+                    'error' => 'Please verify your email address before creating your account.',
+                    'status' => 403,
+                ];
+            }
+
+            $now = time();
+            $expiresAt = strtotime($row['expires_at'] . ' UTC');
+            if ($now > $expiresAt) {
+                $this->db->rollBack();
+                return [
+                    'ok' => false,
+                    'error' => 'Registration session has expired. Please register again.',
+                    'status' => 410,
+                    'expired' => true,
+                ];
+            }
+
+            $passwordHash = password_hash($password, PASSWORD_DEFAULT);
+            $emailVerifiedAt = (string)$row['otp_verified_at'];
+            $username = ($row['username'] !== null && $row['username'] !== '') ? (string)$row['username'] : null;
+
+            $insUser = $this->db->prepare(
+                "INSERT INTO user_account (email, username, password_hash, account_status, email_verified_at)
+                 VALUES (?, ?, ?, 'active', ?)"
+            );
+            $insUser->execute([
+                (string)$row['email'],
+                $username,
+                $passwordHash,
+                $emailVerifiedAt,
+            ]);
+            $userId = (int)$this->db->lastInsertId();
+
+            $insCustomer = $this->db->prepare(
+                "INSERT INTO customer (
+                    user_account_id, first_name, middle_name, last_name,
+                    phone, address_line1, city, province, postal_code, customer_status
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')"
+            );
+            $insCustomer->execute([
+                $userId,
+                (string)$row['first_name'],
+                $row['middle_name'] !== null ? (string)$row['middle_name'] : null,
+                (string)$row['last_name'],
+                $row['phone'] !== null ? (string)$row['phone'] : null,
+                $row['address_line1'] !== null ? (string)$row['address_line1'] : null,
+                $row['city'] !== null ? (string)$row['city'] : null,
+                $row['province'] !== null ? (string)$row['province'] : null,
+                $row['postal_code'] !== null ? (string)$row['postal_code'] : null,
+            ]);
+            $customerId = (int)$this->db->lastInsertId();
+
+            $delPending = $this->db->prepare('DELETE FROM customer_registration_pending WHERE pending_id = ?');
+            $delPending->execute([(int)$row['pending_id']]);
+
+            $this->db->commit();
+
+            return [
+                'ok' => true,
+                'message' => 'Your account has been created.',
+                'status' => 200,
+                'user_id' => $userId,
+                'customer_id' => $customerId,
+                'email' => (string)$row['email'],
+                'username' => $username,
+            ];
+        } catch (PDOException $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+
+            if ($e->getCode() === '23000' && is_array($row)) {
                 try {
-                    $stmtRel = $this->db->prepare('SELECT RELEASE_LOCK(?)');
-                    $stmtRel->execute([$lockName]);
+                    $chkEmail = $this->db->prepare('SELECT user_account_id FROM user_account WHERE email = ?');
+                    $chkEmail->execute([(string)$row['email']]);
+                    if ($chkEmail->fetchColumn()) {
+                        return [
+                            'ok' => false,
+                            'error' => 'An account with this email address already exists. Please use a different email or sign in.',
+                            'conflict_field' => 'email',
+                            'errors' => ['email' => 'This email address is already registered.'],
+                            'status' => 409,
+                        ];
+                    }
+
+                    if ($row['username'] !== null && $row['username'] !== '') {
+                        $chkUser = $this->db->prepare('SELECT user_account_id FROM user_account WHERE username = ?');
+                        $chkUser->execute([(string)$row['username']]);
+                        if ($chkUser->fetchColumn()) {
+                            return [
+                                'ok' => false,
+                                'error' => 'This username is already taken. Please choose another username.',
+                                'conflict_field' => 'username',
+                                'errors' => ['username' => 'This username is already taken.'],
+                                'status' => 409,
+                            ];
+                        }
+                    }
                 } catch (Throwable $ignore) {
                 }
             }
+
+            return [
+                'ok' => false,
+                'error' => 'Unable to create your account at this time. Please try again later.',
+                'status' => 500,
+            ];
+        } catch (Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            return [
+                'ok' => false,
+                'error' => 'Unable to create your account at this time. Please try again later.',
+                'status' => 500,
+            ];
         }
     }
 

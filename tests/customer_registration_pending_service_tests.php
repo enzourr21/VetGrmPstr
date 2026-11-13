@@ -858,7 +858,387 @@ echo "\n--- Section 13: Log & Expired Registration Retention Cleaning ---\n";
 $retDeleted = $service->cleanExpiredRecords(30);
 assertTest('cleanExpiredRecords executes cleanly and returns integer count', is_int($retDeleted));
 
+// --- Section 14: resendOtp() Email Advisory-Lock Race Protection ---
+echo "\n--- Section 14: resendOtp() Email Advisory-Lock Race Protection ---\n";
+$raceToken = CustomerRegistrationPendingService::generateSessionToken();
+$raceHash = CustomerRegistrationPendingService::hashSessionToken($raceToken);
+$raceOldEmail = 'race.old.' . bin2hex(random_bytes(4)) . '@test.invalid';
+$raceNewEmail = 'race.new.' . bin2hex(random_bytes(4)) . '@test.invalid';
+$raceIp = '10.88.88.88';
+
+$raceInit = $service->initiateRegistration($raceToken, [
+    'first_name' => 'Race',
+    'last_name' => 'Old',
+    'email' => $raceOldEmail,
+], $raceIp, '246810');
+assertTest('Section 14 initial registration succeeds (HTTP 200)', $raceInit['ok'] === true && $raceInit['status'] === 200);
+
+// Satisfy 60s resend cooldown and pre-fill 5 hourly sends for $raceNewEmail
+$pdo->prepare("UPDATE customer_registration_pending SET last_sent_at = DATE_SUB(UTC_TIMESTAMP(), INTERVAL 65 SECOND) WHERE session_token_hash = ?")
+    ->execute([$raceHash]);
+for ($i = 0; $i < 5; $i++) {
+    $insSend->execute([$raceNewEmail, '10.88.88.' . (10 + $i)]);
+}
+
+$raceOldLock = 'pc_em_' . md5($raceOldEmail);
+$raceNewLock = 'pc_em_' . md5($raceNewEmail);
+$raceIpLock = 'pc_ip_' . md5($raceIp);
+
+$raceWorkerReady = $barrierDir . '/pc_race_ready_' . bin2hex(random_bytes(4)) . '.flag';
+$raceGoFile = $barrierDir . '/pc_race_go_' . bin2hex(random_bytes(4)) . '.flag';
+$raceFetchedOldFile = $barrierDir . '/pc_race_fetched_old_' . bin2hex(random_bytes(4)) . '.flag';
+@unlink($raceWorkerReady);
+@unlink($raceGoFile);
+@unlink($raceFetchedOldFile);
+
+// Parent holds $raceOldLock and $raceNewLock BEFORE spawning resendOtp() worker.
+// 1. Worker performs initial lookup ($preEmail = $raceOldEmail), signals $raceFetchedOldFile
+//    immediately before requesting GET_LOCK($raceOldLock), then blocks on GET_LOCK($raceOldLock).
+// 2. Parent observes $raceFetchedOldFile, updates row email to $raceNewEmail, then releases $raceOldLock
+//    (keeping $raceNewLock held).
+// 3. Worker unblocks, sees $row['email'] !== $preEmail, releases $raceOldLock + $raceIpLock, and retries.
+// 4. On retry, Worker fetches $preEmail = $raceNewEmail and blocks on GET_LOCK($raceNewLock),
+//    proving it never runs the rate-limit check under $raceOldLock.
+$raceProc = null;
+$racePipes = [];
+try {
+    $gotOldLock = (int)$pdo->query("SELECT GET_LOCK(" . $pdo->quote($raceOldLock) . ", 5)")->fetchColumn();
+    $gotNewLock = (int)$pdo->query("SELECT GET_LOCK(" . $pdo->quote($raceNewLock) . ", 5)")->fetchColumn();
+    assertTest('Parent acquired old and new email advisory locks for race simulation', $gotOldLock === 1 && $gotNewLock === 1);
+
+    $raceWorkerCode = "<?php\n"
+        . "require_once '{$bootstrapPath}';\n"
+        . "putenv('MAIL_DRIVER=null');\n"
+        . "putenv('OTP_HMAC_SECRET=" . str_repeat('0123456789abcdef', 4) . "');\n"
+        . "\\App\\Core\\EnvConfig::resetCache();\n"
+        . "final class RaceObservingPdo extends PDO {\n"
+        . "    private bool \$signaledBeforeOldLock = false;\n"
+        . "    private string \$signalFile;\n"
+        . "    public function __construct(string \$dsn, string \$signalFile) {\n"
+        . "        parent::__construct(\$dsn, 'root', '', [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);\n"
+        . "        \$this->signalFile = \$signalFile;\n"
+        . "    }\n"
+        . "    public function prepare(string \$query, array \$options = []): PDOStatement|false {\n"
+        . "        if (!\$this->signaledBeforeOldLock && str_contains(\$query, 'GET_LOCK')) {\n"
+        . "            \$this->signaledBeforeOldLock = true;\n"
+        . "            file_put_contents(\$this->signalFile, 'fetched_old');\n"
+        . "        }\n"
+        . "        return parent::prepare(\$query, \$options);\n"
+        . "    }\n"
+        . "}\n"
+        . "\$pdoW = new RaceObservingPdo('{$dsn}', '{$raceFetchedOldFile}');\n"
+        . "\$pdoW->exec(\"SET time_zone = '+00:00'\");\n"
+        . "\$svcW = new \\App\\Services\\CustomerRegistrationPendingService(\$pdoW);\n"
+        . "file_put_contents('{$raceWorkerReady}', 'ready');\n"
+        . "\$deadline = microtime(true) + 5.0;\n"
+        . "while (!file_exists('{$raceGoFile}') && microtime(true) < \$deadline) { usleep(1000); }\n"
+        . "\$res = \$svcW->resendOtp('{$raceToken}', '{$raceIp}', '135791');\n"
+        . "echo json_encode(\$res);\n";
+
+    $raceProc = proc_open("\"$phpBin\"", [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $racePipes);
+    fwrite($racePipes[0], $raceWorkerCode);
+    fclose($racePipes[0]);
+
+    $waitReadyDeadline = microtime(true) + 5.0;
+    while (!file_exists($raceWorkerReady) && microtime(true) < $waitReadyDeadline) {
+        usleep(10000);
+    }
+    assertTest('Race worker reached ready barrier', file_exists($raceWorkerReady));
+
+    touch($raceGoFile);
+
+    // Wait deterministically until worker has completed initial email lookup and is about to request $raceOldLock
+    $waitFetchedDeadline = microtime(true) + 5.0;
+    while (!file_exists($raceFetchedOldFile) && microtime(true) < $waitFetchedDeadline) {
+        usleep(5000);
+    }
+    $fetchedOldSignaled = file_exists($raceFetchedOldFile);
+    assertTest('Worker signaled initial old-email lookup immediately before requesting old-email lock', $fetchedOldSignaled);
+
+    // Mutate email in DB before releasing $raceOldLock
+    $pdo->prepare("UPDATE customer_registration_pending SET email = ? WHERE session_token_hash = ?")
+        ->execute([$raceNewEmail, $raceHash]);
+
+    // Release $raceOldLock while still holding $raceNewLock
+    $pdo->query("SELECT RELEASE_LOCK(" . $pdo->quote($raceOldLock) . ")")->fetchColumn();
+
+    // Wait briefly for worker to detect mismatch, release $raceOldLock + $raceIpLock, and block on $raceNewLock
+    $retryObserved = false;
+    $pollDeadline = microtime(true) + 2.0;
+    while (microtime(true) < $pollDeadline) {
+        usleep(20000);
+        $oldFree = (int)$pdo->query("SELECT IS_FREE_LOCK(" . $pdo->quote($raceOldLock) . ")")->fetchColumn();
+        $ipFree = (int)$pdo->query("SELECT IS_FREE_LOCK(" . $pdo->quote($raceIpLock) . ")")->fetchColumn();
+        $wStatus = is_resource($raceProc) ? proc_get_status($raceProc) : false;
+        if ($oldFree === 1 && $ipFree === 1 && is_array($wStatus) && $wStatus['running']) {
+            $retryObserved = true;
+            break;
+        }
+    }
+    assertTest('Worker released stale old-email and IP locks and waited for new-email lock before rate-limit check', $retryObserved);
+
+    // Release $raceNewLock so worker can complete its retry under the new-email lock
+    $pdo->query("SELECT RELEASE_LOCK(" . $pdo->quote($raceNewLock) . ")")->fetchColumn();
+
+    $raceResult = collectWorkerOutput($raceProc, $racePipes, 5.0);
+    $raceProc = null;
+
+    assertTest('Race worker exited cleanly (exit code 0)', !$raceResult['timedOut'] && $raceResult['exitCode'] === 0, "Exit code: {$raceResult['exitCode']}, stderr: {$raceResult['stderr']}");
+    $raceResData = json_decode($raceResult['stdout'], true);
+    assertTest(
+        'resendOtp() retried under new-email lock and enforced new email hourly limit (HTTP 429)',
+        is_array($raceResData) && ($raceResData['ok'] ?? true) === false && ($raceResData['status'] ?? 0) === 429 && str_contains($raceResData['error'] ?? '', 'for this email'),
+        'Response: ' . $raceResult['stdout']
+    );
+
+    $oldSendCount = (int)$pdo->query("SELECT COUNT(*) FROM email_otp_send_log WHERE email = " . $pdo->quote($raceOldEmail))->fetchColumn();
+    $newSendCount = (int)$pdo->query("SELECT COUNT(*) FROM email_otp_send_log WHERE email = " . $pdo->quote($raceNewEmail))->fetchColumn();
+    assertTest('No extra send logged for old or new email after race retry', $oldSendCount === 1 && $newSendCount === 5, "old={$oldSendCount}, new={$newSendCount}");
+} finally {
+    @$pdo->query("SELECT RELEASE_LOCK(" . $pdo->quote($raceOldLock) . ")");
+    @$pdo->query("SELECT RELEASE_LOCK(" . $pdo->quote($raceNewLock) . ")");
+    if (is_resource($raceProc)) {
+        safelyTerminateAndClose($raceProc, $racePipes, 2.0);
+    }
+    @unlink($raceWorkerReady);
+    @unlink($raceGoFile);
+    @unlink($raceFetchedOldFile);
+}
+
+// --- Section 15: Verified Customer Account Provisioning ---
+echo "\n--- Section 15: Verified Customer Account Provisioning ---\n";
+
+// 15.1 Missing pending registration
+$missingToken = CustomerRegistrationPendingService::generateSessionToken();
+$missingProv = $service->provisionVerifiedAccount($missingToken, 'StrongPass123!');
+assertTest('Missing pending registration rejected with HTTP 404', $missingProv['ok'] === false && $missingProv['status'] === 404);
+
+// 15.2 Unverified pending registration
+$unverToken = CustomerRegistrationPendingService::generateSessionToken();
+$unverEmail = 'prov.unver.' . bin2hex(random_bytes(4)) . '@test.invalid';
+$service->initiateRegistration($unverToken, [
+    'first_name' => 'Unver',
+    'last_name' => 'User',
+    'email' => $unverEmail,
+], '10.15.0.1', '111222');
+$unverProv = $service->provisionVerifiedAccount($unverToken, 'StrongPass123!');
+assertTest('Unverified pending registration rejected with HTTP 403', $unverProv['ok'] === false && $unverProv['status'] === 403);
+
+// 15.3 Expired pending registration
+$expProvToken = CustomerRegistrationPendingService::generateSessionToken();
+$expProvEmail = 'prov.exp.' . bin2hex(random_bytes(4)) . '@test.invalid';
+$service->initiateRegistration($expProvToken, [
+    'first_name' => 'Exp',
+    'last_name' => 'User',
+    'email' => $expProvEmail,
+], '10.15.0.2', '333444');
+$service->verifyOtp($expProvToken, '333444', '10.15.0.2');
+$expProvHash = CustomerRegistrationPendingService::hashSessionToken($expProvToken);
+$pdo->prepare("UPDATE customer_registration_pending SET expires_at = DATE_SUB(UTC_TIMESTAMP(), INTERVAL 10 SECOND) WHERE session_token_hash = ?")
+    ->execute([$expProvHash]);
+$expProvRes = $service->provisionVerifiedAccount($expProvToken, 'StrongPass123!');
+assertTest('Expired pending registration rejected with HTTP 410 (expired=true)', $expProvRes['ok'] === false && $expProvRes['status'] === 410 && ($expProvRes['expired'] ?? false) === true);
+
+// 15.4, 15.5, 15.6 Successful account and customer creation, email_verified_at, and pending-row deletion
+$okProvToken = CustomerRegistrationPendingService::generateSessionToken();
+$okProvEmail = 'prov.ok.' . bin2hex(random_bytes(4)) . '@test.invalid';
+$okProvUser = 'prov_ok_' . bin2hex(random_bytes(3));
+$service->initiateRegistration($okProvToken, [
+    'first_name' => 'Jane',
+    'middle_name' => 'Marie',
+    'last_name' => 'Doe',
+    'username' => $okProvUser,
+    'phone' => '+63 917 123 4567',
+    'address_line1' => '123 Pet Lane',
+    'city' => 'Manila',
+    'province' => 'Metro Manila',
+    'postal_code' => '1000',
+    'email' => $okProvEmail,
+], '10.15.0.3', '555666');
+$service->verifyOtp($okProvToken, '555666', '10.15.0.3');
+$pendingBeforeProv = $service->getPendingRegistration($okProvToken);
+$expectedVerifiedAt = $pendingBeforeProv['otp_verified_at'] ?? null;
+
+$okProvRes = $service->provisionVerifiedAccount($okProvToken, 'ValidPass#2026');
+assertTest('Successful provisioning returns ok=true (HTTP 200) with user_id and customer_id', $okProvRes['ok'] === true && $okProvRes['status'] === 200 && ($okProvRes['user_id'] ?? 0) > 0 && ($okProvRes['customer_id'] ?? 0) > 0);
+
+$uaRow = $pdo->prepare('SELECT * FROM user_account WHERE user_account_id = ?');
+$uaRow->execute([$okProvRes['user_id'] ?? 0]);
+$uaData = $uaRow->fetch();
+assertTest(
+    'Permanent user_account created with active status, valid password hash, and matching email_verified_at',
+    is_array($uaData)
+        && $uaData['email'] === $okProvEmail
+        && $uaData['username'] === $okProvUser
+        && $uaData['account_status'] === 'active'
+        && password_verify('ValidPass#2026', (string)$uaData['password_hash'])
+        && $expectedVerifiedAt !== null
+        && $uaData['email_verified_at'] === $expectedVerifiedAt
+);
+
+$custRow = $pdo->prepare('SELECT * FROM customer WHERE customer_id = ?');
+$custRow->execute([$okProvRes['customer_id'] ?? 0]);
+$custData = $custRow->fetch();
+assertTest(
+    'Permanent customer record created with all pending profile fields',
+    is_array($custData)
+        && (int)$custData['user_account_id'] === (int)($okProvRes['user_id'] ?? 0)
+        && $custData['first_name'] === 'Jane'
+        && $custData['middle_name'] === 'Marie'
+        && $custData['last_name'] === 'Doe'
+        && $custData['phone'] === '+63 917 123 4567'
+        && $custData['address_line1'] === '123 Pet Lane'
+        && $custData['city'] === 'Manila'
+        && $custData['province'] === 'Metro Manila'
+        && $custData['postal_code'] === '1000'
+        && $custData['customer_status'] === 'active'
+);
+assertTest('Pending registration row deleted after successful provisioning', $service->getPendingRegistration($okProvToken) === null);
+
+// 15.7 Duplicate email conflict preserves verified pending row
+$dupEmailToken = CustomerRegistrationPendingService::generateSessionToken();
+$service->initiateRegistration($dupEmailToken, [
+    'first_name' => 'Dup',
+    'last_name' => 'Email',
+    'email' => $okProvEmail,
+], '10.15.0.4', '777888');
+// Note: initiateRegistration suppresses mail when email already exists, so mark otp_verified_at directly to test provisioning conflict
+$dupEmailHash = CustomerRegistrationPendingService::hashSessionToken($dupEmailToken);
+$pdo->prepare("UPDATE customer_registration_pending SET otp_verified_at = UTC_TIMESTAMP() WHERE session_token_hash = ?")
+    ->execute([$dupEmailHash]);
+$dupEmailRes = $service->provisionVerifiedAccount($dupEmailToken, 'ValidPass#2026');
+assertTest(
+    'Duplicate email conflict returns HTTP 409 with conflict_field=email',
+    $dupEmailRes['ok'] === false && $dupEmailRes['status'] === 409 && ($dupEmailRes['conflict_field'] ?? '') === 'email' && isset($dupEmailRes['errors']['email'])
+);
+assertTest('Duplicate email conflict preserves verified pending registration', $service->isVerified($dupEmailToken) === true);
+
+// 15.8 Duplicate username conflict preserves verified pending row
+$dupUserToken = CustomerRegistrationPendingService::generateSessionToken();
+$dupUserEmail = 'prov.dupuser.' . bin2hex(random_bytes(4)) . '@test.invalid';
+$service->initiateRegistration($dupUserToken, [
+    'first_name' => 'Dup',
+    'last_name' => 'Username',
+    'username' => $okProvUser,
+    'email' => $dupUserEmail,
+], '10.15.0.5', '888999');
+$service->verifyOtp($dupUserToken, '888999', '10.15.0.5');
+$dupUserRes = $service->provisionVerifiedAccount($dupUserToken, 'ValidPass#2026');
+assertTest(
+    'Duplicate username conflict returns HTTP 409 with conflict_field=username',
+    $dupUserRes['ok'] === false && $dupUserRes['status'] === 409 && ($dupUserRes['conflict_field'] ?? '') === 'username' && isset($dupUserRes['errors']['username'])
+);
+assertTest('Duplicate username conflict preserves verified pending registration', $service->isVerified($dupUserToken) === true);
+
+// 15.9 Database failure rollback and pending-row preservation
+final class FailingCustomerInsertPdo extends PDO
+{
+    public function prepare(string $query, array $options = []): PDOStatement|false
+    {
+        if (str_contains($query, 'INSERT INTO customer')) {
+            throw new PDOException('Simulated customer insert failure', 'HY000');
+        }
+        return parent::prepare($query, $options);
+    }
+}
+
+$failPdo = new FailingCustomerInsertPdo($dsn, 'root', '', [
+    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+    PDO::ATTR_EMULATE_PREPARES => false,
+]);
+$failPdo->exec("SET time_zone = '+00:00'");
+$failService = new CustomerRegistrationPendingService($failPdo);
+
+$rbToken = CustomerRegistrationPendingService::generateSessionToken();
+$rbEmail = 'prov.rollback.' . bin2hex(random_bytes(4)) . '@test.invalid';
+$service->initiateRegistration($rbToken, [
+    'first_name' => 'Rollback',
+    'last_name' => 'Tester',
+    'email' => $rbEmail,
+], '10.15.0.6', '121314');
+$service->verifyOtp($rbToken, '121314', '10.15.0.6');
+$rbRes = $failService->provisionVerifiedAccount($rbToken, 'ValidPass#2026');
+assertTest('Database failure during customer insert returns structured HTTP 500 error', $rbRes['ok'] === false && $rbRes['status'] === 500);
+
+$rbUaCount = (int)$pdo->query("SELECT COUNT(*) FROM user_account WHERE email = " . $pdo->quote($rbEmail))->fetchColumn();
+assertTest('Database failure rolled back user_account insert (0 rows created)', $rbUaCount === 0);
+assertTest('Database failure preserved verified pending registration', $service->isVerified($rbToken) === true);
+
+// 15.10 Concurrent double submission: exactly one account is created
+$dblToken = CustomerRegistrationPendingService::generateSessionToken();
+$dblEmail = 'prov.double.' . bin2hex(random_bytes(4)) . '@test.invalid';
+$service->initiateRegistration($dblToken, [
+    'first_name' => 'Double',
+    'last_name' => 'Submit',
+    'email' => $dblEmail,
+], '10.15.0.7', '454545');
+$service->verifyOtp($dblToken, '454545', '10.15.0.7');
+
+$dblReadyA = $barrierDir . '/pc_prov_dbl_a_' . bin2hex(random_bytes(4)) . '.flag';
+$dblReadyB = $barrierDir . '/pc_prov_dbl_b_' . bin2hex(random_bytes(4)) . '.flag';
+$dblGo = $barrierDir . '/pc_prov_dbl_go_' . bin2hex(random_bytes(4)) . '.flag';
+@unlink($dblReadyA);
+@unlink($dblReadyB);
+@unlink($dblGo);
+
+$buildProvWorker = static function (string $readyFile) use ($bootstrapPath, $dsn, $dblToken, $dblGo): string {
+    $secret = str_repeat('0123456789abcdef', 4);
+    return "<?php\n"
+        . "require_once '{$bootstrapPath}';\n"
+        . "putenv('MAIL_DRIVER=null');\n"
+        . "putenv('OTP_HMAC_SECRET={$secret}');\n"
+        . "\\App\\Core\\EnvConfig::resetCache();\n"
+        . "\$pdoW = new PDO('{$dsn}', 'root', '', [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);\n"
+        . "\$pdoW->exec(\"SET time_zone = '+00:00'\");\n"
+        . "\$svcW = new \\App\\Services\\CustomerRegistrationPendingService(\$pdoW);\n"
+        . "file_put_contents('{$readyFile}', 'ready');\n"
+        . "\$t = microtime(true) + 5.0;\n"
+        . "while (!file_exists('{$dblGo}') && microtime(true) < \$t) { usleep(1000); }\n"
+        . "echo json_encode(\$svcW->provisionVerifiedAccount('{$dblToken}', 'ValidPass#2026'));\n";
+};
+
+$pDblA = proc_open("\"$phpBin\"", [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipesDblA);
+$pDblB = proc_open("\"$phpBin\"", [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipesDblB);
+fwrite($pipesDblA[0], $buildProvWorker($dblReadyA));
+fclose($pipesDblA[0]);
+fwrite($pipesDblB[0], $buildProvWorker($dblReadyB));
+fclose($pipesDblB[0]);
+
+$dblBarrierDeadline = microtime(true) + 5.0;
+while ((!file_exists($dblReadyA) || !file_exists($dblReadyB)) && microtime(true) < $dblBarrierDeadline) {
+    usleep(10000);
+}
+$dblBothReady = file_exists($dblReadyA) && file_exists($dblReadyB);
+assertTest('Both concurrent provisioning workers reached ready barrier', $dblBothReady);
+
+if (!$dblBothReady) {
+    safelyTerminateAndClose($pDblA, $pipesDblA, 2.0);
+    safelyTerminateAndClose($pDblB, $pipesDblB, 2.0);
+} else {
+    touch($dblGo);
+    $resDblA = collectWorkerOutput($pDblA, $pipesDblA, 5.0);
+    $resDblB = collectWorkerOutput($pDblB, $pipesDblB, 5.0);
+
+    assertTest('Concurrent provisioning Worker A exited cleanly', !$resDblA['timedOut'] && $resDblA['exitCode'] === 0);
+    assertTest('Concurrent provisioning Worker B exited cleanly', !$resDblB['timedOut'] && $resDblB['exitCode'] === 0);
+
+    $dblDataA = json_decode($resDblA['stdout'], true);
+    $dblDataB = json_decode($resDblB['stdout'], true);
+    $dblStatuses = [$dblDataA['status'] ?? 0, $dblDataB['status'] ?? 0];
+    sort($dblStatuses);
+
+    assertTest('Concurrent double submission: exactly one succeeds (200) and one fails safely (404)', $dblStatuses === [200, 404], 'Statuses: ' . json_encode($dblStatuses));
+    $dblUaCount = (int)$pdo->query("SELECT COUNT(*) FROM user_account WHERE email = " . $pdo->quote($dblEmail))->fetchColumn();
+    assertTest('Concurrent double submission created exactly 1 user_account row', $dblUaCount === 1, "Count: {$dblUaCount}");
+}
+@unlink($dblReadyA);
+@unlink($dblReadyB);
+@unlink($dblGo);
+
 // --- Final Cleanup ---
+$pdo->exec("DELETE c FROM customer c INNER JOIN user_account u ON c.user_account_id = u.user_account_id WHERE u.email LIKE '%@test.invalid'");
+$pdo->exec("DELETE FROM user_account WHERE email LIKE '%@test.invalid'");
 $pdo->exec("DELETE FROM customer_registration_pending WHERE email LIKE '%@test.invalid'");
 $pdo->exec("DELETE FROM email_otp_send_log WHERE email LIKE '%@test.invalid'");
 $pdo->exec("DELETE FROM email_otp_failure_log WHERE email LIKE '%@test.invalid'");
