@@ -83,7 +83,7 @@ final class MailService
             $mail->Username = $config['username'];
             $mail->Password = $config['password'];
             $mail->Timeout = self::SMTP_TIMEOUT_SECONDS;
-            $mail->Timelimit = self::SMTP_TIMELIMIT_SECONDS;
+            $mail->getSMTPInstance()->Timelimit = self::SMTP_TIMELIMIT_SECONDS;
 
             // Enforce STARTTLS or implicit TLS/SMTPS and prevent silent downgrade to unencrypted SMTP
             $mail->SMTPAutoTLS = true;
