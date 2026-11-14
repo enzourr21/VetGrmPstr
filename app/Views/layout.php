@@ -9,6 +9,7 @@ $isWorkspaceRoute = str_starts_with($curPath, '/super-admin')
     || str_starts_with($curPath, '/petstore/receptionist')
     || str_starts_with($curPath, '/grooming/receptionist')
     || str_starts_with($curPath, '/vetclinic/receptionist')
+    || str_starts_with($curPath, '/delivery')
     || (str_starts_with($curPath, '/staff') && !str_starts_with($curPath, '/staffs') && $curPath !== '/staff/login');
 
 // Staff / Administrator identification & role resolution
@@ -214,6 +215,13 @@ if ($isSignedIn && $baseContext === 'employee') {
             'active' => (str_starts_with($curPath, '/petstore/receptionist') || str_starts_with($curPath, '/grooming/receptionist') || str_starts_with($curPath, '/vetclinic/receptionist')) && $activeContext !== 'customer',
         ];
         $authorizedInterfaces[] = [
+            'id' => 'delivery',
+            'label' => 'Delivery Portal',
+            'hasUnits' => false,
+            'url' => '/switch-interface?target=delivery',
+            'active' => str_starts_with($curPath, '/delivery') && $activeContext !== 'customer',
+        ];
+        $authorizedInterfaces[] = [
             'id' => 'employee',
             'label' => 'Employee Workspace',
             'hasUnits' => true,
@@ -322,6 +330,22 @@ if ($isSignedIn && $baseContext === 'employee') {
                 'hasUnits' => true,
                 'units' => $receptionistUnits,
                 'active' => (str_starts_with($curPath, '/petstore/receptionist') || str_starts_with($curPath, '/grooming/receptionist') || str_starts_with($curPath, '/vetclinic/receptionist')) && $activeContext !== 'customer',
+            ];
+        }
+        $hasDeliveryRole = false;
+        foreach ($userRoles as $r) {
+            if ($r['role_name'] === 'DELIVERY_PERSONNEL' && (int)($r['business_unit_id'] ?? 0) === 1) {
+                $hasDeliveryRole = true;
+                break;
+            }
+        }
+        if ($hasDeliveryRole) {
+            $authorizedInterfaces[] = [
+                'id' => 'delivery',
+                'label' => 'Delivery Portal',
+                'hasUnits' => false,
+                'url' => '/switch-interface?target=delivery',
+                'active' => str_starts_with($curPath, '/delivery') && $activeContext !== 'customer',
             ];
         }
         $authorizedInterfaces[] = [
@@ -443,6 +467,9 @@ $unitQuery = ($isSuperAdmin && isset($_GET['unit_id']) && ctype_digit((string)$_
       <a href="/vetclinic/receptionist/billing" class="<?= str_starts_with($curPath, '/vetclinic/receptionist/billing') ? 'is-current' : '' ?>">Billing</a>
       <a href="/vetclinic/receptionist/records" class="<?= str_starts_with($curPath, '/vetclinic/receptionist/records') ? 'is-current' : '' ?>">Records</a>
       <a href="/vetclinic/receptionist/employees" class="<?= str_starts_with($curPath, '/vetclinic/receptionist/employees') ? 'is-current' : '' ?>">Employees</a>
+
+  <?php elseif (str_starts_with($curPath, '/delivery')): ?>
+      <a href="/delivery/orders" class="<?= str_starts_with($curPath, '/delivery/orders') ? 'is-current' : '' ?>">Delivery Orders</a>
 
   <?php elseif (str_starts_with($curPath, '/staff') || $curPath === '/workspace'): ?>
       <a href="/staff/workspace" class="<?= ($curPath === '/staff/workspace' || $curPath === '/workspace') ? 'is-current' : '' ?>">Workspace</a>

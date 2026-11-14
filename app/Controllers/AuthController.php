@@ -114,6 +114,11 @@ final class AuthController extends Controller
                 }
             }
         }
+        foreach ($roles as $r) {
+            if ($r['role_name'] === 'DELIVERY_PERSONNEL' && ($r['business_unit_name'] === Units::PET_STORE || (int)($r['business_unit_id'] ?? 0) === 1)) {
+                return '/delivery/orders';
+            }
+        }
         return '/staff/workspace';
     }
 
@@ -671,6 +676,27 @@ final class AuthController extends Controller
             } else {
                 $this->redirect('/switch-interface?target=petstore-receptionist');
             }
+            return;
+        }
+
+        // 4g. Pet Store Delivery Personnel Interface
+        if ($target === 'delivery' || $target === 'delivery-personnel' || $target === 'delivery_personnel') {
+            if (!$isSuper) {
+                $stmt = $this->db->prepare(
+                    "SELECT 1 FROM account_role ar
+                     JOIN role r ON r.role_id = ar.role_id
+                     JOIN employee e ON e.user_account_id = ar.user_account_id AND e.employee_status = 'active'
+                     WHERE ar.user_account_id = ? AND ar.business_unit_id = 1 AND r.role_name = 'DELIVERY_PERSONNEL'
+                     LIMIT 1"
+                );
+                $stmt->execute([(int)$uid]);
+                if (!$stmt->fetchColumn()) {
+                    $this->forbidden('Pet Store Delivery Personnel authorization is required.');
+                }
+            }
+            Session::set('active_context', 'employee');
+            Session::forget('inventory_manager_mode');
+            $this->redirect('/delivery/orders');
             return;
         }
 

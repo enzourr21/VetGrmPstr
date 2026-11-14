@@ -172,6 +172,12 @@ $r->post('/petstore/receptionist/orders/{id}/status', 'PetStoreReceptionistContr
 $r->post('/petstore/receptionist/orders/{id}/reschedule', 'PetStoreReceptionistController', 'rescheduleDelivery');
 $r->get('/petstore/receptionist/employees', 'PetStoreReceptionistController', 'employees');
 
+// Pet Store Delivery Personnel Interface
+$r->get('/delivery/orders', 'DeliveryController', 'orders');
+$r->post('/delivery/orders/{id}/dispatch', 'DeliveryController', 'dispatch');
+$r->post('/delivery/orders/{id}/complete', 'DeliveryController', 'complete');
+$r->post('/delivery/orders/{id}/fail', 'DeliveryController', 'fail');
+
 // Grooming Services Receptionist Interface
 $r->get('/grooming/receptionist', 'GroomingReceptionistController', 'overview');
 $r->get('/grooming/receptionist/overview', 'GroomingReceptionistController', 'overview');

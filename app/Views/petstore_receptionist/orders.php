@@ -321,8 +321,9 @@ if (!empty($selectedOrder)) {
               </label>
               <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
                 <?php
-                $todayDate = date('Y-m-d');
-                $maxReschedDate = date('Y-m-d', strtotime('+2 days'));
+                $phToday = new \DateTimeImmutable('today', new \DateTimeZone('Asia/Manila'));
+                $todayDate = $phToday->format('Y-m-d');
+                $maxReschedDate = $phToday->modify('+2 days')->format('Y-m-d');
                 ?>
                 <input type="date"
                        id="resched-date-<?= $ordId ?>"

@@ -9,6 +9,8 @@ use App\Core\Session;
 use App\Models\Audit;
 use App\Models\Units;
 use DateTime;
+use DateTimeImmutable;
+use DateTimeZone;
 use PDO;
 use Throwable;
 
@@ -778,11 +780,12 @@ final class PetStoreReceptionistController extends Controller
             return;
         }
 
-        $today = new DateTime('today');
-        $maxDate = (clone $today)->modify('+2 days');
-        $targetDate = DateTime::createFromFormat('Y-m-d', $rescheduledDateStr);
+        $phTz = new DateTimeZone('Asia/Manila');
+        $today = new DateTimeImmutable('today', $phTz);
+        $maxDate = $today->modify('+2 days');
+        $targetDate = DateTimeImmutable::createFromFormat('!Y-m-d', $rescheduledDateStr, $phTz);
 
-        if (!$targetDate || $targetDate < $today || $targetDate > $maxDate) {
+        if (!$targetDate || $targetDate->format('Y-m-d') !== $rescheduledDateStr || $targetDate < $today || $targetDate > $maxDate) {
             $this->flash('error', 'Rescheduled date must be within 2 calendar days from today (between ' . $today->format('M j, Y') . ' and ' . $maxDate->format('M j, Y') . ').');
             $this->redirect('/petstore/receptionist/orders?tab=delivery&view=' . $orderId);
             return;
