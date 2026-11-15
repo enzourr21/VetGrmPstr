@@ -543,7 +543,17 @@ try {
     $pdo->beginTransaction();
     $pdo->query("SELECT reservation_id FROM inventory_reservation WHERE reservation_id = {$resConcId} FOR UPDATE")->fetchColumn();
 
-    // Under non-locking READ COMMITTED reservation reads, Connection 2 completes unreserved POS sale of 3 without waiting on reservation lock.
+    // While Connection 1 holds reservation lock before reaching inventory, Connection 2 still protects the committed 2-unit hold and rejects qty 4.
+    $oversellDuringLockRejected = false;
+    try {
+        $service2->recordSale($unitA, $empUid, $empId, null, 'Cash', [
+            ['business_product_id' => $bpConc, 'quantity' => 4],
+        ]);
+    } catch (RuntimeException $e) {
+        $oversellDuringLockRejected = $e->getCode() === PosSaleService::ERR_UNPROCESSABLE;
+    }
+
+    // Under non-locking READ COMMITTED reservation reads, Connection 2 completes unreserved POS sale of 3 without blocking on the reservation lock.
     $res9a = $service2->recordSale($unitA, $empUid, $empId, null, 'Cash', [
         ['business_product_id' => $bpConc, 'quantity' => 3],
     ]);
@@ -559,8 +569,9 @@ try {
     $invConcEnd = $pdo->query("SELECT on_hand, committed FROM inventory WHERE inventory_id = {$invConc}")->fetch(PDO::FETCH_ASSOC);
     $bConcEnd = (int)$pdo->query("SELECT quantity FROM inventory_batch WHERE batch_id = {$bConc}")->fetchColumn();
     check(
-        'Two-connection reservation lock vs POS sale avoids deadlock and keeps remaining inventory & batch non-negative',
-        $batchRemDuringFulfill === 2
+        'Two-connection reservation lock vs POS sale avoids deadlock, protects held units, and keeps stock non-negative',
+        $oversellDuringLockRejected
+            && $batchRemDuringFulfill === 2
             && (int)$invConcEnd['on_hand'] === 0
             && (int)$invConcEnd['committed'] === 0
             && $bConcEnd === 0

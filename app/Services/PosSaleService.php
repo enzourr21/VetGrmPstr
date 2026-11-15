@@ -39,14 +39,23 @@ final class PosSaleService
      *     inventory (ASC) -> inventory_batch -> inventory_reservation
      * - OrderReservationService::fulfillPickupOrder() locks:
      *     inventory_reservation -> inventory_movement -> inventory (ASC) -> inventory_batch (ASC)
-     * - To avoid lock-order inversion deadlocks against pickup fulfillment without blind helper reuse,
-     *   this service locks ONLY inventory (ASC) -> inventory_batch (never taking locks on
-     *   inventory_reservation or inventory_movement).
-     * - Using READ COMMITTED for this single transaction guarantees that non-locking reads of active
-     *   reservations and fulfillment movements inside Step 4 observe the latest committed state AFTER
-     *   all target inventory rows are exclusively locked (avoiding a stale REPEATABLE READ snapshot),
-     *   while holding inventory FOR UPDATE prevents any concurrent reservation/fulfillment commit on
-     *   those inventories until this transaction finishes.
+     * - To prevent lock-order inversion deadlocks against fulfillPickupOrder(), this service acquires
+     *   locks ONLY in inventory (ASC) -> inventory_batch order and takes NO locks on inventory_reservation
+     *   or inventory_movement (using non-locking SELECTs in lockEligibleFefoBatchesForSale()).
+     * - Issuing SET TRANSACTION ISOLATION LEVEL READ COMMITTED before beginTransaction() scopes the
+     *   isolation change strictly to this transaction (restoring session isolation on commit/rollback).
+     *   Under READ COMMITTED, the non-locking reservation and fulfillment-movement SELECTs read the
+     *   latest committed state as of query execution (AFTER inventory FOR UPDATE is held), avoiding a
+     *   stale REPEATABLE READ snapshot created by earlier lookups in the transaction.
+     * - Why both concurrency interleavings stay safe:
+     *   1) If fulfillPickupOrder() holds reservation/movement locks and is waiting for inventory:
+     *      POS does not wait on reservation/movement locks (no deadlock) and has not yet seen any
+     *      uncommitted pickup changes; under READ COMMITTED POS still sees the committed pre-handover
+     *      active hold and committed batch quantity, so reserved units remain conservatively protected.
+     *   2) If POS holds inventory/batch locks and fulfillPickupOrder() or confirmPickupOrderAndReserve()
+     *      is waiting on inventory: no concurrent reservation or fulfillment commit can proceed on the
+     *      locked inventory until POS commits, and confirmPickupOrderAndReserve() uses the same
+     *      inventory (ASC) -> inventory_batch locking prefix without any cycle.
      *
      * @param array<int,array{business_product_id:int|string,quantity:int|string}> $rawLines
      * @return array{sale_id:int, total_amount:float, items_count:int, movements_created:int}
