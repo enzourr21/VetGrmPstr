@@ -240,23 +240,21 @@ final class DeliveryController extends Controller
 
         if ($isCourier) {
             if ($tab === 'queue') {
-                $sql .= " AND ((co.order_status IN ('processing','delivery_failed') AND co.delivery_employee_id IS NULL)
-                               OR (co.order_status = 'delivery_failed' AND co.delivery_employee_id = ?))";
-                $params[] = $empId;
+                $sql .= " AND co.order_status = 'processing' AND co.delivery_employee_id IS NULL";
             } elseif ($tab === 'active') {
                 $sql .= " AND co.order_status = 'out_for_delivery' AND co.delivery_employee_id = ?";
                 $params[] = $empId;
             } else {
-                $sql .= " AND co.order_status = 'completed' AND co.delivery_employee_id = ?";
+                $sql .= " AND co.order_status IN ('completed','delivery_failed') AND co.delivery_employee_id = ?";
                 $params[] = $empId;
             }
         } else {
             if ($tab === 'queue') {
-                $sql .= " AND co.order_status IN ('processing','delivery_failed')";
+                $sql .= " AND co.order_status = 'processing'";
             } elseif ($tab === 'active') {
                 $sql .= " AND co.order_status = 'out_for_delivery'";
             } else {
-                $sql .= " AND co.order_status = 'completed'";
+                $sql .= " AND co.order_status IN ('completed','delivery_failed')";
             }
         }
 
@@ -353,7 +351,7 @@ final class DeliveryController extends Controller
                     $candEmp = $candidate['delivery_employee_id'] !== null ? (int)$candidate['delivery_employee_id'] : null;
                     $candStatus = (string)$candidate['order_status'];
                     $allowedView = !$isCourier
-                        || ($candEmp === null && in_array($candStatus, ['processing', 'delivery_failed'], true))
+                        || ($candEmp === null && $candStatus === 'processing')
                         || ($candEmp === $empId && in_array($candStatus, ['out_for_delivery', 'delivery_failed', 'completed'], true));
                     if ($allowedView) {
                         $selectedOrder = $hydrateOrder($candidate);
@@ -439,23 +437,13 @@ final class DeliveryController extends Controller
                 $this->redirect('/delivery/orders?tab=queue&view=' . $orderId);
                 return;
             } elseif ($currentStatus === 'delivery_failed') {
-                if ($assignedEmpId !== null && $assignedEmpId !== $empId) {
-                    $this->db->rollBack();
-                    $this->forbidden('Only the originally assigned courier may re-dispatch this failed delivery.');
-                }
-                $reschedDate = !empty($order['rescheduled_date']) ? (string)$order['rescheduled_date'] : null;
-                if ($reschedDate !== null && $reschedDate > $this->philippineTodayDate()) {
-                    $this->db->rollBack();
-                    $schedDisplay = DateTimeImmutable::createFromFormat('!Y-m-d', $reschedDate, new DateTimeZone('Asia/Manila'));
-                    $schedFormatted = $schedDisplay ? $schedDisplay->format('M j, Y') : $reschedDate;
-                    $this->flash(
-                        'error',
-                        "Order #ORD-{$orderId} is scheduled for re-delivery on {$schedFormatted} and cannot be dispatched early."
-                    );
-                    $this->redirect('/delivery/orders?tab=queue&view=' . $orderId);
-                    return;
-                }
-                $actionCode = 'delivery.redispatched';
+                $this->db->rollBack();
+                $this->flash(
+                    'error',
+                    "Order #ORD-{$orderId} is marked Delivery Failed and cannot be re-dispatched. Failed-delivery return inspection and reconciliation are not enabled."
+                );
+                $this->redirect('/delivery/orders?tab=history&view=' . $orderId);
+                return;
             } else {
                 $this->db->rollBack();
                 $this->flash('error', "Order #ORD-{$orderId} cannot be dispatched from status '{$currentStatus}'.");
@@ -479,9 +467,7 @@ final class DeliveryController extends Controller
             $up->execute([$empId, $orderId]);
 
             $oldCourierLabel = $assignedEmpId !== null ? (string)$assignedEmpId : 'none';
-            $summary = $actionCode === 'delivery.redispatched'
-                ? "Re-dispatched failed delivery order #ORD-{$orderId} (out for delivery)."
-                : "Claimed and dispatched delivery order #ORD-{$orderId} (out for delivery).";
+            $summary = "Claimed and dispatched delivery order #ORD-{$orderId} (out for delivery).";
 
             Audit::record(
                 $this->db,
@@ -645,7 +631,7 @@ final class DeliveryController extends Controller
 
             $this->db->commit();
             $this->flash('success', "Order #ORD-{$orderId} marked as Delivery Failed. Receptionist may now coordinate rescheduling.");
-            $this->redirect('/delivery/orders?tab=queue&view=' . $orderId);
+            $this->redirect('/delivery/orders?tab=history&view=' . $orderId);
         } catch (Throwable $e) {
             if ($this->db->inTransaction()) {
                 $this->db->rollBack();

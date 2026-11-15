@@ -173,7 +173,7 @@ if (!empty($selectedOrder)) {
   $isAutoOpen = (!empty($selectedOrder) && (int)$selectedOrder['order_id'] === $ordId) ? 'true' : 'false';
   $st = (string)$orderModal['order_status'];
   $canDispatch = $isCourier
-      && in_array($st, ['processing', 'delivery_failed'], true)
+      && $st === 'processing'
       && !empty($orderModal['payment_eligible'])
       && empty($orderModal['rescheduled_future']);
   $canCompleteOrFail = $isCourier
@@ -314,25 +314,28 @@ if (!empty($selectedOrder)) {
         <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 1rem 1.25rem;">
           <h4 style="margin: 0 0 0.75rem 0; font-size: 0.95rem; color: #1e293b;">Courier Actions</h4>
 
-          <?php if (in_array($st, ['processing', 'delivery_failed'], true)): ?>
+          <?php if ($st === 'processing'): ?>
             <?php if ($canDispatch): ?>
               <form method="post" action="/delivery/orders/<?= $ordId ?>/dispatch" style="margin: 0;">
                 <?= \App\Core\CSRF::field() ?>
                 <button type="submit" class="btn primary btn-sm">
-                  <?= $st === 'delivery_failed' ? '🚚 Re-Dispatch Delivery' : '🚚 Claim &amp; Dispatch Delivery' ?>
+                  🚚 Claim &amp; Dispatch Delivery
                 </button>
               </form>
             <?php else: ?>
               <p class="caption" style="margin: 0; color: #b91c1c;">
-                <?php if (!empty($orderModal['rescheduled_future'])): ?>
-                  Cannot dispatch early: scheduled for <?= date('M j, Y', strtotime((string)$orderModal['rescheduled_date'])) ?>.
-                <?php elseif (empty($orderModal['payment_eligible'])): ?>
+                <?php if (empty($orderModal['payment_eligible'])): ?>
                   <?= e((string)($orderModal['payment_ineligible_reason'] ?? 'Order is not eligible for dispatch.')) ?>
                 <?php else: ?>
                   This order is not available for dispatch.
                 <?php endif; ?>
               </p>
             <?php endif; ?>
+
+          <?php elseif ($st === 'delivery_failed'): ?>
+            <span class="badge badge-danger" style="padding: 0.4rem 0.75rem;">
+              ⚠️ Delivery Failed — re-dispatch is disabled pending failed-delivery return inspection and reconciliation.
+            </span>
 
           <?php elseif ($canCompleteOrFail): ?>
             <div style="display: flex; flex-direction: column; gap: 1rem;">
