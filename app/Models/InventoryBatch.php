@@ -227,6 +227,81 @@ class InventoryBatch
     }
 
     /**
+     * Lock eligible non-expired batches in deterministic FEFO order and compute each
+     * batch's unreserved reservation capacity by subtracting active reservations read with FOR UPDATE.
+     * Does not deduct inventory.on_hand or inventory_batch.quantity.
+     *
+     * Caller must hold an active transaction (and lock the parent inventory row FOR UPDATE first).
+     *
+     * @return array<int, array{
+     *   batch_id:int,
+     *   batch_number:string,
+     *   expiration_date:?string,
+     *   physical_quantity:int,
+     *   active_reserved:int,
+     *   unreserved_quantity:int
+     * }>
+     */
+    public static function lockEligibleFefoBatchesForReservation(PDO $db, int $inventoryId): array
+    {
+        $batchStmt = $db->prepare(
+            "SELECT batch_id, batch_number, expiration_date, quantity
+             FROM inventory_batch
+             WHERE inventory_id = ?
+               AND quantity > 0
+               AND (expiration_date IS NULL OR expiration_date >= CURDATE())
+             ORDER BY
+               (CASE WHEN expiration_date IS NULL THEN 1 ELSE 0 END) ASC,
+               expiration_date ASC,
+               batch_id ASC
+             FOR UPDATE"
+        );
+        $batchStmt->execute([$inventoryId]);
+        $batches = $batchStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        if (!$batches) {
+            return [];
+        }
+
+        // Locking read of active shelf reservations (cannot combine GROUP BY with FOR UPDATE in MySQL).
+        $resStmt = $db->prepare(
+            "SELECT reservation_id, batch_id, reserved_quantity
+             FROM inventory_reservation
+             WHERE inventory_id = ?
+               AND reservation_status = 'active'
+               AND batch_id IS NOT NULL
+             ORDER BY reservation_id ASC
+             FOR UPDATE"
+        );
+        $resStmt->execute([$inventoryId]);
+
+        $activeByBatch = [];
+        foreach ($resStmt->fetchAll(PDO::FETCH_ASSOC) as $res) {
+            $bId = (int)$res['batch_id'];
+            $activeByBatch[$bId] = ($activeByBatch[$bId] ?? 0) + (int)$res['reserved_quantity'];
+        }
+
+        $result = [];
+        foreach ($batches as $b) {
+            $bId = (int)$b['batch_id'];
+            $physicalQty = (int)$b['quantity'];
+            $activeReserved = $activeByBatch[$bId] ?? 0;
+            $unreservedQty = max(0, $physicalQty - $activeReserved);
+
+            $result[] = [
+                'batch_id' => $bId,
+                'batch_number' => (string)$b['batch_number'],
+                'expiration_date' => $b['expiration_date'] !== null ? (string)$b['expiration_date'] : null,
+                'physical_quantity' => $physicalQty,
+                'active_reserved' => $activeReserved,
+                'unreserved_quantity' => $unreservedQty,
+            ];
+        }
+
+        return $result;
+    }
+
+    /**
      * Get real-time summary statistics for a business unit's inventory overview.
      */
     public static function getSummaryForUnit(PDO $db, int $businessUnitId): array

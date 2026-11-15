@@ -8,10 +8,12 @@ use App\Core\CSRF;
 use App\Core\Session;
 use App\Models\Audit;
 use App\Models\Units;
+use App\Services\OrderReservationService;
 use DateTime;
 use DateTimeImmutable;
 use DateTimeZone;
 use PDO;
+use RuntimeException;
 use Throwable;
 
 final class PetStoreReceptionistController extends Controller
@@ -729,8 +731,38 @@ final class PetStoreReceptionistController extends Controller
      */
     public function updatePickupStatus(int $orderId): void
     {
-        [$uid, , $unitId] = $this->checkPetStoreReceptionist();
+        [$uid, $empId, $unitId] = $this->checkPetStoreReceptionist();
         CSRF::check();
+
+        $targetStatus = strtolower(trim((string)($_POST['status'] ?? '')));
+
+        if ($targetStatus === 'confirmed') {
+            try {
+                $service = new OrderReservationService($this->db);
+                $result = $service->confirmPickupOrderAndReserve(
+                    $orderId,
+                    $unitId,
+                    $uid,
+                    $empId > 0 ? $empId : null
+                );
+                $this->flash(
+                    'success',
+                    "Order #{$orderId} status updated to Confirmed ({$result['total_reserved_quantity']} unit(s) reserved)."
+                );
+            } catch (RuntimeException $e) {
+                $code = $e->getCode();
+                if ($code === OrderReservationService::ERR_NOT_FOUND) {
+                    $this->notFound();
+                }
+                if ($code === OrderReservationService::ERR_FORBIDDEN) {
+                    $this->forbidden($e->getMessage());
+                }
+                $this->flash('error', $e->getMessage());
+            }
+
+            $this->redirect('/petstore/receptionist/orders?tab=pickup&view=' . $orderId);
+            return;
+        }
 
         $stmt = $this->db->prepare("SELECT * FROM customer_order WHERE order_id = ? AND business_unit_id = ?");
         $stmt->execute([$orderId, $unitId]);
@@ -745,7 +777,6 @@ final class PetStoreReceptionistController extends Controller
             $this->forbidden('Only pickup orders may be updated by the receptionist. Delivery workflows belong to delivery personnel.');
         }
 
-        $targetStatus = strtolower(trim((string)($_POST['status'] ?? '')));
         $currentStatus = (string)$order['order_status'];
 
         // Strict Pickup state machine
