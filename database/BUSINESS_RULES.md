@@ -123,22 +123,40 @@
 
 -   **CONFIRMED:** INVENTORY is linked one-to-one with BUSINESS_PRODUCT
     in the uploaded ERD; UNIQUE(business_product_id) enforces this.
--   **CONFIRMED:** On Hand means physical stock.
--   **CONFIRMED:** Committed means stock reserved for confirmed orders.
--   **CONFIRMED:** Available is derived: Available = On Hand -
-    Committed; it should not be stored as an independent quantity.
+-   **CONFIRMED:** On Hand means physical sellable stock currently held
+    by the store, including eligible shelf and pickup-staging stock.
+-   **CONFIRMED:** Committed means the total quantity reserved for
+    confirmed orders, including quantities still held on the store shelf,
+    in courier custody, or physically returned and awaiting inspection.
 -   **CONFIRMED:** In Transit represents dispatched stock not yet
-    confirmed delivered.
+    confirmed delivered. Under OD-09, it also includes physically
+    returned stock awaiting inspection; such stock remains quarantined
+    and is not sellable.
+-   **CONFIRMED (OD-09):** Because Committed continues to include courier
+    and return-quarantine custody, sellable Available is derived as
+    `Available = (On Hand + In Transit) - Committed`, equivalently
+    `On Hand - (Committed - In Transit)`. Available is not stored as an
+    independent quantity. Enforce nonnegative quantities and
+    `Committed >= In Transit`.
 -   **CONFIRMED:** Damaged/Lost stock is not sellable.
 -   **CONFIRMED:** A cart does not reserve inventory.
 -   **CONFIRMED:** Order confirmation increases Committed, not On Hand.
 -   **CONFIRMED:** Successful pickup reduces On Hand and releases the
     corresponding Committed quantity.
--   **CONFIRMED:** Delivery dispatch reduces On Hand, releases
-    Committed, and increases In Transit.
--   **CONFIRMED:** Successful delivery does not deduct stock again.
--   **CONFIRMED:** Failed deliveries and returns require inspection;
-    returned products must not automatically become sellable.
+-   **CONFIRMED (OD-09):** Delivery dispatch reduces On Hand and the
+    corresponding batch quantities, increases In Transit, and leaves
+    Committed unchanged. The dispatched quantity remains committed while
+    it is in courier custody.
+-   **CONFIRMED (OD-09):** Successful delivery reduces In Transit and
+    releases the corresponding Committed quantity. It does not deduct
+    On Hand or batch quantity a second time.
+-   **CONFIRMED (OD-09):** A failed delivery does not automatically
+    release Committed or restore On Hand. If the parcel is physically
+    returned, it remains in In Transit/Committed quarantine until
+    inspection. After inspection, only the sellable quantity may return
+    to On Hand/batch quantity; damaged quantity must not become sellable.
+    Exact inventory movement taxonomy and accounting rows remain
+    unresolved under Rule 6/Rule 8 below.
 
 ### 5.2 Batch and expiry tracking
 
@@ -153,8 +171,11 @@
 -   **CONFIRMED (uploaded ERD):** For batch-tracked products, physical
     quantity is held by INVENTORY_BATCH.quantity, and INVENTORY.on_hand
     is the aggregate of batch quantities.
--   **CONFIRMED (uploaded ERD):** INVENTORY.committed represents the sum
-    of open reservation quantities for that inventory.
+-   **CONFIRMED (uploaded ERD) + OD-09:** INVENTORY.committed
+    represents the sum of open reservation quantities for that inventory,
+    including reservations in `active`, `in_transit`, and
+    `returned_pending_inspection` custody states. It is not released at
+    delivery dispatch.
 -   **CONFIRMED (uploaded ERD):** Every stock change is represented by
     an INVENTORY_MOVEMENT and applied atomically with the corresponding
     quantity updates.
@@ -191,11 +212,13 @@
 -   **CONFIRMED (uploaded ERD):** Reservation, movement, and inventory
     quantity/status changes must be atomic within a database
     transaction.
--   **UNRESOLVED:** The uploaded ERD's Rule 6 and Rule 8 still conflict
-    about 'sale_refund' versus 'return_sellable'/'return_damaged'. The
-    last reviewed version was marked **NOT APPROVED** for this reason.
-    Do not implement the refund/return movement rules until corrected
-    and approved.
+-   **UNRESOLVED / NOT APPROVED:** The uploaded ERD's Rule 6 and Rule 8
+    still conflict about `sale_refund` versus
+    `return_sellable`/`return_damaged`. OD-09 establishes the physical
+    custody and inspection lifecycle, but does not decide this movement
+    taxonomy or the accounting treatment of monetary refunds versus
+    physical returns. Do not implement the disputed movement rules until
+    the ERD is corrected and approved.
 
 ## 6. Product sales and customer orders
 
@@ -226,10 +249,15 @@
 -   **CONFIRMED:** Pickup or delivery is selected at checkout where
     supported.
 -   **CONFIRMED:** Inventory is not reserved while items are merely in
-    the cart.
--   **CONFIRMED:** Confirmation commits/reserves stock; fulfillment
-    movements reduce physical stock according to the pickup/delivery
-    workflow.
+    the cart or while an order remains unconfirmed/pending.
+-   **CONFIRMED:** Authorized store confirmation creates the reservation
+    and increases Committed atomically. Checkout submission alone does
+    not create a reservation.
+-   **CONFIRMED:** Pickup reduces On Hand/batch quantity and releases
+    Committed only at actual customer handover. Under OD-09, delivery
+    dispatch reduces On Hand/batch quantity and increases In Transit
+    while retaining Committed; confirmed delivery later reduces In
+    Transit and releases Committed without a second physical deduction.
 -   **UNRESOLVED:** Exact order status lifecycle,
     payment-before-confirmation policy, delivery provider data,
     failed-delivery retry rules, and cancellation eligibility.
@@ -258,27 +286,60 @@
 -   **CONFIRMED (uploaded ERD):** A refund is a new PAYMENT row with
     payment_type='refund' and original_payment_id referencing the
     original payment. The original payment is preserved.
--   **CONFIRMED (uploaded ERD):** Partial refunds and multiple refunds
-    against one original payment are intended.
+-   **CONFIRMED (uploaded ERD):** The longer-term ERD design intends to
+    support partial refunds and multiple refunds against one original
+    payment.
 -   **CONFIRMED (uploaded ERD):** Total refunds must not exceed the
     original payment amount.
--   **UNRESOLVED:** The uploaded ERD's payment/refund design needs final
-    validation alongside the physical-return movement correction. The
-    previous review approved most payment rules but did not approve the
-    complete subsystem due to the movement-type conflict.
+-   **CONFIRMED OWNER CLARIFICATION (OD-11; Phase 1 scope):**
+    Pre-fulfillment partial refunds are excluded from Phase 1. Eligible
+    Phase 1 refund requests use the existing full-refund approval
+    workflow. This restriction does not erase the broader long-term ERD
+    intent for partial/multiple refunds.
+-   **UNRESOLVED:** Final payment/refund schema validation and the
+    physical-return movement correction still require ERD review and
+    approval. The Rule 6/8 movement conflict does not merge monetary
+    refund records with physical-return stock events.
 
 ### 7.3 Physical returns
 
--   **UNRESOLVED:** Distinguish monetary refunds from physical returns.
-    The latest uploaded rules describe return_sellable and
-    return_damaged separately from PAYMENT refunds, but Rule 6 still
-    uses sale_refund. This conflict must be corrected before
-    implementation.
--   **CONFIRMED:** A returned product must be inspected before being
-    made sellable.
--   **CONFIRMED:** A monetary refund may occur without physical stock
-    return, and a physical return may occur without a monetary refund;
-    these are separate events.
+-   **CONFIRMED:** Monetary refunds and physical returns are separate
+    events. A monetary refund may occur without physical stock return,
+    and a physical return may occur without a monetary refund.
+-   **CONFIRMED:** A returned product must be physically received and
+    inspected before any sellable quantity is restored, consistent with
+    OD-09. Returned-but-uninspected stock remains quarantined.
+-   **UNRESOLVED / NOT APPROVED:** Exact inventory movement names,
+    sign/quantity treatment, and accounting treatment for the disputed
+    Rule 6 (`sale_refund`) versus Rule 8
+    (`return_sellable`/`return_damaged`) remain unresolved. Do not infer
+    or implement a movement taxonomy from the custody/inspection rule.
+
+### 7.4 Confirmed Owner Clarifications for Order Payments (OD-09–OD-11)
+
+-   **OD-09 — Delivery custody and return inspection (CONFIRMED):** At
+    dispatch, reduce On Hand/batch quantity and increase In Transit,
+    while retaining Committed. On confirmed delivery, reduce In Transit
+    and release Committed without another On Hand deduction. A failed
+    delivery does not auto-restock. Physically returned goods remain
+    quarantined in In Transit/Committed until inspection; only inspected
+    sellable quantities may return to On Hand. This clarification does
+    not approve Rule 6/8 movement names or accounting treatment.
+-   **OD-10 — COD collection and remittance (CONFIRMED):** Courier
+    collection and staff remittance verification are separate events.
+    At actual customer handover, record the amount, collecting courier,
+    collection time, and `collected_pending_remittance`; the COD payment
+    remains pending and is not settled revenue. A different authorized
+    staff member verifies the cash remittance; only then does the COD
+    payment become completed. The eligible verifier-role matrix and
+    exception handling remain unresolved. OD-10 does not approve COD
+    availability or enabled business units.
+-   **OD-11 — Phase 1 refund scope (CONFIRMED):** Pre-fulfillment partial
+    refunds are excluded in Phase 1. Eligible Phase 1 requests use the
+    existing full-refund approval workflow; approval is not itself proof
+    that money has been returned. The longer-term ERD intent for partial
+    and multiple refunds remains preserved, subject to future scope and
+    implementation approval.
 
 ## 8. Appointments and services
 
