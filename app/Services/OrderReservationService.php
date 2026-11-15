@@ -276,8 +276,7 @@ final class OrderReservationService
             }
 
             $orderItems = $this->lockOrderItems($orderId);
-            $oiIds = array_map(static fn(array $r): int => (int)$r['order_item_id'], $orderItems);
-            $this->lockActivePickupReservations($orderId, $oiIds);
+            $this->lockActivePickupReservations($orderId, $orderItems);
 
             $updOrdStmt = $this->db->prepare(
                 "UPDATE customer_order
@@ -317,7 +316,7 @@ final class OrderReservationService
     }
 
     /**
-     * Atomically record customer pickup handover (full or partial) for a confirmed pickup order.
+     * Atomically record customer pickup handover (full or partial) for a ready-for-pickup order.
      *
      * @param array<int,int>|null $handoverQuantitiesByOrderItemId Map of order_item_id => quantity, or null to fulfill all remaining reserved units.
      * @return array{
@@ -336,28 +335,25 @@ final class OrderReservationService
         int $orderId,
         int $businessUnitId,
         int $actorUserId,
-        ?array $handoverQuantitiesByOrderItemId = null,
-        bool $requireReadyForPickup = false
+        ?array $handoverQuantitiesByOrderItemId = null
     ): array {
         $this->assertTopLevelTransaction('Pickup handover fulfillment');
 
         $this->db->beginTransaction();
         try {
-            // 1. Lock order and verify scope, fulfillment method, and pre-completion state.
+            // 1. Lock order and verify scope, fulfillment method, and ready_for_pickup state.
             $order = $this->lockPickupOrder($orderId, $businessUnitId);
             $currentStatus = (string)$order['order_status'];
-            $allowedStatuses = $requireReadyForPickup ? ['ready_for_pickup'] : ['confirmed', 'ready_for_pickup'];
-            if (!in_array($currentStatus, $allowedStatuses, true)) {
+            if ($currentStatus !== 'ready_for_pickup') {
                 throw new RuntimeException(
                     "Invalid transition for pickup order from '{$currentStatus}' to 'completed'. Permitted flow: Pending → Confirmed → Ready for Pickup → Completed.",
                     self::ERR_CONFLICT
                 );
             }
 
-            // 2. Lock order items and reservations in canonical order.
+            // 2. Lock order items and reservations in canonical order and verify full reservation coverage.
             $orderItems = $this->lockOrderItems($orderId);
-            $oiIds = array_map(static fn(array $r): int => (int)$r['order_item_id'], $orderItems);
-            $activeReservations = $this->lockActivePickupReservations($orderId, $oiIds);
+            $activeReservations = $this->lockActivePickupReservations($orderId, $orderItems);
 
             // 3. Verify unit-scoped metadata matches each active reservation's inventory and batch requirement.
             $metaByBpId = $this->resolveUnitProductMetadata($orderId, $businessUnitId, $orderItems);
@@ -777,11 +773,29 @@ final class OrderReservationService
     }
 
     /**
-     * @param array<int,int> $orderItemIds
-     * @return array<int,array<string,mixed>>
+     * Lock all reservations for the order's items and verify exact non-cancelled (active + fulfilled) coverage
+     * matches every order item's quantity, while excluding cancelled reservations.
+     *
+     * @param array<int,array<string,mixed>> $orderItems
+     * @return array<int,array<string,mixed>> Active reservation rows eligible for handover
      */
-    private function lockActivePickupReservations(int $orderId, array $orderItemIds): array
+    private function lockActivePickupReservations(int $orderId, array $orderItems): array
     {
+        $orderedQtyByItemId = [];
+        $orderItemIds = [];
+        foreach ($orderItems as $item) {
+            $itemId = (int)$item['order_item_id'];
+            $qty = (int)$item['quantity'];
+            if ($qty <= 0) {
+                throw new RuntimeException(
+                    "Order item #{$itemId} on Order #{$orderId} has invalid ordered quantity ({$qty}).",
+                    self::ERR_UNPROCESSABLE
+                );
+            }
+            $orderItemIds[] = $itemId;
+            $orderedQtyByItemId[$itemId] = $qty;
+        }
+
         $oiPlaceholders = implode(',', array_fill(0, count($orderItemIds), '?'));
         $resStmt = $this->db->prepare(
             "SELECT reservation_id, order_item_id, inventory_id, batch_id, reserved_quantity, reservation_status
@@ -794,27 +808,64 @@ final class OrderReservationService
         $rows = $resStmt->fetchAll(PDO::FETCH_ASSOC);
 
         $active = [];
-        $nonCancelledCount = 0;
+        $coveredQtyByItemId = [];
 
         foreach ($rows as $row) {
+            $resId = (int)$row['reservation_id'];
+            $itemId = (int)$row['order_item_id'];
+            $reservedQty = (int)$row['reserved_quantity'];
             $status = (string)$row['reservation_status'];
+
             if (in_array($status, ['in_transit', 'returned_pending_inspection'], true)) {
                 throw new RuntimeException(
-                    "Order #{$orderId} has reservation #{$row['reservation_id']} in unsupported pickup state '{$status}'.",
+                    "Order #{$orderId} has reservation #{$resId} in unsupported pickup state '{$status}'.",
                     self::ERR_CONFLICT
                 );
             }
-            if ($status !== 'cancelled') {
-                $nonCancelledCount++;
+            if ($status === 'cancelled') {
+                continue;
             }
+            if (!in_array($status, ['active', 'fulfilled'], true)) {
+                throw new RuntimeException(
+                    "Order #{$orderId} has reservation #{$resId} in unknown state '{$status}'.",
+                    self::ERR_CONFLICT
+                );
+            }
+            if ($reservedQty <= 0) {
+                throw new RuntimeException(
+                    "Reservation #{$resId} on Order #{$orderId} has invalid reserved quantity ({$reservedQty}).",
+                    self::ERR_UNPROCESSABLE
+                );
+            }
+
+            $coveredQtyByItemId[$itemId] = ($coveredQtyByItemId[$itemId] ?? 0) + $reservedQty;
             if ($status === 'active') {
                 $active[] = $row;
             }
         }
 
-        if ($nonCancelledCount === 0) {
-            throw new RuntimeException("Order #{$orderId} has no active inventory reservations.", self::ERR_UNPROCESSABLE);
+        foreach ($orderedQtyByItemId as $itemId => $orderedQty) {
+            $coveredQty = $coveredQtyByItemId[$itemId] ?? 0;
+            if ($coveredQty === 0) {
+                throw new RuntimeException(
+                    "Order item #{$itemId} on Order #{$orderId} is missing an active or fulfilled inventory reservation.",
+                    self::ERR_UNPROCESSABLE
+                );
+            }
+            if ($coveredQty < $orderedQty) {
+                throw new RuntimeException(
+                    "Order item #{$itemId} on Order #{$orderId} has incomplete reservation coverage (ordered: {$orderedQty}, reserved: {$coveredQty}).",
+                    self::ERR_UNPROCESSABLE
+                );
+            }
+            if ($coveredQty > $orderedQty) {
+                throw new RuntimeException(
+                    "Order item #{$itemId} on Order #{$orderId} has excessive reservation coverage (ordered: {$orderedQty}, reserved: {$coveredQty}).",
+                    self::ERR_UNPROCESSABLE
+                );
+            }
         }
+
         if (!$active) {
             throw new RuntimeException("Order #{$orderId} has already been fulfilled.", self::ERR_CONFLICT);
         }

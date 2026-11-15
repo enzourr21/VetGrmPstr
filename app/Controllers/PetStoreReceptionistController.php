@@ -749,7 +749,7 @@ final class PetStoreReceptionistController extends Controller
                     $service->markPickupOrderReady($orderId, $unitId, $uid);
                     $this->flash('success', "Order #{$orderId} status updated to Ready For Pickup.");
                 } else {
-                    $result = $service->fulfillPickupOrder($orderId, $unitId, $uid, null, true);
+                    $result = $service->fulfillPickupOrder($orderId, $unitId, $uid);
                     $this->flash(
                         'success',
                         "Order #{$orderId} status updated to Completed ({$result['fulfilled_quantity']} unit(s) handed over)."

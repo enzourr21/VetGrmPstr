@@ -245,7 +245,7 @@ try {
     [$ordFull, [$oiFulBatch, $oiFulNonBatch]] = $createOrder('pickup', 'pending', [[$bpFulBatch, 4], [$bpFulNonBatch, 3]]);
     $service->confirmPickupOrderAndReserve($ordFull, 1, $empUid);
     $readyRes = $service->markPickupOrderReady($ordFull, 1, $empUid);
-    $fullRes = $service->fulfillPickupOrder($ordFull, 1, $empUid, null, true);
+    $fullRes = $service->fulfillPickupOrder($ordFull, 1, $empUid);
 
     $invFulBatchRow = $pdo->query("SELECT on_hand, committed FROM inventory WHERE inventory_id = {$invFulBatch}")->fetch();
     $invFulNbRow = $pdo->query("SELECT on_hand, committed FROM inventory WHERE inventory_id = {$invFulNonBatch}")->fetch();
@@ -281,7 +281,7 @@ try {
 
     // 11. Duplicate full handover submission is rejected without double-deduction or duplicate movements
     try {
-        $service->fulfillPickupOrder($ordFull, 1, $empUid, null, true);
+        $service->fulfillPickupOrder($ordFull, 1, $empUid);
         check('Repeated pickup handover rejects duplicate submission', false);
     } catch (RuntimeException $e) {
         $dupOnHand = (int)$pdo->query("SELECT on_hand FROM inventory WHERE inventory_id = {$invFulBatch}")->fetchColumn();
@@ -303,7 +303,7 @@ try {
     $service->confirmPickupOrderAndReserve($ordPart, 1, $empUid);
     $service->markPickupOrderReady($ordPart, 1, $empUid);
 
-    $partStep1 = $service->fulfillPickupOrder($ordPart, 1, $empUid, [$oiPart => 5], true);
+    $partStep1 = $service->fulfillPickupOrder($ordPart, 1, $empUid, [$oiPart => 5]);
     $partResStep1 = $pdo->query("SELECT reservation_id, batch_id, reserved_quantity, reservation_status FROM inventory_reservation WHERE order_item_id = {$oiPart} ORDER BY reservation_id ASC")->fetchAll();
     $partInvStep1 = $pdo->query("SELECT on_hand, committed FROM inventory WHERE inventory_id = {$invPart}")->fetch();
     $bPart1QtyStep1 = (int)$pdo->query("SELECT quantity FROM inventory_batch WHERE batch_id = {$bPart1}")->fetchColumn();
@@ -329,7 +329,7 @@ try {
 
     // Over-fulfillment exceeding remaining reserved quantity (3 > 2) must fail and roll back
     try {
-        $service->fulfillPickupOrder($ordPart, 1, $empUid, [$oiPart => 3], true);
+        $service->fulfillPickupOrder($ordPart, 1, $empUid, [$oiPart => 3]);
         check('Over-fulfillment exceeding remaining reserved quantity is rejected', false);
     } catch (RuntimeException $e) {
         $afterOverOnHand = (int)$pdo->query("SELECT on_hand FROM inventory WHERE inventory_id = {$invPart}")->fetchColumn();
@@ -341,7 +341,7 @@ try {
     }
 
     // Complete remaining 2 units
-    $partStep2 = $service->fulfillPickupOrder($ordPart, 1, $empUid, null, true);
+    $partStep2 = $service->fulfillPickupOrder($ordPart, 1, $empUid);
     $partResStep2 = $pdo->query("SELECT reservation_status, reserved_quantity FROM inventory_reservation WHERE order_item_id = {$oiPart} ORDER BY reservation_id ASC")->fetchAll();
     $partInvStep2 = $pdo->query("SELECT on_hand, committed FROM inventory WHERE inventory_id = {$invPart}")->fetch();
     $bPart2QtyStep2 = (int)$pdo->query("SELECT quantity FROM inventory_batch WHERE batch_id = {$bPart2}")->fetchColumn();
@@ -373,7 +373,7 @@ try {
     $pdo->exec("UPDATE inventory_batch SET quantity = 1 WHERE batch_id = {$bRb2}");
 
     try {
-        $service->fulfillPickupOrder($ordRb, 1, $empUid, null, true);
+        $service->fulfillPickupOrder($ordRb, 1, $empUid);
         check('Insufficient pinned batch quantity rolls back whole handover', false);
     } catch (RuntimeException $e) {
         $rbInv1 = $pdo->query("SELECT on_hand, committed FROM inventory WHERE inventory_id = {$invRb1}")->fetch();
@@ -393,10 +393,142 @@ try {
 
     // 14. Cross-unit handover isolation rejects wrong business unit
     try {
-        $service->fulfillPickupOrder($ordRb, $otherUnitId, $empUid, null, true);
+        $service->fulfillPickupOrder($ordRb, $otherUnitId, $empUid);
         check('Wrong business unit handover attempt is rejected', false);
     } catch (RuntimeException $e) {
         check('Wrong business unit handover rejected with ERR_NOT_FOUND', $e->getCode() === OrderReservationService::ERR_NOT_FOUND);
+    }
+
+    // 15. Service-boundary lifecycle enforcement rejects fulfillment while order is still confirmed (not ready_for_pickup)
+    [$bpConfOnly, $invConfOnly] = $createProduct('ChkC Confirmed Only Guard', 10, 0, 0, 1);
+    $pdo->exec("INSERT INTO inventory_batch (inventory_id, batch_number, expiration_date, quantity) VALUES ({$invConfOnly}, 'CO-B1', DATE_ADD(CURDATE(), INTERVAL 10 DAY), 10)");
+    $bConfOnly = (int)$pdo->lastInsertId();
+    [$ordConfOnly, [$oiConfOnly]] = $createOrder('pickup', 'pending', [[$bpConfOnly, 3]]);
+    $service->confirmPickupOrderAndReserve($ordConfOnly, 1, $empUid);
+
+    try {
+        $service->fulfillPickupOrder($ordConfOnly, 1, $empUid);
+        check('Handover from confirmed status is rejected without ready_for_pickup', false);
+    } catch (RuntimeException $e) {
+        $coInv = $pdo->query("SELECT on_hand, committed FROM inventory WHERE inventory_id = {$invConfOnly}")->fetch();
+        $coBatchQty = (int)$pdo->query("SELECT quantity FROM inventory_batch WHERE batch_id = {$bConfOnly}")->fetchColumn();
+        $coResStatus = (string)$pdo->query("SELECT reservation_status FROM inventory_reservation WHERE order_item_id = {$oiConfOnly}")->fetchColumn();
+        $coMovCnt = (int)$pdo->query("SELECT COUNT(*) FROM inventory_movement im JOIN inventory_reservation ir ON ir.reservation_id = im.reservation_id WHERE ir.order_item_id = {$oiConfOnly}")->fetchColumn();
+        $coOrdStatus = (string)$pdo->query("SELECT order_status FROM customer_order WHERE order_id = {$ordConfOnly}")->fetchColumn();
+        check(
+            'Confirmed-only order rejects fulfillPickupOrder with ERR_CONFLICT and mutates nothing',
+            $e->getCode() === OrderReservationService::ERR_CONFLICT
+                && (int)$coInv['on_hand'] === 10
+                && (int)$coInv['committed'] === 3
+                && $coBatchQty === 10
+                && $coResStatus === 'active'
+                && $coMovCnt === 0
+                && $coOrdStatus === 'confirmed'
+        );
+    }
+
+    // 16. Order item missing its reservation rejects both markPickupOrderReady() and fulfillPickupOrder()
+    [$bpMiss1, $invMiss1] = $createProduct('ChkC Coverage Present', 10, 0, 0, 0);
+    [$bpMiss2, $invMiss2] = $createProduct('ChkC Coverage Missing', 10, 0, 0, 0);
+    [$ordMiss, [$oiMiss1, $oiMiss2]] = $createOrder('pickup', 'confirmed', [[$bpMiss1, 2], [$bpMiss2, 3]]);
+    $pdo->exec("INSERT INTO inventory_reservation (order_item_id, inventory_id, batch_id, reserved_quantity, reservation_status) VALUES ({$oiMiss1}, {$invMiss1}, NULL, 2, 'active')");
+    $pdo->exec("INSERT INTO inventory_reservation (order_item_id, inventory_id, batch_id, reserved_quantity, reservation_status) VALUES ({$oiMiss2}, {$invMiss2}, NULL, 3, 'cancelled')");
+    $pdo->exec("UPDATE inventory SET committed = 2 WHERE inventory_id = {$invMiss1}");
+
+    try {
+        $service->markPickupOrderReady($ordMiss, 1, $empUid);
+        check('markPickupOrderReady rejects order item missing non-cancelled reservation', false);
+    } catch (RuntimeException $e) {
+        $missReadyStatus = (string)$pdo->query("SELECT order_status FROM customer_order WHERE order_id = {$ordMiss}")->fetchColumn();
+        check(
+            'markPickupOrderReady rejects missing reservation item (cancelled excluded) with ERR_UNPROCESSABLE',
+            $e->getCode() === OrderReservationService::ERR_UNPROCESSABLE && $missReadyStatus === 'confirmed'
+        );
+    }
+
+    $pdo->exec("UPDATE customer_order SET order_status = 'ready_for_pickup' WHERE order_id = {$ordMiss}");
+    try {
+        $service->fulfillPickupOrder($ordMiss, 1, $empUid);
+        check('fulfillPickupOrder rejects order item missing non-cancelled reservation', false);
+    } catch (RuntimeException $e) {
+        $missInv1 = $pdo->query("SELECT on_hand, committed FROM inventory WHERE inventory_id = {$invMiss1}")->fetch();
+        $missRes1Status = (string)$pdo->query("SELECT reservation_status FROM inventory_reservation WHERE order_item_id = {$oiMiss1}")->fetchColumn();
+        $missMovCnt = (int)$pdo->query("SELECT COUNT(*) FROM inventory_movement im JOIN inventory_reservation ir ON ir.reservation_id = im.reservation_id WHERE ir.order_item_id IN ({$oiMiss1}, {$oiMiss2})")->fetchColumn();
+        $missFulStatus = (string)$pdo->query("SELECT order_status FROM customer_order WHERE order_id = {$ordMiss}")->fetchColumn();
+        check(
+            'fulfillPickupOrder rejects missing reservation coverage with ERR_UNPROCESSABLE and mutates nothing',
+            $e->getCode() === OrderReservationService::ERR_UNPROCESSABLE
+                && (int)$missInv1['on_hand'] === 10
+                && (int)$missInv1['committed'] === 2
+                && $missRes1Status === 'active'
+                && $missMovCnt === 0
+                && $missFulStatus === 'ready_for_pickup'
+        );
+    }
+
+    // 17. Incomplete reservation coverage (reserved sum < ordered quantity, even with cancelled row) rejects both ready and fulfill
+    [$bpInc, $invInc] = $createProduct('ChkC Incomplete Cov', 10, 0, 0, 0);
+    [$ordInc, [$oiInc]] = $createOrder('pickup', 'confirmed', [[$bpInc, 5]]);
+    $pdo->exec("INSERT INTO inventory_reservation (order_item_id, inventory_id, batch_id, reserved_quantity, reservation_status) VALUES ({$oiInc}, {$invInc}, NULL, 3, 'active')");
+    $pdo->exec("INSERT INTO inventory_reservation (order_item_id, inventory_id, batch_id, reserved_quantity, reservation_status) VALUES ({$oiInc}, {$invInc}, NULL, 2, 'cancelled')");
+    $pdo->exec("UPDATE inventory SET committed = 3 WHERE inventory_id = {$invInc}");
+
+    try {
+        $service->markPickupOrderReady($ordInc, 1, $empUid);
+        check('markPickupOrderReady rejects incomplete reservation coverage', false);
+    } catch (RuntimeException $e) {
+        $incReadyStatus = (string)$pdo->query("SELECT order_status FROM customer_order WHERE order_id = {$ordInc}")->fetchColumn();
+        check('markPickupOrderReady rejects incomplete coverage with ERR_UNPROCESSABLE', $e->getCode() === OrderReservationService::ERR_UNPROCESSABLE && $incReadyStatus === 'confirmed');
+    }
+
+    $pdo->exec("UPDATE customer_order SET order_status = 'ready_for_pickup' WHERE order_id = {$ordInc}");
+    try {
+        $service->fulfillPickupOrder($ordInc, 1, $empUid);
+        check('fulfillPickupOrder rejects incomplete reservation coverage', false);
+    } catch (RuntimeException $e) {
+        $incInv = $pdo->query("SELECT on_hand, committed FROM inventory WHERE inventory_id = {$invInc}")->fetch();
+        $incMovCnt = (int)$pdo->query("SELECT COUNT(*) FROM inventory_movement im JOIN inventory_reservation ir ON ir.reservation_id = im.reservation_id WHERE ir.order_item_id = {$oiInc}")->fetchColumn();
+        $incFulStatus = (string)$pdo->query("SELECT order_status FROM customer_order WHERE order_id = {$ordInc}")->fetchColumn();
+        check(
+            'fulfillPickupOrder rejects incomplete coverage with ERR_UNPROCESSABLE and mutates nothing',
+            $e->getCode() === OrderReservationService::ERR_UNPROCESSABLE
+                && (int)$incInv['on_hand'] === 10
+                && (int)$incInv['committed'] === 3
+                && $incMovCnt === 0
+                && $incFulStatus === 'ready_for_pickup'
+        );
+    }
+
+    // 18. Excessive reservation coverage (non-cancelled sum > ordered quantity) rejects both ready and fulfill
+    [$bpExc, $invExc] = $createProduct('ChkC Excessive Cov', 10, 0, 0, 0);
+    [$ordExc, [$oiExc]] = $createOrder('pickup', 'confirmed', [[$bpExc, 4]]);
+    $pdo->exec("INSERT INTO inventory_reservation (order_item_id, inventory_id, batch_id, reserved_quantity, reservation_status) VALUES ({$oiExc}, {$invExc}, NULL, 4, 'active'), ({$oiExc}, {$invExc}, NULL, 2, 'active')");
+    $pdo->exec("UPDATE inventory SET committed = 6 WHERE inventory_id = {$invExc}");
+
+    try {
+        $service->markPickupOrderReady($ordExc, 1, $empUid);
+        check('markPickupOrderReady rejects excessive reservation coverage', false);
+    } catch (RuntimeException $e) {
+        $excReadyStatus = (string)$pdo->query("SELECT order_status FROM customer_order WHERE order_id = {$ordExc}")->fetchColumn();
+        check('markPickupOrderReady rejects excessive coverage with ERR_UNPROCESSABLE', $e->getCode() === OrderReservationService::ERR_UNPROCESSABLE && $excReadyStatus === 'confirmed');
+    }
+
+    $pdo->exec("UPDATE customer_order SET order_status = 'ready_for_pickup' WHERE order_id = {$ordExc}");
+    try {
+        $service->fulfillPickupOrder($ordExc, 1, $empUid);
+        check('fulfillPickupOrder rejects excessive reservation coverage', false);
+    } catch (RuntimeException $e) {
+        $excInv = $pdo->query("SELECT on_hand, committed FROM inventory WHERE inventory_id = {$invExc}")->fetch();
+        $excMovCnt = (int)$pdo->query("SELECT COUNT(*) FROM inventory_movement im JOIN inventory_reservation ir ON ir.reservation_id = im.reservation_id WHERE ir.order_item_id = {$oiExc}")->fetchColumn();
+        $excFulStatus = (string)$pdo->query("SELECT order_status FROM customer_order WHERE order_id = {$ordExc}")->fetchColumn();
+        check(
+            'fulfillPickupOrder rejects excessive coverage with ERR_UNPROCESSABLE and mutates nothing',
+            $e->getCode() === OrderReservationService::ERR_UNPROCESSABLE
+                && (int)$excInv['on_hand'] === 10
+                && (int)$excInv['committed'] === 6
+                && $excMovCnt === 0
+                && $excFulStatus === 'ready_for_pickup'
+        );
     }
 } finally {
     if ($pdo->inTransaction()) {
