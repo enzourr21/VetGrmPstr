@@ -129,7 +129,7 @@ final class PosSaleService
             sort($sortedInvIds, SORT_NUMERIC);
             $lockedInventory = $this->lockInventories($sortedInvIds);
 
-            // 4. Revalidate aggregate availability and allocate eligible unreserved FEFO batches per inventory.
+            // 4. Revalidate physically sellable on-hand stock (excluding shelf commitments) and allocate FEFO batches.
             $allocationsByBpId = [];
             $onHandDeductionByInv = [];
 
@@ -142,7 +142,17 @@ final class PosSaleService
                 $onHand = (int)$inv['on_hand'];
                 $committed = (int)$inv['committed'];
                 $inTransit = (int)$inv['in_transit'];
-                $available = ($onHand + $inTransit) - $committed;
+
+                if ($onHand < 0 || $committed < 0 || $inTransit < 0 || $committed < $inTransit) {
+                    throw new RuntimeException(
+                        "Inventory state invariant violated for inventory #{$invId}.",
+                        self::ERR_CONFLICT
+                    );
+                }
+
+                // Committed >= In Transit >= 0; in_transit is quarantined/dispatched and excluded from shelf commitments.
+                $shelfCommitted = $committed - $inTransit;
+                $physicallySellableOnHand = $onHand - $shelfCommitted;
 
                 $invLines = $itemsByInventory[$invId];
                 $productName = $invLines[0]['product_name'];
@@ -153,9 +163,10 @@ final class PosSaleService
                     $totalRequestedForInv += $invLine['qty'];
                 }
 
-                if ($available < $totalRequestedForInv || $onHand < $totalRequestedForInv) {
+                if ($physicallySellableOnHand < $totalRequestedForInv) {
+                    $sellableDisplay = max(0, $physicallySellableOnHand);
                     throw new RuntimeException(
-                        "Insufficient stock for '{$productName}'. Available: {$available}, requested: {$totalRequestedForInv}.",
+                        "Insufficient physically sellable stock for '{$productName}'. Available: {$sellableDisplay}, requested: {$totalRequestedForInv}.",
                         self::ERR_UNPROCESSABLE
                     );
                 }

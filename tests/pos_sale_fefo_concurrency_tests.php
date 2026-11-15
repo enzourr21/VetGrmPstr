@@ -383,6 +383,51 @@ try {
         'Cross-unit and inactive products rejected with ERR_UNPROCESSABLE and 0 stock changes',
         $crossUnitRejected && $inactiveRejected && $invSharedBAfter === 10 && $invInactiveAfter === 10
     );
+
+    // 8. OD-09 physically sellable on-hand stock: in_transit excluded, shelf_committed = committed - in_transit
+    // 8a. on_hand = 6, committed = 7, in_transit = 4 => shelf_committed = 3, sellable = 6 - 3 = 3
+    $pTransit = $createGlobalProduct('ChkD InTransit Shelf Commitment');
+    [$bpTransit, $invTransit] = $addBusinessProduct($pTransit, $unitA, 55.00, 6, 7, 4, 0);
+
+    $transitOversellRejected = false;
+    try {
+        $service->recordSale($unitA, $empUid, $empId, null, 'Cash', [
+            ['business_product_id' => $bpTransit, 'quantity' => 4],
+        ]);
+    } catch (RuntimeException $e) {
+        $transitOversellRejected = $e->getCode() === PosSaleService::ERR_UNPROCESSABLE;
+    }
+
+    $res8 = $service->recordSale($unitA, $empUid, $empId, null, 'Cash', [
+        ['business_product_id' => $bpTransit, 'quantity' => 3],
+    ]);
+    $cleanup['sales'][] = $res8['sale_id'];
+    $invTransitAfter = $pdo->query("SELECT on_hand, committed, in_transit FROM inventory WHERE inventory_id = {$invTransit}")->fetch(PDO::FETCH_ASSOC);
+    check(
+        'POS enforces shelf_committed = committed - in_transit (sellable = 3, blocks 4, permits 3)',
+        $transitOversellRejected
+            && (int)$invTransitAfter['on_hand'] === 3
+            && (int)$invTransitAfter['committed'] === 7
+            && (int)$invTransitAfter['in_transit'] === 4
+    );
+
+    // 8b. Corrupted invariant (committed < in_transit) fails closed with ERR_CONFLICT without counting excess in_transit
+    $pCorrupt = $createGlobalProduct('ChkD Corrupt Invariant');
+    [$bpCorrupt, $invCorrupt] = $addBusinessProduct($pCorrupt, $unitA, 75.00, 10, 2, 4, 0);
+
+    $invariantRejected = false;
+    try {
+        $service->recordSale($unitA, $empUid, $empId, null, 'Cash', [
+            ['business_product_id' => $bpCorrupt, 'quantity' => 1],
+        ]);
+    } catch (RuntimeException $e) {
+        $invariantRejected = $e->getCode() === PosSaleService::ERR_CONFLICT;
+    }
+    $invCorruptAfter = (int)$pdo->query("SELECT on_hand FROM inventory WHERE inventory_id = {$invCorrupt}")->fetchColumn();
+    check(
+        'Violated Committed >= In Transit invariant fails closed with ERR_CONFLICT and 0 stock changes',
+        $invariantRejected && $invCorruptAfter === 10
+    );
 } finally {
     if ($pdo->inTransaction()) {
         $pdo->rollBack();
