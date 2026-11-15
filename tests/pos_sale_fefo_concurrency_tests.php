@@ -39,6 +39,22 @@ function check(string $label, bool $cond, string $detail = ''): void
 }
 
 $service = new PosSaleService($pdo);
+$pdo2 = null;
+$openSecondConnection = static function (): PDO {
+    require dirname(__DIR__) . '/config/database.php';
+    /** @var PDO $pdo */
+    $pdo->exec('SET SESSION innodb_lock_wait_timeout = 1');
+    return $pdo;
+};
+$countUnitSaleArtifacts = static function (PDO $conn, int $unitId): array {
+    return [
+        'sales' => (int)$conn->query("SELECT COUNT(*) FROM sale WHERE business_unit_id = {$unitId}")->fetchColumn(),
+        'sale_items' => (int)$conn->query("SELECT COUNT(*) FROM sale_item si JOIN sale s ON s.sale_id = si.sale_id WHERE s.business_unit_id = {$unitId}")->fetchColumn(),
+        'payments' => (int)$conn->query("SELECT COUNT(*) FROM payment py JOIN sale s ON s.sale_id = py.sale_id WHERE s.business_unit_id = {$unitId}")->fetchColumn(),
+        'sale_movements' => (int)$conn->query("SELECT COUNT(*) FROM inventory_movement im JOIN sale_item si ON si.sale_item_id = im.sale_item_id JOIN sale s ON s.sale_id = si.sale_id WHERE s.business_unit_id = {$unitId}")->fetchColumn(),
+        'audits' => (int)$conn->query("SELECT COUNT(*) FROM audit_log WHERE business_unit_id = {$unitId} AND target_type = 'sale'")->fetchColumn(),
+    ];
+};
 $cleanup = [
     'sales' => [],
     'orders' => [],
@@ -392,7 +408,7 @@ try {
     [$bpLineExp, $invLineExp] = $addBusinessProduct($pLineExp, $unitA, 30.00, 5, 0, 0, 1);
     $bLineExp = $addBatch($invLineExp, 'CHK-EXPONLY', 'DATE_SUB(CURDATE(), INTERVAL 3 DAY)', 5);
 
-    $salesBeforeFail = (int)$pdo->query("SELECT COUNT(*) FROM sale WHERE business_unit_id = {$unitA}")->fetchColumn();
+    $artifactsBeforeFail = $countUnitSaleArtifacts($pdo, $unitA);
     try {
         $service->recordSale($unitA, $empUid, $empId, null, 'Cash', [
             ['business_product_id' => $bpLineOk, 'quantity' => 3],
@@ -402,13 +418,13 @@ try {
     } catch (RuntimeException $e) {
         $lineOkAfter = (int)$pdo->query("SELECT on_hand FROM inventory WHERE inventory_id = {$invLineOk}")->fetchColumn();
         $bLineExpAfter = (int)$pdo->query("SELECT quantity FROM inventory_batch WHERE batch_id = {$bLineExp}")->fetchColumn();
-        $salesAfterFail = (int)$pdo->query("SELECT COUNT(*) FROM sale WHERE business_unit_id = {$unitA}")->fetchColumn();
+        $artifactsAfterFail = $countUnitSaleArtifacts($pdo, $unitA);
         check(
-            'Multi-line failure rolls back line 1 on_hand, keeps expired batch untouched, and creates 0 sale rows',
+            'Multi-line failure rolls back line 1 on_hand, keeps expired batch untouched, and creates 0 partial sale/movement/payment/audit rows',
             $e->getCode() === PosSaleService::ERR_UNPROCESSABLE
                 && $lineOkAfter === 5
                 && $bLineExpAfter === 5
-                && $salesAfterFail === $salesBeforeFail
+                && $artifactsAfterFail === $artifactsBeforeFail
         );
     }
 
@@ -487,7 +503,117 @@ try {
         'Violated Committed >= In Transit invariant fails closed with ERR_CONFLICT and 0 stock changes',
         $invariantRejected && $invCorruptAfter === 10
     );
+
+    // 8c. Missing inventory record on active business_product rejects sale cleanly without partial records
+    $pNoInv = $createGlobalProduct('ChkD Missing Inventory');
+    $stmtNoInv = $pdo->prepare(
+        "INSERT INTO business_product (business_unit_id, product_id, selling_price, requires_batch_tracking, product_status)
+         VALUES (?, ?, 20.00, 0, 'active')"
+    );
+    $stmtNoInv->execute([$unitA, $pNoInv]);
+    $bpNoInv = (int)$pdo->lastInsertId();
+
+    $artifactsBeforeNoInv = $countUnitSaleArtifacts($pdo, $unitA);
+    $missingInvRejected = false;
+    try {
+        $service->recordSale($unitA, $empUid, $empId, null, 'Cash', [
+            ['business_product_id' => $bpLineOk, 'quantity' => 2],
+            ['business_product_id' => $bpNoInv, 'quantity' => 1],
+        ]);
+    } catch (RuntimeException $e) {
+        $missingInvRejected = $e->getCode() === PosSaleService::ERR_UNPROCESSABLE;
+    }
+    $lineOkAfterNoInv = (int)$pdo->query("SELECT on_hand FROM inventory WHERE inventory_id = {$invLineOk}")->fetchColumn();
+    $artifactsAfterNoInv = $countUnitSaleArtifacts($pdo, $unitA);
+    check(
+        'Missing inventory record in multi-line sale fails with ERR_UNPROCESSABLE and leaves zero partial records',
+        $missingInvRejected && $lineOkAfterNoInv === 5 && $artifactsAfterNoInv === $artifactsBeforeNoInv
+    );
+
+    // 9. Multi-connection lock-order coexistence & non-negative concurrency protection
+    $pdo2 = $openSecondConnection();
+    $service2 = new PosSaleService($pdo2);
+
+    // 9a. Simulate pickup fulfillment holding X lock on inventory_reservation while second connection completes POS sale
+    $pConc = $createGlobalProduct('ChkD Concurrent Safe');
+    [$bpConc, $invConc] = $addBusinessProduct($pConc, $unitA, 50.00, 5, 2, 0, 1);
+    $bConc = $addBatch($invConc, 'CHK-CONC', 'DATE_ADD(CURDATE(), INTERVAL 12 DAY)', 5);
+    [, , $resConcId] = $createSeededReservationOrder($unitA, $branchA, $bpConc, $invConc, $bConc, 2, 2);
+
+    $pdo->beginTransaction();
+    $pdo->query("SELECT reservation_id FROM inventory_reservation WHERE reservation_id = {$resConcId} FOR UPDATE")->fetchColumn();
+
+    // Under non-locking READ COMMITTED reservation reads, Connection 2 completes unreserved POS sale of 3 without waiting on reservation lock.
+    $res9a = $service2->recordSale($unitA, $empUid, $empId, null, 'Cash', [
+        ['business_product_id' => $bpConc, 'quantity' => 3],
+    ]);
+    $cleanup['sales'][] = $res9a['sale_id'];
+
+    // Connection 1 then completes its reservation fulfillment on remaining 2 units -> total stock stays >= 0.
+    $pdo->query("SELECT inventory_id FROM inventory WHERE inventory_id = {$invConc} FOR UPDATE")->fetchColumn();
+    $batchRemDuringFulfill = (int)$pdo->query("SELECT quantity FROM inventory_batch WHERE batch_id = {$bConc} FOR UPDATE")->fetchColumn();
+    $pdo->exec("UPDATE inventory_batch SET quantity = quantity - 2 WHERE batch_id = {$bConc}");
+    $pdo->exec("UPDATE inventory SET on_hand = on_hand - 2, committed = committed - 2 WHERE inventory_id = {$invConc}");
+    $pdo->commit();
+
+    $invConcEnd = $pdo->query("SELECT on_hand, committed FROM inventory WHERE inventory_id = {$invConc}")->fetch(PDO::FETCH_ASSOC);
+    $bConcEnd = (int)$pdo->query("SELECT quantity FROM inventory_batch WHERE batch_id = {$bConc}")->fetchColumn();
+    check(
+        'Two-connection reservation lock vs POS sale avoids deadlock and keeps remaining inventory & batch non-negative',
+        $batchRemDuringFulfill === 2
+            && (int)$invConcEnd['on_hand'] === 0
+            && (int)$invConcEnd['committed'] === 0
+            && $bConcEnd === 0
+    );
+
+    // 9b. Competing inventory lock timeout rolls back Connection 2 cleanly without negative quantities or partial records
+    $pRace = $createGlobalProduct('ChkD Race Conflict');
+    [$bpRace, $invRace] = $addBusinessProduct($pRace, $unitA, 65.00, 3, 0, 0, 1);
+    $bRace = $addBatch($invRace, 'CHK-RACE', 'DATE_ADD(CURDATE(), INTERVAL 12 DAY)', 3);
+
+    $artifactsBeforeRace = $countUnitSaleArtifacts($pdo2, $unitA);
+    $pdo->beginTransaction();
+    $pdo->query("SELECT inventory_id FROM inventory WHERE inventory_id = {$invRace} FOR UPDATE")->fetchColumn();
+
+    $lockConflictRolledBack = false;
+    try {
+        $service2->recordSale($unitA, $empUid, $empId, null, 'Cash', [
+            ['business_product_id' => $bpRace, 'quantity' => 2],
+        ]);
+    } catch (Throwable $e) {
+        $lockConflictRolledBack = !$pdo2->inTransaction();
+    }
+
+    // Connection 1 commits full depletion of 3 -> 0; subsequent request for 1 must still reject cleanly.
+    $pdo->exec("UPDATE inventory_batch SET quantity = quantity - 3 WHERE batch_id = {$bRace}");
+    $pdo->exec("UPDATE inventory SET on_hand = on_hand - 3 WHERE inventory_id = {$invRace}");
+    $pdo->commit();
+
+    $artifactsAfterConflict = $countUnitSaleArtifacts($pdo, $unitA);
+    $postDepleteRejected = false;
+    try {
+        $service2->recordSale($unitA, $empUid, $empId, null, 'Cash', [
+            ['business_product_id' => $bpRace, 'quantity' => 1],
+        ]);
+    } catch (RuntimeException $e) {
+        $postDepleteRejected = $e->getCode() === PosSaleService::ERR_UNPROCESSABLE;
+    }
+
+    $invRaceEnd = (int)$pdo->query("SELECT on_hand FROM inventory WHERE inventory_id = {$invRace}")->fetchColumn();
+    $bRaceEnd = (int)$pdo->query("SELECT quantity FROM inventory_batch WHERE batch_id = {$bRace}")->fetchColumn();
+    check(
+        'Concurrent lock conflict and post-depletion oversell cannot produce negative inventory/batch or partial records',
+        $lockConflictRolledBack
+            && $postDepleteRejected
+            && $artifactsAfterConflict === $artifactsBeforeRace
+            && $invRaceEnd === 0
+            && $bRaceEnd === 0
+    );
 } finally {
+    if ($pdo2 instanceof PDO && $pdo2->inTransaction()) {
+        $pdo2->rollBack();
+    }
+    $pdo2 = null;
     if ($pdo->inTransaction()) {
         $pdo->rollBack();
     }
