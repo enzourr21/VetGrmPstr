@@ -34,13 +34,24 @@ final class PosSaleService
      * Atomically validate, lock inventory and FEFO batches (excluding active reservation holds),
      * deduct physical stock, and record a Pet Store POS sale, items, movements, payment, and audit entry.
      *
-     * Locking hierarchy (matching OrderReservationService::confirmPickupOrderAndReserve):
-     *   inventory (ASC) -> inventory_batch -> inventory_reservation -> inventory_movement
+     * Lock-order & consistency strategy:
+     * - OrderReservationService::confirmPickupOrderAndReserve() locks:
+     *     inventory (ASC) -> inventory_batch -> inventory_reservation
+     * - OrderReservationService::fulfillPickupOrder() locks:
+     *     inventory_reservation -> inventory_movement -> inventory (ASC) -> inventory_batch (ASC)
+     * - To avoid lock-order inversion deadlocks against pickup fulfillment without blind helper reuse,
+     *   this service locks ONLY inventory (ASC) -> inventory_batch (never taking locks on
+     *   inventory_reservation or inventory_movement).
+     * - Using READ COMMITTED for this single transaction guarantees that non-locking reads of active
+     *   reservations and fulfillment movements inside Step 4 observe the latest committed state AFTER
+     *   all target inventory rows are exclusively locked (avoiding a stale REPEATABLE READ snapshot),
+     *   while holding inventory FOR UPDATE prevents any concurrent reservation/fulfillment commit on
+     *   those inventories until this transaction finishes.
      *
      * @param array<int,array{business_product_id:int|string,quantity:int|string}> $rawLines
      * @return array{sale_id:int, total_amount:float, items_count:int, movements_created:int}
      * @throws RuntimeException on validation failure, cross-unit access, missing inventory, or insufficient stock
-     * @throws Throwable on database failure
+     * @throws Throwable on database failure (including lock/serialization conflicts; always rolled back)
      */
     public function recordSale(
         int $businessUnitId,
@@ -70,6 +81,9 @@ final class PosSaleService
         $bpIds = array_values($bpIds);
         sort($bpIds, SORT_NUMERIC);
 
+        // Next-transaction isolation only (does not alter session isolation); ensures Step 4's non-locking
+        // reservation/movement reads see a fresh committed snapshot after acquiring inventory FOR UPDATE.
+        $this->db->exec('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
         $this->db->beginTransaction();
         try {
             // 1. Resolve unit's active primary branch and verify employee / optional customer FK targets.
@@ -482,14 +496,18 @@ final class PosSaleService
             return [];
         }
 
+        // Non-locking reads under READ COMMITTED: never acquire locks on inventory_reservation or
+        // inventory_movement (avoiding lock inversion against fulfillPickupOrder's reservation->inventory
+        // order). Because inventory FOR UPDATE is already held for $inventoryId and all reservation and
+        // fulfillment writers must hold inventory FOR UPDATE before mutating or committing rows for this
+        // inventory, the committed state observed here is stable and quiescent until commit/rollback.
         $resStmt = $this->db->prepare(
             "SELECT reservation_id, batch_id, reserved_quantity
              FROM inventory_reservation
              WHERE inventory_id = ?
                AND reservation_status = 'active'
                AND batch_id IS NOT NULL
-             ORDER BY reservation_id ASC
-             FOR UPDATE"
+             ORDER BY reservation_id ASC"
         );
         $resStmt->execute([$inventoryId]);
         $activeReservations = $resStmt->fetchAll(PDO::FETCH_ASSOC);
@@ -503,8 +521,7 @@ final class PosSaleService
                  FROM inventory_movement
                  WHERE reservation_id IN ({$resPlaceholders})
                    AND movement_type = 'order_fulfillment'
-                 ORDER BY movement_id ASC
-                 FOR UPDATE"
+                 ORDER BY movement_id ASC"
             );
             $movStmt->execute($resIds);
             foreach ($movStmt->fetchAll(PDO::FETCH_ASSOC) as $mRow) {
