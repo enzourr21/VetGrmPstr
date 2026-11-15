@@ -23,7 +23,7 @@ SET @bad_inv_qty = (
 SET @sql_abort_inv_qty = IF(
     @bad_inv_qty > 0,
     'SELECT 1 FROM err_preflight_inv_negative_or_invalid_quantities',
-    'SELECT 1'
+    'DO 0'
 );
 PREPARE stmt_abort_inv_qty FROM @sql_abort_inv_qty;
 EXECUTE stmt_abort_inv_qty;
@@ -41,7 +41,7 @@ SET @col_in_transit_pre = (
 SET @sql_chk_inv_transit_pre = IF(
     @col_in_transit_pre > 0,
     'SELECT COUNT(*) INTO @bad_inv_transit FROM inventory WHERE in_transit IS NULL OR in_transit < 0 OR committed < in_transit',
-    'SELECT 1'
+    'DO 0'
 );
 PREPARE stmt_chk_inv_transit_pre FROM @sql_chk_inv_transit_pre;
 EXECUTE stmt_chk_inv_transit_pre;
@@ -50,7 +50,7 @@ DEALLOCATE PREPARE stmt_chk_inv_transit_pre;
 SET @sql_abort_inv_transit = IF(
     @bad_inv_transit > 0,
     'SELECT 1 FROM err_preflight_inv_committed_lt_in_transit',
-    'SELECT 1'
+    'DO 0'
 );
 PREPARE stmt_abort_inv_transit FROM @sql_abort_inv_transit;
 EXECUTE stmt_abort_inv_transit;
@@ -66,7 +66,7 @@ SET @bad_res_qty = (
 SET @sql_abort_res_qty = IF(
     @bad_res_qty > 0,
     'SELECT 1 FROM err_preflight_inv_res_nonpositive_reserved_qty',
-    'SELECT 1'
+    'DO 0'
 );
 PREPARE stmt_abort_res_qty FROM @sql_abort_res_qty;
 EXECUTE stmt_abort_res_qty;
@@ -83,7 +83,7 @@ SET @col_in_transit = (
 SET @sql_in_transit = IF(
     @col_in_transit = 0,
     'ALTER TABLE inventory ADD COLUMN in_transit INT NOT NULL DEFAULT 0 AFTER committed',
-    'SELECT 1'
+    'DO 0'
 );
 PREPARE stmt_in_transit FROM @sql_in_transit;
 EXECUTE stmt_in_transit;
@@ -101,7 +101,7 @@ SET @chk_on_hand = (
 SET @sql_chk_on_hand = IF(
     @chk_on_hand = 0,
     'ALTER TABLE inventory ADD CONSTRAINT chk_inventory_on_hand_nonneg CHECK (on_hand >= 0)',
-    'SELECT 1'
+    'DO 0'
 );
 PREPARE stmt_chk_on_hand FROM @sql_chk_on_hand;
 EXECUTE stmt_chk_on_hand;
@@ -118,7 +118,7 @@ SET @chk_committed = (
 SET @sql_chk_committed = IF(
     @chk_committed = 0,
     'ALTER TABLE inventory ADD CONSTRAINT chk_inventory_committed_nonneg CHECK (committed >= 0)',
-    'SELECT 1'
+    'DO 0'
 );
 PREPARE stmt_chk_committed FROM @sql_chk_committed;
 EXECUTE stmt_chk_committed;
@@ -135,7 +135,7 @@ SET @chk_in_transit = (
 SET @sql_chk_in_transit = IF(
     @chk_in_transit = 0,
     'ALTER TABLE inventory ADD CONSTRAINT chk_inventory_in_transit_nonneg CHECK (in_transit >= 0)',
-    'SELECT 1'
+    'DO 0'
 );
 PREPARE stmt_chk_in_transit FROM @sql_chk_in_transit;
 EXECUTE stmt_chk_in_transit;
@@ -152,7 +152,7 @@ SET @chk_committed_ge_transit = (
 SET @sql_chk_committed_ge_transit = IF(
     @chk_committed_ge_transit = 0,
     'ALTER TABLE inventory ADD CONSTRAINT chk_inventory_committed_ge_in_transit CHECK (committed >= in_transit)',
-    'SELECT 1'
+    'DO 0'
 );
 PREPARE stmt_chk_committed_ge_transit FROM @sql_chk_committed_ge_transit;
 EXECUTE stmt_chk_committed_ge_transit;
@@ -174,7 +174,7 @@ SET @chk_res_qty = (
 SET @sql_chk_res_qty = IF(
     @chk_res_qty = 0,
     'ALTER TABLE inventory_reservation ADD CONSTRAINT chk_inv_res_qty_positive CHECK (reserved_quantity > 0)',
-    'SELECT 1'
+    'DO 0'
 );
 PREPARE stmt_chk_res_qty FROM @sql_chk_res_qty;
 EXECUTE stmt_chk_res_qty;
@@ -191,7 +191,7 @@ SET @idx_inv_status = (
 SET @sql_idx_inv_status = IF(
     @idx_inv_status = 0,
     'ALTER TABLE inventory_reservation ADD INDEX idx_inv_res_inv_status (inventory_id, reservation_status)',
-    'SELECT 1'
+    'DO 0'
 );
 PREPARE stmt_idx_inv_status FROM @sql_idx_inv_status;
 EXECUTE stmt_idx_inv_status;
@@ -207,7 +207,7 @@ SET @idx_item_status = (
 SET @sql_idx_item_status = IF(
     @idx_item_status = 0,
     'ALTER TABLE inventory_reservation ADD INDEX idx_inv_res_item_status (order_item_id, reservation_status)',
-    'SELECT 1'
+    'DO 0'
 );
 PREPARE stmt_idx_item_status FROM @sql_idx_item_status;
 EXECUTE stmt_idx_item_status;

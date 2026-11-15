@@ -24,7 +24,7 @@ SET @col_in_transit_pre = (
 SET @sql_chk_nonzero_transit = IF(
     @col_in_transit_pre > 0,
     'SELECT COUNT(*) INTO @nonzero_transit FROM inventory WHERE in_transit <> 0',
-    'SELECT 1'
+    'DO 0'
 );
 PREPARE stmt_chk_nonzero_transit FROM @sql_chk_nonzero_transit;
 EXECUTE stmt_chk_nonzero_transit;
@@ -33,7 +33,7 @@ DEALLOCATE PREPARE stmt_chk_nonzero_transit;
 SET @sql_abort_nonzero_transit = IF(
     @nonzero_transit > 0,
     'SELECT 1 FROM err_rollback_blocked_nonzero_inventory_in_transit',
-    'SELECT 1'
+    'DO 0'
 );
 PREPARE stmt_abort_nonzero_transit FROM @sql_abort_nonzero_transit;
 EXECUTE stmt_abort_nonzero_transit;
@@ -52,7 +52,7 @@ SET @has_od09_enum = (
 SET @sql_chk_od09_res = IF(
     @has_od09_enum > 0,
     'SELECT COUNT(*) INTO @od09_res_count FROM inventory_reservation WHERE reservation_status IN (''in_transit'', ''returned_pending_inspection'')',
-    'SELECT 1'
+    'DO 0'
 );
 PREPARE stmt_chk_od09_res FROM @sql_chk_od09_res;
 EXECUTE stmt_chk_od09_res;
@@ -61,7 +61,7 @@ DEALLOCATE PREPARE stmt_chk_od09_res;
 SET @sql_abort_od09_res = IF(
     @od09_res_count > 0,
     'SELECT 1 FROM err_rollback_blocked_active_od09_res_statuses',
-    'SELECT 1'
+    'DO 0'
 );
 PREPARE stmt_abort_od09_res FROM @sql_abort_od09_res;
 EXECUTE stmt_abort_od09_res;
@@ -83,13 +83,51 @@ SET @chk_res_qty = (
 SET @sql_chk_res_qty = IF(
     @chk_res_qty > 0,
     'ALTER TABLE inventory_reservation DROP CHECK chk_inv_res_qty_positive',
-    'SELECT 1'
+    'DO 0'
 );
 PREPARE stmt_chk_res_qty FROM @sql_chk_res_qty;
 EXECUTE stmt_chk_res_qty;
 DEALLOCATE PREPARE stmt_chk_res_qty;
 
--- 3. Drop composite indexes on inventory_reservation (original FK indexes remain intact)
+-- 3. Ensure standalone FK backing indexes exist before dropping composite indexes
+--    (MySQL 8.4 can drop redundant implicit FK indexes when adding a leading-column composite index)
+SET @fk_idx_item = (
+    SELECT COUNT(*)
+    FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'inventory_reservation'
+      AND COLUMN_NAME = 'order_item_id'
+      AND SEQ_IN_INDEX = 1
+      AND INDEX_NAME <> 'idx_inv_res_item_status'
+);
+SET @sql_fk_idx_item = IF(
+    @fk_idx_item = 0,
+    'ALTER TABLE inventory_reservation ADD INDEX order_item_id (order_item_id)',
+    'DO 0'
+);
+PREPARE stmt_fk_idx_item FROM @sql_fk_idx_item;
+EXECUTE stmt_fk_idx_item;
+DEALLOCATE PREPARE stmt_fk_idx_item;
+
+SET @fk_idx_inv = (
+    SELECT COUNT(*)
+    FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'inventory_reservation'
+      AND COLUMN_NAME = 'inventory_id'
+      AND SEQ_IN_INDEX = 1
+      AND INDEX_NAME <> 'idx_inv_res_inv_status'
+);
+SET @sql_fk_idx_inv = IF(
+    @fk_idx_inv = 0,
+    'ALTER TABLE inventory_reservation ADD INDEX inventory_id (inventory_id)',
+    'DO 0'
+);
+PREPARE stmt_fk_idx_inv FROM @sql_fk_idx_inv;
+EXECUTE stmt_fk_idx_inv;
+DEALLOCATE PREPARE stmt_fk_idx_inv;
+
+-- Drop composite indexes on inventory_reservation
 SET @idx_item_status = (
     SELECT COUNT(*)
     FROM information_schema.STATISTICS
@@ -100,7 +138,7 @@ SET @idx_item_status = (
 SET @sql_idx_item_status = IF(
     @idx_item_status > 0,
     'ALTER TABLE inventory_reservation DROP INDEX idx_inv_res_item_status',
-    'SELECT 1'
+    'DO 0'
 );
 PREPARE stmt_idx_item_status FROM @sql_idx_item_status;
 EXECUTE stmt_idx_item_status;
@@ -116,7 +154,7 @@ SET @idx_inv_status = (
 SET @sql_idx_inv_status = IF(
     @idx_inv_status > 0,
     'ALTER TABLE inventory_reservation DROP INDEX idx_inv_res_inv_status',
-    'SELECT 1'
+    'DO 0'
 );
 PREPARE stmt_idx_inv_status FROM @sql_idx_inv_status;
 EXECUTE stmt_idx_inv_status;
@@ -134,7 +172,7 @@ SET @chk_committed_ge_transit = (
 SET @sql_chk_committed_ge_transit = IF(
     @chk_committed_ge_transit > 0,
     'ALTER TABLE inventory DROP CHECK chk_inventory_committed_ge_in_transit',
-    'SELECT 1'
+    'DO 0'
 );
 PREPARE stmt_chk_committed_ge_transit FROM @sql_chk_committed_ge_transit;
 EXECUTE stmt_chk_committed_ge_transit;
@@ -151,7 +189,7 @@ SET @chk_in_transit = (
 SET @sql_chk_in_transit = IF(
     @chk_in_transit > 0,
     'ALTER TABLE inventory DROP CHECK chk_inventory_in_transit_nonneg',
-    'SELECT 1'
+    'DO 0'
 );
 PREPARE stmt_chk_in_transit FROM @sql_chk_in_transit;
 EXECUTE stmt_chk_in_transit;
@@ -168,7 +206,7 @@ SET @chk_committed = (
 SET @sql_chk_committed = IF(
     @chk_committed > 0,
     'ALTER TABLE inventory DROP CHECK chk_inventory_committed_nonneg',
-    'SELECT 1'
+    'DO 0'
 );
 PREPARE stmt_chk_committed FROM @sql_chk_committed;
 EXECUTE stmt_chk_committed;
@@ -185,7 +223,7 @@ SET @chk_on_hand = (
 SET @sql_chk_on_hand = IF(
     @chk_on_hand > 0,
     'ALTER TABLE inventory DROP CHECK chk_inventory_on_hand_nonneg',
-    'SELECT 1'
+    'DO 0'
 );
 PREPARE stmt_chk_on_hand FROM @sql_chk_on_hand;
 EXECUTE stmt_chk_on_hand;
@@ -202,7 +240,7 @@ SET @col_in_transit = (
 SET @sql_in_transit = IF(
     @col_in_transit > 0,
     'ALTER TABLE inventory DROP COLUMN in_transit',
-    'SELECT 1'
+    'DO 0'
 );
 PREPARE stmt_in_transit FROM @sql_in_transit;
 EXECUTE stmt_in_transit;
