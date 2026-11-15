@@ -731,7 +731,7 @@ final class PetStoreReceptionistController extends Controller
      */
     public function updatePickupStatus(int $orderId): void
     {
-        [$uid, $empId, $unitId] = $this->checkPetStoreReceptionist();
+        [$uid, , $unitId] = $this->checkPetStoreReceptionist();
         CSRF::check();
 
         $targetStatus = strtolower(trim((string)($_POST['status'] ?? '')));
@@ -742,8 +742,7 @@ final class PetStoreReceptionistController extends Controller
                 $result = $service->confirmPickupOrderAndReserve(
                     $orderId,
                     $unitId,
-                    $uid,
-                    $empId > 0 ? $empId : null
+                    $uid
                 );
                 $this->flash(
                     'success',

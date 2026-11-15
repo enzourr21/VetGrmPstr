@@ -34,8 +34,7 @@ final class OrderReservationService
     public function confirmPickupOrderAndReserve(
         int $orderId,
         int $businessUnitId,
-        int $actorUserId,
-        ?int $actorEmployeeId = null
+        int $actorUserId
     ): array {
         if ($this->db->inTransaction()) {
             throw new RuntimeException('Order confirmation must own a top-level database transaction.', self::ERR_CONFLICT);
@@ -121,9 +120,10 @@ final class OrderReservationService
                  JOIN product p ON p.product_id = bp.product_id
                  LEFT JOIN inventory i ON i.business_product_id = bp.business_product_id
                  WHERE bp.business_product_id IN ({$bpPlaceholders})
+                   AND bp.business_unit_id = ?
                  ORDER BY bp.business_product_id ASC"
             );
-            $metaStmt->execute($bpIds);
+            $metaStmt->execute(array_merge($bpIds, [$businessUnitId]));
 
             $metaByBpId = [];
             foreach ($metaStmt->fetchAll(PDO::FETCH_ASSOC) as $mRow) {
@@ -138,7 +138,10 @@ final class OrderReservationService
                 $meta = $metaByBpId[$bpId] ?? null;
 
                 if (!$meta) {
-                    throw new RuntimeException("Product #{$bpId} on Order #{$orderId} could not be resolved.", self::ERR_UNPROCESSABLE);
+                    throw new RuntimeException(
+                        "Product #{$bpId} on Order #{$orderId} does not belong to business unit #{$businessUnitId} or could not be resolved.",
+                        self::ERR_UNPROCESSABLE
+                    );
                 }
                 if ($qty <= 0) {
                     throw new RuntimeException(
@@ -312,7 +315,7 @@ final class OrderReservationService
                 "Confirmed pickup order #{$orderId} and reserved {$totalReservedQty} unit(s).",
                 $businessUnitId,
                 $actorUserId,
-                ($actorEmployeeId !== null && $actorEmployeeId > 0) ? $actorEmployeeId : null,
+                null,
                 'status:pending',
                 'status:confirmed',
                 'customer_order',
