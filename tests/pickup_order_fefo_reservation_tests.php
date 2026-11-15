@@ -235,12 +235,176 @@ try {
                 && $mixAuditCnt === 0
         );
     }
+
+    // 10. Full pickup handover fulfillment (ready_for_pickup -> completed) across batch + non-batch items
+    [$bpFulBatch, $invFulBatch] = $createProduct('ChkC Fulfill Batch', 10, 0, 0, 1);
+    $pdo->exec("INSERT INTO inventory_batch (inventory_id, batch_number, expiration_date, quantity) VALUES ({$invFulBatch}, 'C-B1', DATE_ADD(CURDATE(), INTERVAL 10 DAY), 10)");
+    $bFul1 = (int)$pdo->lastInsertId();
+    [$bpFulNonBatch, $invFulNonBatch] = $createProduct('ChkC Fulfill NonBatch', 8, 0, 0, 0);
+
+    [$ordFull, [$oiFulBatch, $oiFulNonBatch]] = $createOrder('pickup', 'pending', [[$bpFulBatch, 4], [$bpFulNonBatch, 3]]);
+    $service->confirmPickupOrderAndReserve($ordFull, 1, $empUid);
+    $readyRes = $service->markPickupOrderReady($ordFull, 1, $empUid);
+    $fullRes = $service->fulfillPickupOrder($ordFull, 1, $empUid, null, true);
+
+    $invFulBatchRow = $pdo->query("SELECT on_hand, committed FROM inventory WHERE inventory_id = {$invFulBatch}")->fetch();
+    $invFulNbRow = $pdo->query("SELECT on_hand, committed FROM inventory WHERE inventory_id = {$invFulNonBatch}")->fetch();
+    $bFul1Qty = (int)$pdo->query("SELECT quantity FROM inventory_batch WHERE batch_id = {$bFul1}")->fetchColumn();
+    $fulResRows = $pdo->query("SELECT reservation_id, order_item_id, batch_id, reserved_quantity, reservation_status FROM inventory_reservation WHERE order_item_id IN ({$oiFulBatch}, {$oiFulNonBatch}) ORDER BY reservation_id ASC")->fetchAll();
+    $fulMovRows = $pdo->query("SELECT reservation_id, batch_id, movement_type, quantity FROM inventory_movement WHERE reservation_id IN ({$fulResRows[0]['reservation_id']}, {$fulResRows[1]['reservation_id']}) ORDER BY movement_id ASC")->fetchAll();
+    $ordFullStatus = (string)$pdo->query("SELECT order_status FROM customer_order WHERE order_id = {$ordFull}")->fetchColumn();
+    $fulAudit = $pdo->query("SELECT actor_user_id, affected_employee_id FROM audit_log WHERE target_type = 'customer_order' AND target_id = {$ordFull} ORDER BY audit_id DESC LIMIT 1")->fetch();
+
+    check(
+        'Full handover transitions ready_for_pickup -> completed, deducts on_hand/committed/batch, keeps reserved_quantity, and inserts negative order_fulfillment movements',
+        $readyRes['order_status'] === 'ready_for_pickup'
+            && $fullRes['order_status'] === 'completed'
+            && $fullRes['partial'] === false
+            && $fullRes['fulfilled_quantity'] === 7
+            && $fullRes['remaining_quantity'] === 0
+            && (int)$invFulBatchRow['on_hand'] === 6
+            && (int)$invFulBatchRow['committed'] === 0
+            && (int)$invFulNbRow['on_hand'] === 5
+            && (int)$invFulNbRow['committed'] === 0
+            && $bFul1Qty === 6
+            && $ordFullStatus === 'completed'
+            && count($fulMovRows) === 2
+            && $fulMovRows[0]['movement_type'] === 'order_fulfillment'
+            && $fulMovRows[1]['movement_type'] === 'order_fulfillment'
+            && ((int)$fulMovRows[0]['quantity'] + (int)$fulMovRows[1]['quantity']) === -7
+            && $fulResRows[0]['reservation_status'] === 'fulfilled'
+            && $fulResRows[1]['reservation_status'] === 'fulfilled'
+            && ((int)$fulResRows[0]['reserved_quantity'] + (int)$fulResRows[1]['reserved_quantity']) === 7
+            && (int)$fulAudit['actor_user_id'] === $empUid
+            && $fulAudit['affected_employee_id'] === null
+    );
+
+    // 11. Duplicate full handover submission is rejected without double-deduction or duplicate movements
+    try {
+        $service->fulfillPickupOrder($ordFull, 1, $empUid, null, true);
+        check('Repeated pickup handover rejects duplicate submission', false);
+    } catch (RuntimeException $e) {
+        $dupOnHand = (int)$pdo->query("SELECT on_hand FROM inventory WHERE inventory_id = {$invFulBatch}")->fetchColumn();
+        $dupMovCount = (int)$pdo->query("SELECT COUNT(*) FROM inventory_movement WHERE reservation_id IN ({$fulResRows[0]['reservation_id']}, {$fulResRows[1]['reservation_id']})")->fetchColumn();
+        check(
+            'Repeated pickup handover fails with ERR_CONFLICT and creates zero extra deductions or movements',
+            $e->getCode() === OrderReservationService::ERR_CONFLICT && $dupOnHand === 6 && $dupMovCount === 2
+        );
+    }
+
+    // 12. Partial fulfillment across split batches preserves reserved_quantity, keeps partially fulfilled reservation active, then completes remaining
+    [$bpPart, $invPart] = $createProduct('ChkC Partial Split', 10, 0, 0, 1);
+    $pdo->exec("INSERT INTO inventory_batch (inventory_id, batch_number, expiration_date, quantity) VALUES ({$invPart}, 'P-B1', DATE_ADD(CURDATE(), INTERVAL 5 DAY), 4)");
+    $bPart1 = (int)$pdo->lastInsertId();
+    $pdo->exec("INSERT INTO inventory_batch (inventory_id, batch_number, expiration_date, quantity) VALUES ({$invPart}, 'P-B2', DATE_ADD(CURDATE(), INTERVAL 15 DAY), 6)");
+    $bPart2 = (int)$pdo->lastInsertId();
+
+    [$ordPart, [$oiPart]] = $createOrder('pickup', 'pending', [[$bpPart, 7]]);
+    $service->confirmPickupOrderAndReserve($ordPart, 1, $empUid);
+    $service->markPickupOrderReady($ordPart, 1, $empUid);
+
+    $partStep1 = $service->fulfillPickupOrder($ordPart, 1, $empUid, [$oiPart => 5], true);
+    $partResStep1 = $pdo->query("SELECT reservation_id, batch_id, reserved_quantity, reservation_status FROM inventory_reservation WHERE order_item_id = {$oiPart} ORDER BY reservation_id ASC")->fetchAll();
+    $partInvStep1 = $pdo->query("SELECT on_hand, committed FROM inventory WHERE inventory_id = {$invPart}")->fetch();
+    $bPart1QtyStep1 = (int)$pdo->query("SELECT quantity FROM inventory_batch WHERE batch_id = {$bPart1}")->fetchColumn();
+    $bPart2QtyStep1 = (int)$pdo->query("SELECT quantity FROM inventory_batch WHERE batch_id = {$bPart2}")->fetchColumn();
+    $partOrdStatus1 = (string)$pdo->query("SELECT order_status FROM customer_order WHERE order_id = {$ordPart}")->fetchColumn();
+
+    check(
+        'Partial handover of 5/7 marks first reservation fulfilled, keeps second reservation active with original reserved_quantity=3, and keeps order ready_for_pickup',
+        $partStep1['partial'] === true
+            && $partStep1['fulfilled_quantity'] === 5
+            && $partStep1['remaining_quantity'] === 2
+            && $partStep1['order_status'] === 'ready_for_pickup'
+            && $partOrdStatus1 === 'ready_for_pickup'
+            && (int)$partInvStep1['on_hand'] === 5
+            && (int)$partInvStep1['committed'] === 2
+            && $bPart1QtyStep1 === 0
+            && $bPart2QtyStep1 === 5
+            && $partResStep1[0]['reservation_status'] === 'fulfilled'
+            && (int)$partResStep1[0]['reserved_quantity'] === 4
+            && $partResStep1[1]['reservation_status'] === 'active'
+            && (int)$partResStep1[1]['reserved_quantity'] === 3
+    );
+
+    // Over-fulfillment exceeding remaining reserved quantity (3 > 2) must fail and roll back
+    try {
+        $service->fulfillPickupOrder($ordPart, 1, $empUid, [$oiPart => 3], true);
+        check('Over-fulfillment exceeding remaining reserved quantity is rejected', false);
+    } catch (RuntimeException $e) {
+        $afterOverOnHand = (int)$pdo->query("SELECT on_hand FROM inventory WHERE inventory_id = {$invPart}")->fetchColumn();
+        $afterOverCommitted = (int)$pdo->query("SELECT committed FROM inventory WHERE inventory_id = {$invPart}")->fetchColumn();
+        check(
+            'Over-fulfillment rejects with ERR_UNPROCESSABLE and preserves stock state',
+            $e->getCode() === OrderReservationService::ERR_UNPROCESSABLE && $afterOverOnHand === 5 && $afterOverCommitted === 2
+        );
+    }
+
+    // Complete remaining 2 units
+    $partStep2 = $service->fulfillPickupOrder($ordPart, 1, $empUid, null, true);
+    $partResStep2 = $pdo->query("SELECT reservation_status, reserved_quantity FROM inventory_reservation WHERE order_item_id = {$oiPart} ORDER BY reservation_id ASC")->fetchAll();
+    $partInvStep2 = $pdo->query("SELECT on_hand, committed FROM inventory WHERE inventory_id = {$invPart}")->fetch();
+    $bPart2QtyStep2 = (int)$pdo->query("SELECT quantity FROM inventory_batch WHERE batch_id = {$bPart2}")->fetchColumn();
+    $partMovSum = (int)$pdo->query("SELECT COALESCE(SUM(quantity), 0) FROM inventory_movement WHERE reservation_id IN ({$partResStep1[0]['reservation_id']}, {$partResStep1[1]['reservation_id']}) AND movement_type = 'order_fulfillment'")->fetchColumn();
+
+    check(
+        'Completing remaining 2 units deducts only remaining quantity, finalizes reservation, keeps reserved_quantity=3, and completes order',
+        $partStep2['partial'] === false
+            && $partStep2['fulfilled_quantity'] === 2
+            && $partStep2['remaining_quantity'] === 0
+            && $partStep2['order_status'] === 'completed'
+            && (int)$partInvStep2['on_hand'] === 3
+            && (int)$partInvStep2['committed'] === 0
+            && $bPart2QtyStep2 === 3
+            && $partResStep2[1]['reservation_status'] === 'fulfilled'
+            && (int)$partResStep2[1]['reserved_quantity'] === 3
+            && $partMovSum === -7
+    );
+
+    // 13. Multi-line handover rolls back completely when pinned batch stock is insufficient for line 2
+    [$bpRb1, $invRb1] = $createProduct('ChkC Rollback Line1', 10, 0, 0, 0);
+    [$bpRb2, $invRb2] = $createProduct('ChkC Rollback Line2 Batch', 5, 0, 0, 1);
+    $pdo->exec("INSERT INTO inventory_batch (inventory_id, batch_number, expiration_date, quantity) VALUES ({$invRb2}, 'RB-B1', DATE_ADD(CURDATE(), INTERVAL 12 DAY), 5)");
+    $bRb2 = (int)$pdo->lastInsertId();
+
+    [$ordRb, [$oiRb1, $oiRb2]] = $createOrder('pickup', 'pending', [[$bpRb1, 2], [$bpRb2, 3]]);
+    $service->confirmPickupOrderAndReserve($ordRb, 1, $empUid);
+    $service->markPickupOrderReady($ordRb, 1, $empUid);
+    $pdo->exec("UPDATE inventory_batch SET quantity = 1 WHERE batch_id = {$bRb2}");
+
+    try {
+        $service->fulfillPickupOrder($ordRb, 1, $empUid, null, true);
+        check('Insufficient pinned batch quantity rolls back whole handover', false);
+    } catch (RuntimeException $e) {
+        $rbInv1 = $pdo->query("SELECT on_hand, committed FROM inventory WHERE inventory_id = {$invRb1}")->fetch();
+        $rbOrdStatus = (string)$pdo->query("SELECT order_status FROM customer_order WHERE order_id = {$ordRb}")->fetchColumn();
+        $rbMovCnt = (int)$pdo->query("SELECT COUNT(*) FROM inventory_movement im JOIN inventory_reservation ir ON ir.reservation_id = im.reservation_id WHERE ir.order_item_id IN ({$oiRb1}, {$oiRb2})")->fetchColumn();
+        $rbActiveCnt = (int)$pdo->query("SELECT COUNT(*) FROM inventory_reservation WHERE order_item_id IN ({$oiRb1}, {$oiRb2}) AND reservation_status = 'active'")->fetchColumn();
+        check(
+            'Handover rollback restores line 1 stock, keeps reservations active, writes 0 movements, and keeps ready_for_pickup',
+            $e->getCode() === OrderReservationService::ERR_UNPROCESSABLE
+                && (int)$rbInv1['on_hand'] === 10
+                && (int)$rbInv1['committed'] === 2
+                && $rbOrdStatus === 'ready_for_pickup'
+                && $rbMovCnt === 0
+                && $rbActiveCnt === 2
+        );
+    }
+
+    // 14. Cross-unit handover isolation rejects wrong business unit
+    try {
+        $service->fulfillPickupOrder($ordRb, $otherUnitId, $empUid, null, true);
+        check('Wrong business unit handover attempt is rejected', false);
+    } catch (RuntimeException $e) {
+        check('Wrong business unit handover rejected with ERR_NOT_FOUND', $e->getCode() === OrderReservationService::ERR_NOT_FOUND);
+    }
 } finally {
     if ($pdo->inTransaction()) {
         $pdo->rollBack();
     }
     if ($cleanup['orders']) {
         $oList = implode(',', $cleanup['orders']);
+        $pdo->exec("DELETE im FROM inventory_movement im JOIN inventory_reservation ir ON ir.reservation_id = im.reservation_id JOIN order_item oi ON oi.order_item_id = ir.order_item_id WHERE oi.order_id IN ({$oList})");
         $pdo->exec("DELETE ir FROM inventory_reservation ir JOIN order_item oi ON oi.order_item_id = ir.order_item_id WHERE oi.order_id IN ({$oList})");
         $pdo->exec("DELETE FROM audit_log WHERE target_type = 'customer_order' AND target_id IN ({$oList})");
         $pdo->exec("DELETE FROM order_item WHERE order_id IN ({$oList})");

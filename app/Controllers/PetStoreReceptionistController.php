@@ -736,18 +736,25 @@ final class PetStoreReceptionistController extends Controller
 
         $targetStatus = strtolower(trim((string)($_POST['status'] ?? '')));
 
-        if ($targetStatus === 'confirmed') {
+        if (in_array($targetStatus, ['confirmed', 'ready_for_pickup', 'completed'], true)) {
             try {
                 $service = new OrderReservationService($this->db);
-                $result = $service->confirmPickupOrderAndReserve(
-                    $orderId,
-                    $unitId,
-                    $uid
-                );
-                $this->flash(
-                    'success',
-                    "Order #{$orderId} status updated to Confirmed ({$result['total_reserved_quantity']} unit(s) reserved)."
-                );
+                if ($targetStatus === 'confirmed') {
+                    $result = $service->confirmPickupOrderAndReserve($orderId, $unitId, $uid);
+                    $this->flash(
+                        'success',
+                        "Order #{$orderId} status updated to Confirmed ({$result['total_reserved_quantity']} unit(s) reserved)."
+                    );
+                } elseif ($targetStatus === 'ready_for_pickup') {
+                    $service->markPickupOrderReady($orderId, $unitId, $uid);
+                    $this->flash('success', "Order #{$orderId} status updated to Ready For Pickup.");
+                } else {
+                    $result = $service->fulfillPickupOrder($orderId, $unitId, $uid, null, true);
+                    $this->flash(
+                        'success',
+                        "Order #{$orderId} status updated to Completed ({$result['fulfilled_quantity']} unit(s) handed over)."
+                    );
+                }
             } catch (RuntimeException $e) {
                 $code = $e->getCode();
                 if ($code === OrderReservationService::ERR_NOT_FOUND) {
@@ -777,25 +784,10 @@ final class PetStoreReceptionistController extends Controller
         }
 
         $currentStatus = (string)$order['order_status'];
-
-        // Strict Pickup state machine
-        $validTransitions = [
-            'pending' => ['confirmed'],
-            'confirmed' => ['ready_for_pickup'],
-            'ready_for_pickup' => ['completed'],
-        ];
-
-        if (!isset($validTransitions[$currentStatus]) || !in_array($targetStatus, $validTransitions[$currentStatus], true)) {
-            $this->flash('error', "Invalid transition for pickup order from '{$currentStatus}' to '{$targetStatus}'. Permitted flow: Pending → Confirmed → Ready for Pickup → Completed.");
-            $this->redirect('/petstore/receptionist/orders?tab=pickup&view=' . $orderId);
-            return;
-        }
-
-        $up = $this->db->prepare("UPDATE customer_order SET order_status = ?, updated_at = NOW() WHERE order_id = ?");
-        $up->execute([$targetStatus, $orderId]);
-
-        Audit::log('petstore_receptionist.order.pickup_status', "Updated pickup order #{$orderId} status from {$currentStatus} to {$targetStatus}.", $unitId, 'customer_order', $orderId, $uid);
-        $this->flash('success', "Order #{$orderId} status updated to " . ucwords(str_replace('_', ' ', $targetStatus)) . '.');
+        $this->flash(
+            'error',
+            "Invalid transition for pickup order from '{$currentStatus}' to '{$targetStatus}'. Permitted flow: Pending → Confirmed → Ready for Pickup → Completed."
+        );
         $this->redirect('/petstore/receptionist/orders?tab=pickup&view=' . $orderId);
     }
 
