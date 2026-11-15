@@ -9,6 +9,7 @@ use App\Core\Session;
 use App\Models\Audit;
 use App\Models\Units;
 use App\Services\OrderReservationService;
+use App\Services\PosSaleService;
 use DateTime;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -416,110 +417,49 @@ final class PetStoreReceptionistController extends Controller
             return;
         }
 
-        $lineItems = [];
-        $totalAmount = 0.0;
-
+        $rawLines = [];
         foreach ($productIds as $idx => $rawBpId) {
             $bpId = (int)$rawBpId;
             $qty = isset($quantities[$idx]) ? (int)$quantities[$idx] : 0;
 
-            if ($bpId <= 0 || $qty <= 0) {
+            if ($qty < 0) {
+                $this->flash('error', 'Sale product quantities must be greater than zero.');
+                $this->redirect('/petstore/receptionist/sales');
+                return;
+            }
+            if ($bpId <= 0 || $qty === 0) {
                 continue;
             }
 
-            // Verify product belongs to Pet Store and fetch current price & inventory
-            $pStmt = $this->db->prepare(
-                "SELECT bp.business_product_id, bp.selling_price, p.product_name,
-                        i.inventory_id, COALESCE(i.on_hand, 0) AS on_hand, COALESCE(i.committed, 0) AS committed,
-                        COALESCE(i.in_transit, 0) AS in_transit
-                 FROM business_product bp
-                 JOIN product p ON p.product_id = bp.product_id
-                 LEFT JOIN inventory i ON i.business_product_id = bp.business_product_id
-                 WHERE bp.business_product_id = ? AND bp.business_unit_id = ? AND bp.product_status = 'active'"
-            );
-            $pStmt->execute([$bpId, $unitId]);
-            $prod = $pStmt->fetch();
-
-            if (!$prod) {
-                $this->flash('error', "Selected product (ID #{$bpId}) does not belong to the Pet Store or is inactive.");
-                $this->redirect('/petstore/receptionist/sales');
-                return;
-            }
-
-            $availStock = ((int)$prod['on_hand'] + (int)$prod['in_transit']) - (int)$prod['committed'];
-            if ($qty > $availStock) {
-                $this->flash('error', "Insufficient stock for '{$prod['product_name']}'. Available: {$availStock}, requested: {$qty}.");
-                $this->redirect('/petstore/receptionist/sales');
-                return;
-            }
-
-            $unitPrice = (float)$prod['selling_price'];
-            $lineTotal = round($unitPrice * $qty, 2);
-            $totalAmount += $lineTotal;
-
-            $lineItems[] = [
-                'bp_id' => $bpId,
-                'product_name' => (string)$prod['product_name'],
-                'inventory_id' => (int)$prod['inventory_id'],
-                'qty' => $qty,
-                'unit_price' => $unitPrice,
-                'line_total' => $lineTotal,
+            $rawLines[] = [
+                'business_product_id' => $bpId,
+                'quantity' => $qty,
             ];
         }
 
-        if (empty($lineItems)) {
+        if (empty($rawLines)) {
             $this->flash('error', 'At least one valid product line with quantity greater than zero is required.');
             $this->redirect('/petstore/receptionist/sales');
             return;
         }
 
         try {
-            $this->db->beginTransaction();
-
-            // 1. Insert sale record
-            $sStmt = $this->db->prepare(
-                "INSERT INTO sale (business_unit_id, branch_id, customer_id, employee_id, sale_date, total_amount, sale_status)
-                 VALUES (?, 1, ?, ?, NOW(), ?, 'completed')"
-            );
-            $sStmt->execute([$unitId, $customerId, $empId ?: 9, $totalAmount]);
-            $saleId = (int)$this->db->lastInsertId();
-
-            // 2. Insert sale items, update inventory on_hand, and record inventory_movement
-            $siStmt = $this->db->prepare(
-                "INSERT INTO sale_item (sale_id, business_product_id, quantity, unit_price)
-                 VALUES (?, ?, ?, ?)"
-            );
-            $invStmt = $this->db->prepare(
-                "UPDATE inventory SET on_hand = on_hand - ?, updated_at = NOW() WHERE inventory_id = ?"
-            );
-            $movStmt = $this->db->prepare(
-                "INSERT INTO inventory_movement (inventory_id, sale_item_id, movement_type, quantity, notes)
-                 VALUES (?, ?, 'sale', ?, ?)"
+            $posService = new PosSaleService($this->db);
+            $result = $posService->recordSale(
+                (int)$unitId,
+                (int)$uid,
+                (int)$empId,
+                $customerId !== null ? (int)$customerId : null,
+                (string)$paymentMethod,
+                $rawLines
             );
 
-            foreach ($lineItems as $item) {
-                $siStmt->execute([$saleId, $item['bp_id'], $item['qty'], $item['unit_price']]);
-                $saleItemId = (int)$this->db->lastInsertId();
-
-                $invStmt->execute([$item['qty'], $item['inventory_id']]);
-                $movStmt->execute([$item['inventory_id'], $saleItemId, -$item['qty'], "Pet Store Receptionist sale #{$saleId}"]);
-            }
-
-            // 3. Insert payment record
-            $payStmt = $this->db->prepare(
-                "INSERT INTO payment (sale_id, payment_type, amount, payment_date, payment_method, payment_status)
-                 VALUES (?, 'payment', ?, NOW(), ?, 'completed')"
-            );
-            $payStmt->execute([$saleId, $totalAmount, $paymentMethod]);
-
-            $this->db->commit();
-
-            Audit::log('petstore_receptionist.sale.create', "Recorded new sale #{$saleId} for ₱" . number_format($totalAmount, 2), $unitId, 'sale', $saleId, $uid);
+            $saleId = (int)$result['sale_id'];
+            $totalAmount = (float)$result['total_amount'];
             $this->flash('success', "Sale #{$saleId} confirmed successfully! Total: ₱" . number_format($totalAmount, 2));
+        } catch (RuntimeException $e) {
+            $this->flash('error', $e->getMessage());
         } catch (Throwable $e) {
-            if ($this->db->inTransaction()) {
-                $this->db->rollBack();
-            }
             $this->flash('error', 'Failed to confirm sale: ' . $e->getMessage());
         }
 
