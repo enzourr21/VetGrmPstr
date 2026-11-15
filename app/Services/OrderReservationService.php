@@ -351,9 +351,11 @@ final class OrderReservationService
                 );
             }
 
-            // 2. Lock order items and reservations in canonical order and verify full reservation coverage.
+            // 2. Lock order items and reservations in canonical order and verify full coverage & movement integrity.
             $orderItems = $this->lockOrderItems($orderId);
-            $activeReservations = $this->lockActivePickupReservations($orderId, $orderItems);
+            $reservationState = $this->lockActivePickupReservations($orderId, $orderItems);
+            $activeReservations = $reservationState['active'];
+            $priorFulfilledByResId = $reservationState['prior_fulfilled'];
 
             // 3. Verify unit-scoped metadata matches each active reservation's inventory and batch requirement.
             $metaByBpId = $this->resolveUnitProductMetadata($orderId, $businessUnitId, $orderItems);
@@ -387,10 +389,7 @@ final class OrderReservationService
                 }
             }
 
-            // 4. Derive cumulative outbound fulfillment progress from locked inventory_movement rows.
-            $activeResIds = array_map(static fn(array $r): int => (int)$r['reservation_id'], $activeReservations);
-            $priorFulfilledByResId = $this->loadOutboundFulfillmentTotals($activeResIds);
-
+            // 4. Compute remaining unfulfilled quantities from locked outbound movement totals.
             $reservationsByItem = [];
             $remainingByItem = [];
             $totalRemainingBefore = 0;
@@ -402,14 +401,11 @@ final class OrderReservationService
                 $priorFulfilled = $priorFulfilledByResId[$resId] ?? 0;
                 $remaining = $reservedQty - $priorFulfilled;
 
-                if ($remaining < 0) {
+                if ($remaining <= 0) {
                     throw new RuntimeException(
-                        "Reservation #{$resId} on Order #{$orderId} has invalid over-fulfilled movement history.",
+                        "Active reservation #{$resId} on Order #{$orderId} has invalid remaining balance ({$remaining}).",
                         self::ERR_UNPROCESSABLE
                     );
-                }
-                if ($remaining === 0) {
-                    continue;
                 }
 
                 $reservationsByItem[$itemId][] = [
@@ -773,11 +769,12 @@ final class OrderReservationService
     }
 
     /**
-     * Lock all reservations for the order's items and verify exact non-cancelled (active + fulfilled) coverage
-     * matches every order item's quantity, while excluding cancelled reservations.
+     * Lock all reservations for the order's items, verify exact non-cancelled (active + fulfilled) coverage
+     * matches every order item's quantity (excluding cancelled rows), and validate every non-cancelled
+     * reservation's status against its cumulative outbound order_fulfillment movements.
      *
      * @param array<int,array<string,mixed>> $orderItems
-     * @return array<int,array<string,mixed>> Active reservation rows eligible for handover
+     * @return array{active:array<int,array<string,mixed>>, prior_fulfilled:array<int,int>}
      */
     private function lockActivePickupReservations(int $orderId, array $orderItems): array
     {
@@ -808,6 +805,8 @@ final class OrderReservationService
         $rows = $resStmt->fetchAll(PDO::FETCH_ASSOC);
 
         $active = [];
+        $nonCancelledRows = [];
+        $nonCancelledResIds = [];
         $coveredQtyByItemId = [];
 
         foreach ($rows as $row) {
@@ -839,6 +838,8 @@ final class OrderReservationService
             }
 
             $coveredQtyByItemId[$itemId] = ($coveredQtyByItemId[$itemId] ?? 0) + $reservedQty;
+            $nonCancelledRows[] = $row;
+            $nonCancelledResIds[] = $resId;
             if ($status === 'active') {
                 $active[] = $row;
             }
@@ -866,20 +867,61 @@ final class OrderReservationService
             }
         }
 
+        $priorFulfilledByResId = $nonCancelledResIds
+            ? $this->loadOutboundFulfillmentTotals($nonCancelledResIds)
+            : [];
+
+        foreach ($nonCancelledRows as $row) {
+            $resId = (int)$row['reservation_id'];
+            $reservedQty = (int)$row['reserved_quantity'];
+            $status = (string)$row['reservation_status'];
+            $outboundQty = $priorFulfilledByResId[$resId] ?? 0;
+
+            if ($outboundQty < 0) {
+                throw new RuntimeException(
+                    "Reservation #{$resId} on Order #{$orderId} has negative outbound fulfillment total ({$outboundQty}).",
+                    self::ERR_UNPROCESSABLE
+                );
+            }
+            if ($outboundQty > $reservedQty) {
+                throw new RuntimeException(
+                    "Reservation #{$resId} on Order #{$orderId} has outbound fulfillment movements ({$outboundQty}) exceeding reserved quantity ({$reservedQty}).",
+                    self::ERR_UNPROCESSABLE
+                );
+            }
+            if ($status === 'fulfilled' && $outboundQty !== $reservedQty) {
+                throw new RuntimeException(
+                    "Fulfilled reservation #{$resId} on Order #{$orderId} does not match outbound fulfillment movements ({$outboundQty} of {$reservedQty}).",
+                    self::ERR_UNPROCESSABLE
+                );
+            }
+            if ($status === 'active' && $outboundQty >= $reservedQty) {
+                throw new RuntimeException(
+                    "Active reservation #{$resId} on Order #{$orderId} is inconsistent with outbound fulfillment movements ({$outboundQty} of {$reservedQty}).",
+                    self::ERR_UNPROCESSABLE
+                );
+            }
+        }
+
         if (!$active) {
             throw new RuntimeException("Order #{$orderId} has already been fulfilled.", self::ERR_CONFLICT);
         }
 
-        return $active;
+        return [
+            'active' => $active,
+            'prior_fulfilled' => $priorFulfilledByResId,
+        ];
     }
 
     /**
-     * @param array<int,int> $activeReservationIds
+     * Lock outbound order_fulfillment movements for the supplied reservations and return cumulative outbound quantities.
+     *
+     * @param array<int,int> $reservationIds
      * @return array<int,int>
      */
-    private function loadOutboundFulfillmentTotals(array $activeReservationIds): array
+    private function loadOutboundFulfillmentTotals(array $reservationIds): array
     {
-        $placeholders = implode(',', array_fill(0, count($activeReservationIds), '?'));
+        $placeholders = implode(',', array_fill(0, count($reservationIds), '?'));
         $movStmt = $this->db->prepare(
             "SELECT movement_id, reservation_id, quantity
              FROM inventory_movement
@@ -888,7 +930,7 @@ final class OrderReservationService
              ORDER BY movement_id ASC
              FOR UPDATE"
         );
-        $movStmt->execute($activeReservationIds);
+        $movStmt->execute($reservationIds);
 
         $totals = [];
         foreach ($movStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
@@ -898,6 +940,12 @@ final class OrderReservationService
                 throw new RuntimeException("Invalid non-negative order_fulfillment movement #{$row['movement_id']}.", self::ERR_UNPROCESSABLE);
             }
             $totals[$resId] = ($totals[$resId] ?? 0) + (-$qty);
+        }
+
+        foreach ($totals as $resId => $total) {
+            if ($total < 0) {
+                throw new RuntimeException("Reservation #{$resId} has negative outbound fulfillment total ({$total}).", self::ERR_UNPROCESSABLE);
+            }
         }
 
         return $totals;

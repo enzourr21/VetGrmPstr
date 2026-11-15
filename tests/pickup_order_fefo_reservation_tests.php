@@ -530,6 +530,151 @@ try {
                 && $excFulStatus === 'ready_for_pickup'
         );
     }
+
+    // 19. Fulfilled reservation whose movements total less than reserved_quantity rejects both ready and fulfill
+    [$bpFulUnder, $invFulUnder] = $createProduct('ChkC Fulfilled Under Mov', 9, 3, 0, 0);
+    [$ordFulUnder, [$oiFulUnder]] = $createOrder('pickup', 'confirmed', [[$bpFulUnder, 5]]);
+    $pdo->exec("INSERT INTO inventory_reservation (order_item_id, inventory_id, batch_id, reserved_quantity, reservation_status) VALUES ({$oiFulUnder}, {$invFulUnder}, NULL, 2, 'fulfilled')");
+    $resFulUnder1 = (int)$pdo->lastInsertId();
+    $pdo->exec("INSERT INTO inventory_reservation (order_item_id, inventory_id, batch_id, reserved_quantity, reservation_status) VALUES ({$oiFulUnder}, {$invFulUnder}, NULL, 3, 'active')");
+    $resFulUnder2 = (int)$pdo->lastInsertId();
+    $pdo->exec("INSERT INTO inventory_movement (inventory_id, batch_id, sale_item_id, reservation_id, movement_type, quantity, notes) VALUES ({$invFulUnder}, NULL, NULL, {$resFulUnder1}, 'order_fulfillment', -1, 'Under-moved fulfilled test')");
+
+    try {
+        $service->markPickupOrderReady($ordFulUnder, 1, $empUid);
+        check('markPickupOrderReady rejects fulfilled reservation with insufficient movements', false);
+    } catch (RuntimeException $e) {
+        $fuReadyStatus = (string)$pdo->query("SELECT order_status FROM customer_order WHERE order_id = {$ordFulUnder}")->fetchColumn();
+        check('markPickupOrderReady rejects under-moved fulfilled reservation with ERR_UNPROCESSABLE', $e->getCode() === OrderReservationService::ERR_UNPROCESSABLE && $fuReadyStatus === 'confirmed');
+    }
+
+    $pdo->exec("UPDATE customer_order SET order_status = 'ready_for_pickup' WHERE order_id = {$ordFulUnder}");
+    try {
+        $service->fulfillPickupOrder($ordFulUnder, 1, $empUid);
+        check('fulfillPickupOrder rejects fulfilled reservation with insufficient movements', false);
+    } catch (RuntimeException $e) {
+        $fuInv = $pdo->query("SELECT on_hand, committed FROM inventory WHERE inventory_id = {$invFulUnder}")->fetch();
+        $fuMovCnt = (int)$pdo->query("SELECT COUNT(*) FROM inventory_movement WHERE reservation_id IN ({$resFulUnder1}, {$resFulUnder2})")->fetchColumn();
+        $fuStatus = (string)$pdo->query("SELECT order_status FROM customer_order WHERE order_id = {$ordFulUnder}")->fetchColumn();
+        check(
+            'fulfillPickupOrder rejects under-moved fulfilled reservation with ERR_UNPROCESSABLE and mutates nothing',
+            $e->getCode() === OrderReservationService::ERR_UNPROCESSABLE
+                && (int)$fuInv['on_hand'] === 9
+                && (int)$fuInv['committed'] === 3
+                && $fuMovCnt === 1
+                && $fuStatus === 'ready_for_pickup'
+        );
+    }
+
+    // 20. Fulfilled reservation whose movements exceed reserved_quantity rejects both ready and fulfill
+    [$bpFulOver, $invFulOver] = $createProduct('ChkC Fulfilled Over Mov', 7, 3, 0, 0);
+    [$ordFulOver, [$oiFulOver]] = $createOrder('pickup', 'confirmed', [[$bpFulOver, 5]]);
+    $pdo->exec("INSERT INTO inventory_reservation (order_item_id, inventory_id, batch_id, reserved_quantity, reservation_status) VALUES ({$oiFulOver}, {$invFulOver}, NULL, 2, 'fulfilled')");
+    $resFulOver1 = (int)$pdo->lastInsertId();
+    $pdo->exec("INSERT INTO inventory_reservation (order_item_id, inventory_id, batch_id, reserved_quantity, reservation_status) VALUES ({$oiFulOver}, {$invFulOver}, NULL, 3, 'active')");
+    $resFulOver2 = (int)$pdo->lastInsertId();
+    $pdo->exec("INSERT INTO inventory_movement (inventory_id, batch_id, sale_item_id, reservation_id, movement_type, quantity, notes) VALUES ({$invFulOver}, NULL, NULL, {$resFulOver1}, 'order_fulfillment', -3, 'Over-moved fulfilled test')");
+
+    try {
+        $service->markPickupOrderReady($ordFulOver, 1, $empUid);
+        check('markPickupOrderReady rejects fulfilled reservation with excessive movements', false);
+    } catch (RuntimeException $e) {
+        $foReadyStatus = (string)$pdo->query("SELECT order_status FROM customer_order WHERE order_id = {$ordFulOver}")->fetchColumn();
+        check('markPickupOrderReady rejects over-moved fulfilled reservation with ERR_UNPROCESSABLE', $e->getCode() === OrderReservationService::ERR_UNPROCESSABLE && $foReadyStatus === 'confirmed');
+    }
+
+    $pdo->exec("UPDATE customer_order SET order_status = 'ready_for_pickup' WHERE order_id = {$ordFulOver}");
+    try {
+        $service->fulfillPickupOrder($ordFulOver, 1, $empUid);
+        check('fulfillPickupOrder rejects fulfilled reservation with excessive movements', false);
+    } catch (RuntimeException $e) {
+        $foInv = $pdo->query("SELECT on_hand, committed FROM inventory WHERE inventory_id = {$invFulOver}")->fetch();
+        $foMovCnt = (int)$pdo->query("SELECT COUNT(*) FROM inventory_movement WHERE reservation_id IN ({$resFulOver1}, {$resFulOver2})")->fetchColumn();
+        $foStatus = (string)$pdo->query("SELECT order_status FROM customer_order WHERE order_id = {$ordFulOver}")->fetchColumn();
+        check(
+            'fulfillPickupOrder rejects over-moved fulfilled reservation with ERR_UNPROCESSABLE and mutates nothing',
+            $e->getCode() === OrderReservationService::ERR_UNPROCESSABLE
+                && (int)$foInv['on_hand'] === 7
+                && (int)$foInv['committed'] === 3
+                && $foMovCnt === 1
+                && $foStatus === 'ready_for_pickup'
+        );
+    }
+
+    // 21. Active reservation whose movements already equal reserved_quantity rejects both ready and fulfill
+    [$bpActFull, $invActFull] = $createProduct('ChkC Active Full Mov', 7, 3, 0, 0);
+    [$ordActFull, [$oiActFull]] = $createOrder('pickup', 'confirmed', [[$bpActFull, 3]]);
+    $pdo->exec("INSERT INTO inventory_reservation (order_item_id, inventory_id, batch_id, reserved_quantity, reservation_status) VALUES ({$oiActFull}, {$invActFull}, NULL, 3, 'active')");
+    $resActFull = (int)$pdo->lastInsertId();
+    $pdo->exec("INSERT INTO inventory_movement (inventory_id, batch_id, sale_item_id, reservation_id, movement_type, quantity, notes) VALUES ({$invActFull}, NULL, NULL, {$resActFull}, 'order_fulfillment', -3, 'Active already fully moved')");
+
+    try {
+        $service->markPickupOrderReady($ordActFull, 1, $empUid);
+        check('markPickupOrderReady rejects active reservation with movements equaling reserved_quantity', false);
+    } catch (RuntimeException $e) {
+        $afReadyStatus = (string)$pdo->query("SELECT order_status FROM customer_order WHERE order_id = {$ordActFull}")->fetchColumn();
+        check('markPickupOrderReady rejects inconsistent fully-moved active reservation with ERR_UNPROCESSABLE', $e->getCode() === OrderReservationService::ERR_UNPROCESSABLE && $afReadyStatus === 'confirmed');
+    }
+
+    $pdo->exec("UPDATE customer_order SET order_status = 'ready_for_pickup' WHERE order_id = {$ordActFull}");
+    try {
+        $service->fulfillPickupOrder($ordActFull, 1, $empUid);
+        check('fulfillPickupOrder rejects active reservation with movements equaling reserved_quantity', false);
+    } catch (RuntimeException $e) {
+        $afInv = $pdo->query("SELECT on_hand, committed FROM inventory WHERE inventory_id = {$invActFull}")->fetch();
+        $afMovCnt = (int)$pdo->query("SELECT COUNT(*) FROM inventory_movement WHERE reservation_id = {$resActFull}")->fetchColumn();
+        $afStatus = (string)$pdo->query("SELECT order_status FROM customer_order WHERE order_id = {$ordActFull}")->fetchColumn();
+        check(
+            'fulfillPickupOrder rejects inconsistent fully-moved active reservation with ERR_UNPROCESSABLE and mutates nothing',
+            $e->getCode() === OrderReservationService::ERR_UNPROCESSABLE
+                && (int)$afInv['on_hand'] === 7
+                && (int)$afInv['committed'] === 3
+                && $afMovCnt === 1
+                && $afStatus === 'ready_for_pickup'
+        );
+    }
+
+    // 22. Valid partially fulfilled history passes both markPickupOrderReady and fulfillPickupOrder, then valid completed history raises ERR_CONFLICT
+    [$bpValidHist, $invValidHist] = $createProduct('ChkC Valid Hist', 7, 2, 0, 0);
+    [$ordValidHist, [$oiValidHist]] = $createOrder('pickup', 'confirmed', [[$bpValidHist, 5]]);
+    $pdo->exec("INSERT INTO inventory_reservation (order_item_id, inventory_id, batch_id, reserved_quantity, reservation_status) VALUES ({$oiValidHist}, {$invValidHist}, NULL, 2, 'fulfilled')");
+    $resValid1 = (int)$pdo->lastInsertId();
+    $pdo->exec("INSERT INTO inventory_reservation (order_item_id, inventory_id, batch_id, reserved_quantity, reservation_status) VALUES ({$oiValidHist}, {$invValidHist}, NULL, 3, 'active')");
+    $resValid2 = (int)$pdo->lastInsertId();
+    $pdo->exec("INSERT INTO inventory_movement (inventory_id, batch_id, sale_item_id, reservation_id, movement_type, quantity, notes) VALUES ({$invValidHist}, NULL, NULL, {$resValid1}, 'order_fulfillment', -2, 'Valid partial 1')");
+    $pdo->exec("INSERT INTO inventory_movement (inventory_id, batch_id, sale_item_id, reservation_id, movement_type, quantity, notes) VALUES ({$invValidHist}, NULL, NULL, {$resValid2}, 'order_fulfillment', -1, 'Valid partial 2')");
+
+    $validReadyRes = $service->markPickupOrderReady($ordValidHist, 1, $empUid);
+    $validFulRes = $service->fulfillPickupOrder($ordValidHist, 1, $empUid);
+    $validInvAfter = $pdo->query("SELECT on_hand, committed FROM inventory WHERE inventory_id = {$invValidHist}")->fetch();
+    $validRes2Row = $pdo->query("SELECT reservation_status, reserved_quantity FROM inventory_reservation WHERE reservation_id = {$resValid2}")->fetch();
+    $validMovTotal = (int)$pdo->query("SELECT COALESCE(SUM(quantity), 0) FROM inventory_movement WHERE reservation_id IN ({$resValid1}, {$resValid2}) AND movement_type = 'order_fulfillment'")->fetchColumn();
+
+    check(
+        'Valid partially fulfilled history passes markPickupOrderReady and fulfills only remaining 2 units',
+        $validReadyRes['order_status'] === 'ready_for_pickup'
+            && $validFulRes['order_status'] === 'completed'
+            && $validFulRes['fulfilled_quantity'] === 2
+            && $validFulRes['remaining_quantity'] === 0
+            && (int)$validInvAfter['on_hand'] === 5
+            && (int)$validInvAfter['committed'] === 0
+            && $validRes2Row['reservation_status'] === 'fulfilled'
+            && (int)$validRes2Row['reserved_quantity'] === 3
+            && $validMovTotal === -5
+    );
+
+    // Valid completed history (all reservations fulfilled with matching movements) cleanly fails with ERR_CONFLICT if tampered back to ready_for_pickup
+    $pdo->exec("UPDATE customer_order SET order_status = 'ready_for_pickup' WHERE order_id = {$ordValidHist}");
+    try {
+        $service->fulfillPickupOrder($ordValidHist, 1, $empUid);
+        check('Valid completed reservation history rejects re-fulfillment', false);
+    } catch (RuntimeException $e) {
+        $validReCheckMovCnt = (int)$pdo->query("SELECT COUNT(*) FROM inventory_movement WHERE reservation_id IN ({$resValid1}, {$resValid2})")->fetchColumn();
+        check(
+            'Valid completed reservation history fails integrity-first check with ERR_CONFLICT and 0 extra movements',
+            $e->getCode() === OrderReservationService::ERR_CONFLICT && $validReCheckMovCnt === 3
+        );
+    }
 } finally {
     if ($pdo->inTransaction()) {
         $pdo->rollBack();
