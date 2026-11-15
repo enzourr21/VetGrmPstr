@@ -173,7 +173,7 @@ if (!empty($selectedOrder)) {
   $isAutoOpen = (!empty($selectedOrder) && (int)$selectedOrder['order_id'] === $ordId) ? 'true' : 'false';
   $st = (string)$orderModal['order_status'];
   $canDispatch = $isCourier
-      && in_array($st, ['pending', 'confirmed', 'processing', 'delivery_failed'], true)
+      && in_array($st, ['processing', 'delivery_failed'], true)
       && !empty($orderModal['payment_eligible'])
       && empty($orderModal['rescheduled_future']);
   $canCompleteOrFail = $isCourier
@@ -314,7 +314,7 @@ if (!empty($selectedOrder)) {
         <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 1rem 1.25rem;">
           <h4 style="margin: 0 0 0.75rem 0; font-size: 0.95rem; color: #1e293b;">Courier Actions</h4>
 
-          <?php if (in_array($st, ['pending', 'confirmed', 'processing', 'delivery_failed'], true)): ?>
+          <?php if (in_array($st, ['processing', 'delivery_failed'], true)): ?>
             <?php if ($canDispatch): ?>
               <form method="post" action="/delivery/orders/<?= $ordId ?>/dispatch" style="margin: 0;">
                 <?= \App\Core\CSRF::field() ?>

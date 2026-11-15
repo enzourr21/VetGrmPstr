@@ -169,6 +169,7 @@ $r->get('/petstore/receptionist/products/search', 'PetStoreReceptionistControlle
 $r->get('/petstore/receptionist/orders', 'PetStoreReceptionistController', 'orders');
 $r->get('/petstore/receptionist/orders/{id}', 'PetStoreReceptionistController', 'showOrder');
 $r->post('/petstore/receptionist/orders/{id}/status', 'PetStoreReceptionistController', 'updatePickupStatus');
+$r->post('/petstore/receptionist/orders/{id}/delivery-status', 'PetStoreReceptionistController', 'updateDeliveryStatus');
 $r->post('/petstore/receptionist/orders/{id}/reschedule', 'PetStoreReceptionistController', 'rescheduleDelivery');
 $r->get('/petstore/receptionist/employees', 'PetStoreReceptionistController', 'employees');
 

@@ -36,16 +36,147 @@ final class OrderReservationService
         int $businessUnitId,
         int $actorUserId
     ): array {
+        return $this->confirmPendingOrderAndReserve($orderId, $businessUnitId, $actorUserId, 'pickup');
+    }
+
+    /**
+     * Atomically confirm a pending Pet Store delivery order and reserve inventory using FEFO batch allocation.
+     *
+     * @return array{order_id:int, reservations_created:int, total_reserved_quantity:int}
+     * @throws RuntimeException on missing order, forbidden fulfillment method, invalid status, duplicate reservation, missing inventory, or insufficient stock
+     * @throws Throwable on database failure
+     */
+    public function confirmDeliveryOrderAndReserve(
+        int $orderId,
+        int $businessUnitId,
+        int $actorUserId
+    ): array {
+        return $this->confirmPendingOrderAndReserve($orderId, $businessUnitId, $actorUserId, 'delivery');
+    }
+
+    /**
+     * Atomically move a confirmed Pet Store delivery order to processing after verifying complete active reservation coverage.
+     *
+     * @return array{order_id:int, order_status:string}
+     * @throws RuntimeException
+     * @throws Throwable
+     */
+    public function markDeliveryOrderProcessing(
+        int $orderId,
+        int $businessUnitId,
+        int $actorUserId
+    ): array {
+        $this->assertTopLevelTransaction('Delivery order preparation update');
+
+        $this->db->beginTransaction();
+        try {
+            $order = $this->lockDeliveryOrder($orderId, $businessUnitId);
+            $currentStatus = (string)$order['order_status'];
+            if ($currentStatus !== 'confirmed') {
+                throw new RuntimeException(
+                    "Invalid transition for delivery order from '{$currentStatus}' to 'processing'. Permitted flow: Pending → Confirmed → Processing.",
+                    self::ERR_CONFLICT
+                );
+            }
+
+            $orderItems = $this->lockOrderItems($orderId);
+            $this->lockCompleteActiveReservations($orderId, $businessUnitId, $orderItems, 'preparation');
+
+            $updOrdStmt = $this->db->prepare(
+                "UPDATE customer_order
+                 SET order_status = 'processing', updated_at = NOW()
+                 WHERE order_id = ? AND order_status = 'confirmed'"
+            );
+            $updOrdStmt->execute([$orderId]);
+            if ($updOrdStmt->rowCount() !== 1) {
+                throw new RuntimeException("Order #{$orderId} could not be transitioned to processing.", self::ERR_CONFLICT);
+            }
+
+            Audit::record(
+                $this->db,
+                'petstore_receptionist.order.delivery_status',
+                "Prepared delivery order #{$orderId} and updated status from confirmed to processing.",
+                $businessUnitId,
+                $actorUserId,
+                null,
+                'status:confirmed',
+                'status:processing',
+                'customer_order',
+                $orderId
+            );
+
+            $this->db->commit();
+
+            return [
+                'order_id' => $orderId,
+                'order_status' => 'processing',
+            ];
+        } catch (Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $e;
+        }
+    }
+
+    /**
+     * Validate inside an active dispatch transaction that a delivery order is in processing status
+     * and holds complete active reservation coverage for every ordered item.
+     *
+     * @throws RuntimeException
+     */
+    public function assertDeliveryOrderReservedForDispatch(
+        int $orderId,
+        int $businessUnitId
+    ): void {
+        if (!$this->db->inTransaction()) {
+            throw new RuntimeException(
+                'Delivery dispatch reservation check must run inside an active transaction.',
+                self::ERR_CONFLICT
+            );
+        }
+
+        $order = $this->lockDeliveryOrder($orderId, $businessUnitId);
+        $currentStatus = (string)$order['order_status'];
+        if ($currentStatus !== 'processing') {
+            throw new RuntimeException(
+                "Order #ORD-{$orderId} must be confirmed, reserved, and prepared (processing) before dispatch (current status: '{$currentStatus}').",
+                self::ERR_CONFLICT
+            );
+        }
+
+        $orderItems = $this->lockOrderItems($orderId);
+        $this->lockCompleteActiveReservations($orderId, $businessUnitId, $orderItems, 'dispatch');
+    }
+
+    /**
+     * Shared atomic order confirmation and FEFO reservation implementation for store-accepted pending orders.
+     *
+     * @return array{order_id:int, reservations_created:int, total_reserved_quantity:int}
+     * @throws RuntimeException
+     * @throws Throwable
+     */
+    private function confirmPendingOrderAndReserve(
+        int $orderId,
+        int $businessUnitId,
+        int $actorUserId,
+        string $expectedMethod
+    ): array {
         $this->assertTopLevelTransaction('Order confirmation');
 
         $this->db->beginTransaction();
         try {
             // 1. Lock the target order exclusively and verify scope, fulfillment method, and state.
-            $order = $this->lockPickupOrder($orderId, $businessUnitId);
+            $order = $expectedMethod === 'delivery'
+                ? $this->lockDeliveryOrder($orderId, $businessUnitId)
+                : $this->lockPickupOrder($orderId, $businessUnitId);
             $currentStatus = (string)$order['order_status'];
             if ($currentStatus !== 'pending') {
+                $flow = $expectedMethod === 'delivery'
+                    ? 'Pending → Confirmed → Processing'
+                    : 'Pending → Confirmed → Ready for Pickup → Completed';
                 throw new RuntimeException(
-                    "Invalid transition for pickup order from '{$currentStatus}' to 'confirmed'. Permitted flow: Pending → Confirmed → Ready for Pickup → Completed.",
+                    "Invalid transition for {$expectedMethod} order from '{$currentStatus}' to 'confirmed'. Permitted flow: {$flow}.",
                     self::ERR_CONFLICT
                 );
             }
@@ -222,10 +353,15 @@ final class OrderReservationService
                 throw new RuntimeException("Order #{$orderId} could not be transitioned to confirmed.", self::ERR_CONFLICT);
             }
 
+            $auditAction = $expectedMethod === 'delivery'
+                ? 'petstore_receptionist.order.delivery_status'
+                : 'petstore_receptionist.order.pickup_status';
+            $methodLabel = $expectedMethod === 'delivery' ? 'delivery' : 'pickup';
+
             Audit::record(
                 $this->db,
-                'petstore_receptionist.order.pickup_status',
-                "Confirmed pickup order #{$orderId} and reserved {$totalReservedQty} unit(s).",
+                $auditAction,
+                "Confirmed {$methodLabel} order #{$orderId} and reserved {$totalReservedQty} unit(s).",
                 $businessUnitId,
                 $actorUserId,
                 null,
@@ -666,6 +802,36 @@ final class OrderReservationService
      */
     private function lockPickupOrder(int $orderId, int $businessUnitId): array
     {
+        return $this->lockOrderForFulfillmentMethod(
+            $orderId,
+            $businessUnitId,
+            'pickup',
+            'Only pickup orders may be updated by the receptionist. Delivery workflows belong to delivery personnel.'
+        );
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function lockDeliveryOrder(int $orderId, int $businessUnitId): array
+    {
+        return $this->lockOrderForFulfillmentMethod(
+            $orderId,
+            $businessUnitId,
+            'delivery',
+            'Only delivery orders may use delivery confirmation and preparation. Pickup workflows use the pickup confirmation flow.'
+        );
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function lockOrderForFulfillmentMethod(
+        int $orderId,
+        int $businessUnitId,
+        string $expectedMethod,
+        string $forbiddenMessage
+    ): array {
         $ordStmt = $this->db->prepare(
             "SELECT order_id, business_unit_id, fulfillment_method, order_status
              FROM customer_order
@@ -679,11 +845,8 @@ final class OrderReservationService
             throw new RuntimeException("Order #{$orderId} was not found.", self::ERR_NOT_FOUND);
         }
 
-        if ((string)$order['fulfillment_method'] !== 'pickup') {
-            throw new RuntimeException(
-                'Only pickup orders may be updated by the receptionist. Delivery workflows belong to delivery personnel.',
-                self::ERR_FORBIDDEN
-            );
+        if ((string)$order['fulfillment_method'] !== $expectedMethod) {
+            throw new RuntimeException($forbiddenMessage, self::ERR_FORBIDDEN);
         }
 
         return $order;
@@ -1011,6 +1174,137 @@ final class OrderReservationService
 
         ksort($parsed, SORT_NUMERIC);
         return [$parsed, $total];
+    }
+
+    /**
+     * Lock and validate complete active reservation coverage for a delivery order prior to dispatch.
+     * Rejects missing, partial, excessive, non-active, inventory-mismatched, or movement-corrupted reservations.
+     *
+     * @param array<int,array<string,mixed>> $orderItems
+     */
+    private function lockCompleteActiveReservations(
+        int $orderId,
+        int $businessUnitId,
+        array $orderItems,
+        string $stage
+    ): void {
+        $metaByBpId = $this->resolveUnitProductMetadata($orderId, $businessUnitId, $orderItems);
+
+        $orderedQtyByItemId = [];
+        $expectedMetaByItemId = [];
+        $orderItemIds = [];
+        foreach ($orderItems as $item) {
+            $itemId = (int)$item['order_item_id'];
+            $bpId = (int)$item['business_product_id'];
+            $qty = (int)$item['quantity'];
+            if ($qty <= 0) {
+                throw new RuntimeException(
+                    "Order item #{$itemId} on Order #{$orderId} has invalid ordered quantity ({$qty}).",
+                    self::ERR_UNPROCESSABLE
+                );
+            }
+            $orderItemIds[] = $itemId;
+            $orderedQtyByItemId[$itemId] = $qty;
+            $expectedMetaByItemId[$itemId] = $metaByBpId[$bpId];
+        }
+
+        $oiPlaceholders = implode(',', array_fill(0, count($orderItemIds), '?'));
+        $resStmt = $this->db->prepare(
+            "SELECT reservation_id, order_item_id, inventory_id, batch_id, reserved_quantity, reservation_status
+             FROM inventory_reservation
+             WHERE order_item_id IN ({$oiPlaceholders})
+             ORDER BY reservation_id ASC
+             FOR UPDATE"
+        );
+        $resStmt->execute($orderItemIds);
+        $rows = $resStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $activeResIds = [];
+        $coveredQtyByItemId = [];
+
+        foreach ($rows as $row) {
+            $resId = (int)$row['reservation_id'];
+            $itemId = (int)$row['order_item_id'];
+            $reservedQty = (int)$row['reserved_quantity'];
+            $status = (string)$row['reservation_status'];
+
+            if ($status === 'cancelled') {
+                continue;
+            }
+            if ($status !== 'active') {
+                throw new RuntimeException(
+                    "Order #{$orderId} has reservation #{$resId} in state '{$status}' which is invalid for delivery {$stage}.",
+                    self::ERR_CONFLICT
+                );
+            }
+            if ($reservedQty <= 0) {
+                throw new RuntimeException(
+                    "Reservation #{$resId} on Order #{$orderId} has invalid reserved quantity ({$reservedQty}).",
+                    self::ERR_UNPROCESSABLE
+                );
+            }
+
+            $expectedMeta = $expectedMetaByItemId[$itemId];
+            if ((int)$row['inventory_id'] !== (int)$expectedMeta['inventory_id']) {
+                throw new RuntimeException(
+                    "Reservation #{$resId} on Order #{$orderId} does not match expected inventory record.",
+                    self::ERR_UNPROCESSABLE
+                );
+            }
+
+            $requiresBatch = !empty($expectedMeta['requires_batch_tracking']);
+            if ($requiresBatch && $row['batch_id'] === null) {
+                throw new RuntimeException(
+                    "Reservation #{$resId} on Order #{$orderId} is missing a FEFO batch assignment.",
+                    self::ERR_UNPROCESSABLE
+                );
+            }
+            if (!$requiresBatch && $row['batch_id'] !== null) {
+                throw new RuntimeException(
+                    "Reservation #{$resId} on Order #{$orderId} unexpectedly references a batch for a non-batch product.",
+                    self::ERR_UNPROCESSABLE
+                );
+            }
+
+            $coveredQtyByItemId[$itemId] = ($coveredQtyByItemId[$itemId] ?? 0) + $reservedQty;
+            $activeResIds[] = $resId;
+        }
+
+        foreach ($orderedQtyByItemId as $itemId => $orderedQty) {
+            $coveredQty = $coveredQtyByItemId[$itemId] ?? 0;
+            if ($coveredQty === 0) {
+                throw new RuntimeException(
+                    "Order item #{$itemId} on Order #{$orderId} is missing an active inventory reservation.",
+                    self::ERR_UNPROCESSABLE
+                );
+            }
+            if ($coveredQty < $orderedQty) {
+                throw new RuntimeException(
+                    "Order item #{$itemId} on Order #{$orderId} has incomplete reservation coverage (ordered: {$orderedQty}, reserved: {$coveredQty}).",
+                    self::ERR_UNPROCESSABLE
+                );
+            }
+            if ($coveredQty > $orderedQty) {
+                throw new RuntimeException(
+                    "Order item #{$itemId} on Order #{$orderId} has excessive reservation coverage (ordered: {$orderedQty}, reserved: {$coveredQty}).",
+                    self::ERR_UNPROCESSABLE
+                );
+            }
+        }
+
+        $outboundByResId = $activeResIds
+            ? $this->loadOutboundFulfillmentTotals($activeResIds)
+            : [];
+
+        foreach ($activeResIds as $resId) {
+            $outboundQty = $outboundByResId[$resId] ?? 0;
+            if ($outboundQty !== 0) {
+                throw new RuntimeException(
+                    "Active reservation #{$resId} on Order #{$orderId} has unexpected outbound fulfillment movements ({$outboundQty}).",
+                    self::ERR_UNPROCESSABLE
+                );
+            }
+        }
     }
 
     /**

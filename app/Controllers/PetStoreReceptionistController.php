@@ -677,40 +677,104 @@ final class PetStoreReceptionistController extends Controller
         $targetStatus = strtolower(trim((string)($_POST['status'] ?? '')));
 
         if (in_array($targetStatus, ['confirmed', 'ready_for_pickup', 'completed'], true)) {
-            try {
+            $this->runOrderTransitionAction(function () use ($orderId, $unitId, $uid, $targetStatus): string {
                 $service = new OrderReservationService($this->db);
                 if ($targetStatus === 'confirmed') {
                     $result = $service->confirmPickupOrderAndReserve($orderId, $unitId, $uid);
-                    $this->flash(
-                        'success',
-                        "Order #{$orderId} status updated to Confirmed ({$result['total_reserved_quantity']} unit(s) reserved)."
-                    );
-                } elseif ($targetStatus === 'ready_for_pickup') {
+                    return "Order #{$orderId} status updated to Confirmed ({$result['total_reserved_quantity']} unit(s) reserved).";
+                }
+                if ($targetStatus === 'ready_for_pickup') {
                     $service->markPickupOrderReady($orderId, $unitId, $uid);
-                    $this->flash('success', "Order #{$orderId} status updated to Ready For Pickup.");
-                } else {
-                    $result = $service->fulfillPickupOrder($orderId, $unitId, $uid);
-                    $this->flash(
-                        'success',
-                        "Order #{$orderId} status updated to Completed ({$result['fulfilled_quantity']} unit(s) handed over)."
-                    );
+                    return "Order #{$orderId} status updated to Ready For Pickup.";
                 }
-            } catch (RuntimeException $e) {
-                $code = $e->getCode();
-                if ($code === OrderReservationService::ERR_NOT_FOUND) {
-                    $this->notFound();
-                }
-                if ($code === OrderReservationService::ERR_FORBIDDEN) {
-                    $this->forbidden($e->getMessage());
-                }
-                $this->flash('error', $e->getMessage());
-            }
-
-            $this->redirect('/petstore/receptionist/orders?tab=pickup&view=' . $orderId);
+                $result = $service->fulfillPickupOrder($orderId, $unitId, $uid);
+                return "Order #{$orderId} status updated to Completed ({$result['fulfilled_quantity']} unit(s) handed over).";
+            }, 'pickup', $orderId);
             return;
         }
 
-        $stmt = $this->db->prepare("SELECT * FROM customer_order WHERE order_id = ? AND business_unit_id = ?");
+        $this->rejectUnsupportedOrderTransition(
+            $orderId,
+            $unitId,
+            'pickup',
+            $targetStatus,
+            'pickup',
+            'Only pickup orders may be updated by the receptionist. Delivery workflows belong to delivery personnel.',
+            'Pending → Confirmed → Ready for Pickup → Completed'
+        );
+    }
+
+    /**
+     * Delivery Order store-side status transitions:
+     * Pending -> Confirmed (reserves FEFO stock) -> Processing (store preparation verified)
+     * Strictly restricted to delivery orders.
+     */
+    public function updateDeliveryStatus(int $orderId): void
+    {
+        [$uid, , $unitId] = $this->checkPetStoreReceptionist();
+        CSRF::check();
+
+        $targetStatus = strtolower(trim((string)($_POST['status'] ?? '')));
+
+        if (in_array($targetStatus, ['confirmed', 'processing'], true)) {
+            $this->runOrderTransitionAction(function () use ($orderId, $unitId, $uid, $targetStatus): string {
+                $service = new OrderReservationService($this->db);
+                if ($targetStatus === 'confirmed') {
+                    $result = $service->confirmDeliveryOrderAndReserve($orderId, $unitId, $uid);
+                    return "Delivery order #{$orderId} confirmed ({$result['total_reserved_quantity']} unit(s) reserved).";
+                }
+                $service->markDeliveryOrderProcessing($orderId, $unitId, $uid);
+                return "Delivery order #{$orderId} marked as Processing and ready for Delivery Personnel dispatch.";
+            }, 'delivery', $orderId);
+            return;
+        }
+
+        $this->rejectUnsupportedOrderTransition(
+            $orderId,
+            $unitId,
+            'delivery',
+            $targetStatus,
+            'delivery',
+            'Only delivery orders may use delivery confirmation and preparation actions.',
+            'Pending → Confirmed → Processing'
+        );
+    }
+
+    /**
+     * Execute a reservation-backed order status transition with uniform 404/403/flash handling.
+     */
+    private function runOrderTransitionAction(callable $action, string $tab, int $orderId): void
+    {
+        try {
+            $successMessage = (string)$action();
+            $this->flash('success', $successMessage);
+        } catch (RuntimeException $e) {
+            $code = $e->getCode();
+            if ($code === OrderReservationService::ERR_NOT_FOUND) {
+                $this->notFound();
+            }
+            if ($code === OrderReservationService::ERR_FORBIDDEN) {
+                $this->forbidden($e->getMessage());
+            }
+            $this->flash('error', $e->getMessage());
+        }
+
+        $this->redirect("/petstore/receptionist/orders?tab={$tab}&view=" . $orderId);
+    }
+
+    /**
+     * Enforce existence, unit scope, and fulfillment method when an unsupported target status is posted.
+     */
+    private function rejectUnsupportedOrderTransition(
+        int $orderId,
+        int $unitId,
+        string $expectedMethod,
+        string $targetStatus,
+        string $redirectTab,
+        string $forbiddenMessage,
+        string $flowDescription
+    ): void {
+        $stmt = $this->db->prepare("SELECT fulfillment_method, order_status FROM customer_order WHERE order_id = ? AND business_unit_id = ?");
         $stmt->execute([$orderId, $unitId]);
         $order = $stmt->fetch();
 
@@ -718,17 +782,16 @@ final class PetStoreReceptionistController extends Controller
             $this->notFound();
         }
 
-        // Strict Server-Side Guard: Delivery orders are blocked from this action
-        if ($order['fulfillment_method'] !== 'pickup') {
-            $this->forbidden('Only pickup orders may be updated by the receptionist. Delivery workflows belong to delivery personnel.');
+        if ($order['fulfillment_method'] !== $expectedMethod) {
+            $this->forbidden($forbiddenMessage);
         }
 
         $currentStatus = (string)$order['order_status'];
         $this->flash(
             'error',
-            "Invalid transition for pickup order from '{$currentStatus}' to '{$targetStatus}'. Permitted flow: Pending → Confirmed → Ready for Pickup → Completed."
+            "Invalid transition for {$expectedMethod} order from '{$currentStatus}' to '{$targetStatus}'. Permitted flow: {$flowDescription}."
         );
-        $this->redirect('/petstore/receptionist/orders?tab=pickup&view=' . $orderId);
+        $this->redirect("/petstore/receptionist/orders?tab={$redirectTab}&view=" . $orderId);
     }
 
     /**

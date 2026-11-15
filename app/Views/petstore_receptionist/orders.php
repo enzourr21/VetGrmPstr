@@ -58,6 +58,7 @@ $buildTabUrl = function(string $t) use ($statusFilter, $q): string {
         <option value="all" <?= $statusFilter === 'all' ? 'selected' : '' ?>>All Statuses</option>
         <option value="pending" <?= $statusFilter === 'pending' ? 'selected' : '' ?>>Pending</option>
         <option value="confirmed" <?= $statusFilter === 'confirmed' ? 'selected' : '' ?>>Confirmed</option>
+        <option value="processing" <?= $statusFilter === 'processing' ? 'selected' : '' ?>>Processing</option>
         <option value="ready_for_pickup" <?= $statusFilter === 'ready_for_pickup' ? 'selected' : '' ?>>Ready for Pickup</option>
         <option value="out_for_delivery" <?= $statusFilter === 'out_for_delivery' ? 'selected' : '' ?>>Out for Delivery</option>
         <option value="delivery_failed" <?= $statusFilter === 'delivery_failed' ? 'selected' : '' ?>>Delivery Failed</option>
@@ -438,14 +439,46 @@ if (!empty($selectedOrder)) {
           </div>
         </div>
       <?php else: ?>
-        <!-- Delivery Order Notice for Receptionist -->
+        <!-- Receptionist Store-Side Delivery Confirmation & Preparation -->
         <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 1rem 1.25rem;">
-          <h4 style="margin: 0 0 0.25rem 0; font-size: 0.95rem; color: #475569;">
-            Delivery Personnel Management
+          <h4 style="margin: 0 0 0.5rem 0; font-size: 0.95rem; color: #1e293b;">
+            Delivery Store Confirmation &amp; Preparation
           </h4>
-          <p class="caption muted" style="margin: 0;">
-            Out for Delivery dispatching, courier assignments, and delivery confirmations are performed exclusively by authorized Delivery Personnel. The Receptionist coordinates customer contact and delivery rescheduling.
+          <p class="caption muted" style="margin: 0 0 0.75rem 0;">
+            Store workflow before courier dispatch: <code>Pending &rarr; Confirmed (FEFO Reserved) &rarr; Processing</code>. Delivery Personnel can only dispatch orders once prepared (<code>Processing</code>).
           </p>
+
+          <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
+            <?php if ($st === 'pending'): ?>
+              <form method="post" action="/petstore/receptionist/orders/<?= $ordId ?>/delivery-status" style="margin: 0;">
+                <?= \App\Core\CSRF::field() ?>
+                <input type="hidden" name="status" value="confirmed">
+                <button type="submit" class="btn primary btn-sm">
+                  ✓ Confirm Delivery Order
+                </button>
+              </form>
+            <?php elseif ($st === 'confirmed'): ?>
+              <form method="post" action="/petstore/receptionist/orders/<?= $ordId ?>/delivery-status" style="margin: 0;">
+                <?= \App\Core\CSRF::field() ?>
+                <input type="hidden" name="status" value="processing">
+                <button type="submit" class="btn primary btn-sm">
+                  📦 Mark Prepared (Processing)
+                </button>
+              </form>
+            <?php elseif ($st === 'processing'): ?>
+              <span class="badge badge-info" style="padding: 0.4rem 0.75rem;">
+                ✓ Stock reserved &amp; prepared — ready in Delivery Personnel Dispatch Queue.
+              </span>
+            <?php elseif ($st === 'completed'): ?>
+              <span class="badge badge-success" style="padding: 0.4rem 0.75rem;">
+                ✓ Delivery completed by Delivery Personnel.
+              </span>
+            <?php else: ?>
+              <span class="caption muted">
+                Courier dispatch and delivery outcomes are managed by Delivery Personnel (current status: <?= e(ucwords(str_replace('_', ' ', $st))) ?>).
+              </span>
+            <?php endif; ?>
+          </div>
         </div>
       <?php endif; ?>
 

@@ -8,8 +8,10 @@ use App\Core\CSRF;
 use App\Core\Session;
 use App\Models\Audit;
 use App\Models\Units;
+use App\Services\OrderReservationService;
 use DateTimeImmutable;
 use DateTimeZone;
+use RuntimeException;
 use Throwable;
 
 final class DeliveryController extends Controller
@@ -238,7 +240,7 @@ final class DeliveryController extends Controller
 
         if ($isCourier) {
             if ($tab === 'queue') {
-                $sql .= " AND ((co.order_status IN ('pending','confirmed','processing','delivery_failed') AND co.delivery_employee_id IS NULL)
+                $sql .= " AND ((co.order_status IN ('processing','delivery_failed') AND co.delivery_employee_id IS NULL)
                                OR (co.order_status = 'delivery_failed' AND co.delivery_employee_id = ?))";
                 $params[] = $empId;
             } elseif ($tab === 'active') {
@@ -250,7 +252,7 @@ final class DeliveryController extends Controller
             }
         } else {
             if ($tab === 'queue') {
-                $sql .= " AND co.order_status IN ('pending','confirmed','processing','delivery_failed')";
+                $sql .= " AND co.order_status IN ('processing','delivery_failed')";
             } elseif ($tab === 'active') {
                 $sql .= " AND co.order_status = 'out_for_delivery'";
             } else {
@@ -351,7 +353,7 @@ final class DeliveryController extends Controller
                     $candEmp = $candidate['delivery_employee_id'] !== null ? (int)$candidate['delivery_employee_id'] : null;
                     $candStatus = (string)$candidate['order_status'];
                     $allowedView = !$isCourier
-                        || ($candEmp === null && in_array($candStatus, ['pending', 'confirmed', 'processing', 'delivery_failed'], true))
+                        || ($candEmp === null && in_array($candStatus, ['processing', 'delivery_failed'], true))
                         || ($candEmp === $empId && in_array($candStatus, ['out_for_delivery', 'delivery_failed', 'completed'], true));
                     if ($allowedView) {
                         $selectedOrder = $hydrateOrder($candidate);
@@ -404,14 +406,38 @@ final class DeliveryController extends Controller
             $currentStatus = (string)$order['order_status'];
             $assignedEmpId = $order['delivery_employee_id'] !== null ? (int)$order['delivery_employee_id'] : null;
 
-            if (in_array($currentStatus, ['pending', 'confirmed', 'processing'], true)) {
+            if ($currentStatus === 'processing') {
                 if ($assignedEmpId !== null && $assignedEmpId !== $empId) {
                     $this->db->rollBack();
                     $this->flash('error', "Order #ORD-{$orderId} has already been claimed by another courier.");
                     $this->redirect('/delivery/orders?tab=queue');
                     return;
                 }
+                try {
+                    $reservationService = new OrderReservationService($this->db);
+                    $reservationService->assertDeliveryOrderReservedForDispatch($orderId, self::PET_STORE_UNIT_ID);
+                } catch (RuntimeException $resEx) {
+                    $this->db->rollBack();
+                    $code = $resEx->getCode();
+                    if ($code === OrderReservationService::ERR_NOT_FOUND) {
+                        $this->notFound();
+                    }
+                    if ($code === OrderReservationService::ERR_FORBIDDEN) {
+                        $this->forbidden($resEx->getMessage());
+                    }
+                    $this->flash('error', $resEx->getMessage());
+                    $this->redirect('/delivery/orders?tab=queue&view=' . $orderId);
+                    return;
+                }
                 $actionCode = 'delivery.dispatched';
+            } elseif (in_array($currentStatus, ['pending', 'confirmed'], true)) {
+                $this->db->rollBack();
+                $this->flash(
+                    'error',
+                    "Order #ORD-{$orderId} must be confirmed, reserved, and prepared (Processing) by the Pet Store Receptionist before Delivery Personnel can dispatch it."
+                );
+                $this->redirect('/delivery/orders?tab=queue&view=' . $orderId);
+                return;
             } elseif ($currentStatus === 'delivery_failed') {
                 if ($assignedEmpId !== null && $assignedEmpId !== $empId) {
                     $this->db->rollBack();
