@@ -62,8 +62,12 @@ final class PosSaleService
             throw new RuntimeException("Unsupported payment method '{$paymentMethod}'.", self::ERR_UNPROCESSABLE);
         }
 
-        $qtyByBpId = $this->aggregateSaleLines($rawLines);
-        $bpIds = array_keys($qtyByBpId);
+        $parsedLines = $this->parseSaleLines($rawLines);
+        $bpIds = [];
+        foreach ($parsedLines as $pLine) {
+            $bpIds[$pLine['bp_id']] = $pLine['bp_id'];
+        }
+        $bpIds = array_values($bpIds);
         sort($bpIds, SORT_NUMERIC);
 
         $this->db->beginTransaction();
@@ -77,16 +81,8 @@ final class PosSaleService
 
             // 2. Load unit-scoped product metadata without locking inventory rows out of order.
             $metaByBpId = $this->loadUnitProductMetadata($businessUnitId, $bpIds);
-
-            $itemsByInventory = [];
-            $inventoryIds = [];
-            $linePlan = [];
-            $totalAmount = 0.0;
-
             foreach ($bpIds as $bpId) {
-                $qty = $qtyByBpId[$bpId];
                 $meta = $metaByBpId[$bpId] ?? null;
-
                 if (!$meta) {
                     throw new RuntimeException(
                         "Selected product (ID #{$bpId}) does not belong to this business unit or could not be found.",
@@ -105,12 +101,26 @@ final class PosSaleService
                         self::ERR_UNPROCESSABLE
                     );
                 }
+            }
+
+            // Preserve separate submitted sale_item lines while grouping them by inventory for aggregated checks.
+            $itemsByInventory = [];
+            $inventoryIds = [];
+            $linePlan = [];
+            $totalAmount = 0.0;
+
+            foreach ($parsedLines as $pLine) {
+                $lineIndex = $pLine['line_index'];
+                $bpId = $pLine['bp_id'];
+                $qty = $pLine['qty'];
+                $meta = $metaByBpId[$bpId];
 
                 $invId = (int)$meta['inventory_id'];
                 $unitPrice = (float)$meta['selling_price'];
                 $totalAmount = round($totalAmount + round($unitPrice * $qty, 2), 2);
 
                 $lineData = [
+                    'line_index' => $lineIndex,
                     'bp_id' => $bpId,
                     'inventory_id' => $invId,
                     'qty' => $qty,
@@ -119,7 +129,7 @@ final class PosSaleService
                     'product_name' => (string)$meta['product_name'],
                 ];
 
-                $linePlan[$bpId] = $lineData;
+                $linePlan[$lineIndex] = $lineData;
                 $inventoryIds[$invId] = $invId;
                 $itemsByInventory[$invId][] = $lineData;
             }
@@ -129,8 +139,9 @@ final class PosSaleService
             sort($sortedInvIds, SORT_NUMERIC);
             $lockedInventory = $this->lockInventories($sortedInvIds);
 
-            // 4. Revalidate physically sellable on-hand stock (excluding shelf commitments) and allocate FEFO batches.
-            $allocationsByBpId = [];
+            // 4. Revalidate physically sellable on-hand stock (excluding shelf commitments) and distribute FEFO batches.
+            $allocationsByLineIndex = [];
+            $batchDeductionByBatchId = [];
             $onHandDeductionByInv = [];
 
             foreach ($sortedInvIds as $invId) {
@@ -198,11 +209,13 @@ final class PosSaleService
                             }
 
                             $take = min($remaining, $batch['unreserved_quantity']);
+                            $batchId = (int)$batch['batch_id'];
                             $slices[] = [
-                                'batch_id' => $batch['batch_id'],
+                                'batch_id' => $batchId,
                                 'batch_number' => $batch['batch_number'],
                                 'quantity' => $take,
                             ];
+                            $batchDeductionByBatchId[$batchId] = ($batchDeductionByBatchId[$batchId] ?? 0) + $take;
                             $batch['unreserved_quantity'] -= $take;
                             $remaining -= $take;
                         }
@@ -215,11 +228,11 @@ final class PosSaleService
                             );
                         }
 
-                        $allocationsByBpId[$invLine['bp_id']] = $slices;
+                        $allocationsByLineIndex[$invLine['line_index']] = $slices;
                     }
                 } else {
                     foreach ($invLines as $invLine) {
-                        $allocationsByBpId[$invLine['bp_id']] = [[
+                        $allocationsByLineIndex[$invLine['line_index']] = [[
                             'batch_id' => null,
                             'batch_number' => null,
                             'quantity' => $invLine['qty'],
@@ -230,7 +243,7 @@ final class PosSaleService
                 $onHandDeductionByInv[$invId] = $totalRequestedForInv;
             }
 
-            // 5. Persist sale, sale items, batch & inventory deductions, movements, payment, and audit record.
+            // 5. Persist sale, preserved sale items, movements, batch & inventory deductions, payment, and audit record.
             $sStmt = $this->db->prepare(
                 "INSERT INTO sale (business_unit_id, branch_id, customer_id, employee_id, sale_date, total_amount, sale_status)
                  VALUES (?, ?, ?, ?, NOW(), ?, 'completed')"
@@ -242,26 +255,17 @@ final class PosSaleService
                 "INSERT INTO sale_item (sale_id, business_product_id, quantity, unit_price)
                  VALUES (?, ?, ?, ?)"
             );
-            $batchUpdStmt = $this->db->prepare(
-                "UPDATE inventory_batch
-                 SET quantity = quantity - ?, updated_at = NOW()
-                 WHERE batch_id = ?"
-            );
             $movStmt = $this->db->prepare(
                 "INSERT INTO inventory_movement (inventory_id, batch_id, sale_item_id, reservation_id, movement_type, quantity, notes)
                  VALUES (?, ?, ?, NULL, 'sale', ?, ?)"
             );
 
             $movementsCreated = 0;
-            foreach ($bpIds as $bpId) {
-                $line = $linePlan[$bpId];
-                $siStmt->execute([$saleId, $bpId, $line['qty'], $line['unit_price']]);
+            foreach ($linePlan as $lineIndex => $line) {
+                $siStmt->execute([$saleId, $line['bp_id'], $line['qty'], $line['unit_price']]);
                 $saleItemId = (int)$this->db->lastInsertId();
 
-                foreach ($allocationsByBpId[$bpId] as $slice) {
-                    if ($slice['batch_id'] !== null) {
-                        $batchUpdStmt->execute([$slice['quantity'], $slice['batch_id']]);
-                    }
+                foreach ($allocationsByLineIndex[$lineIndex] as $slice) {
                     $batchSuffix = $slice['batch_number'] !== null ? " (Batch: {$slice['batch_number']})" : '';
                     $notes = mb_substr("Pet Store POS sale #{$saleId}{$batchSuffix}", 0, 255);
                     $movStmt->execute([
@@ -272,6 +276,18 @@ final class PosSaleService
                         $notes,
                     ]);
                     $movementsCreated++;
+                }
+            }
+
+            if ($batchDeductionByBatchId) {
+                ksort($batchDeductionByBatchId, SORT_NUMERIC);
+                $batchUpdStmt = $this->db->prepare(
+                    "UPDATE inventory_batch
+                     SET quantity = quantity - ?, updated_at = NOW()
+                     WHERE batch_id = ?"
+                );
+                foreach ($batchDeductionByBatchId as $batchId => $deductQty) {
+                    $batchUpdStmt->execute([$deductQty, $batchId]);
                 }
             }
 
@@ -308,7 +324,7 @@ final class PosSaleService
             return [
                 'sale_id' => $saleId,
                 'total_amount' => $totalAmount,
-                'items_count' => count($bpIds),
+                'items_count' => count($linePlan),
                 'movements_created' => $movementsCreated,
             ];
         } catch (Throwable $e) {
@@ -320,14 +336,16 @@ final class PosSaleService
     }
 
     /**
-     * Consolidate duplicate business_product_id lines so split rows cannot bypass stock checks.
+     * Validate and preserve submitted POS sale lines in submission order.
      *
      * @param array<int,array{business_product_id:int|string,quantity:int|string}> $rawLines
-     * @return array<int,int> Map of business_product_id => positive total quantity
+     * @return array<int,array{line_index:int,bp_id:int,qty:int}>
      */
-    private function aggregateSaleLines(array $rawLines): array
+    private function parseSaleLines(array $rawLines): array
     {
-        $qtyByBpId = [];
+        $parsedLines = [];
+        $lineIndex = 0;
+
         foreach ($rawLines as $line) {
             $bpId = isset($line['business_product_id']) ? (int)$line['business_product_id'] : 0;
             $qty = isset($line['quantity']) ? (int)$line['quantity'] : 0;
@@ -339,14 +357,18 @@ final class PosSaleService
                 continue;
             }
 
-            $qtyByBpId[$bpId] = ($qtyByBpId[$bpId] ?? 0) + $qty;
+            $parsedLines[] = [
+                'line_index' => $lineIndex++,
+                'bp_id' => $bpId,
+                'qty' => $qty,
+            ];
         }
 
-        if (!$qtyByBpId) {
+        if (!$parsedLines) {
             throw new RuntimeException('At least one valid product line with quantity greater than zero is required.', self::ERR_UNPROCESSABLE);
         }
 
-        return $qtyByBpId;
+        return $parsedLines;
     }
 
     private function resolveMainBranchId(int $businessUnitId): int

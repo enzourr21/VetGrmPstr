@@ -239,8 +239,8 @@ try {
             && $invFefoAfter === 6
     );
 
-    // 3. Duplicate product_id[] lines consolidated (oversell 3 + 3 > 5 fails; 2 + 2 <= 5 writes 1 consolidated sale_item)
-    $pDup = $createGlobalProduct('ChkD Duplicate Line Item');
+    // 3a. Duplicate non-batch lines: aggregated stock check blocks oversell (3 + 3 > 5); valid 2 + 2 preserves separate sale_item rows & movements
+    $pDup = $createGlobalProduct('ChkD Duplicate NonBatch Item');
     [$bpDup, $invDup] = $addBusinessProduct($pDup, $unitA, 40.00, 5, 0, 0, 0);
 
     try {
@@ -248,11 +248,11 @@ try {
             ['business_product_id' => $bpDup, 'quantity' => 3],
             ['business_product_id' => $bpDup, 'quantity' => 3],
         ]);
-        check('Duplicate split lines exceeding available stock rejected', false);
+        check('Duplicate split non-batch lines exceeding available stock rejected', false);
     } catch (RuntimeException $e) {
         $invDupCheck = (int)$pdo->query("SELECT on_hand FROM inventory WHERE inventory_id = {$invDup}")->fetchColumn();
         check(
-            'Duplicate split lines exceeding available stock rejected cleanly with ERR_UNPROCESSABLE and 0 deduction',
+            'Duplicate split non-batch lines exceeding available stock rejected cleanly with ERR_UNPROCESSABLE and 0 deduction',
             $e->getCode() === PosSaleService::ERR_UNPROCESSABLE && $invDupCheck === 5
         );
     }
@@ -263,14 +263,73 @@ try {
     ]);
     $cleanup['sales'][] = $res3['sale_id'];
 
-    $si3Rows = $pdo->query("SELECT quantity, unit_price FROM sale_item WHERE sale_id = {$res3['sale_id']}")->fetchAll(PDO::FETCH_ASSOC);
+    $si3Rows = $pdo->query("SELECT sale_item_id, quantity FROM sale_item WHERE sale_id = {$res3['sale_id']} ORDER BY sale_item_id ASC")->fetchAll(PDO::FETCH_ASSOC);
+    $mov3Rows = $pdo->query(
+        "SELECT sale_item_id, batch_id, quantity
+         FROM inventory_movement
+         WHERE sale_item_id IN (" . implode(',', array_column($si3Rows, 'sale_item_id')) . ")
+         ORDER BY movement_id ASC"
+    )->fetchAll(PDO::FETCH_ASSOC);
     $invDupAfter = (int)$pdo->query("SELECT on_hand FROM inventory WHERE inventory_id = {$invDup}")->fetchColumn();
     check(
-        'Duplicate lines within available stock consolidate into one sale_item row',
-        count($si3Rows) === 1
-            && (int)$si3Rows[0]['quantity'] === 4
+        'Duplicate non-batch lines within available stock preserve separate sale_item rows and traceable null-batch movements',
+        $res3['items_count'] === 2
+            && count($si3Rows) === 2
+            && (int)$si3Rows[0]['quantity'] === 2
+            && (int)$si3Rows[1]['quantity'] === 2
+            && count($mov3Rows) === 2
+            && $mov3Rows[0]['batch_id'] === null && (int)$mov3Rows[0]['quantity'] === -2 && (int)$mov3Rows[0]['sale_item_id'] === (int)$si3Rows[0]['sale_item_id']
+            && $mov3Rows[1]['batch_id'] === null && (int)$mov3Rows[1]['quantity'] === -2 && (int)$mov3Rows[1]['sale_item_id'] === (int)$si3Rows[1]['sale_item_id']
             && (float)$res3['total_amount'] === 160.00
             && $invDupAfter === 1
+    );
+
+    // 3b. Duplicate batch-tracked lines preserve separate sale_item rows and distribute FEFO slices across them
+    $pDupFefo = $createGlobalProduct('ChkD Duplicate FEFO Item');
+    [$bpDupFefo, $invDupFefo] = $addBusinessProduct($pDupFefo, $unitA, 35.00, 5, 0, 0, 1);
+    $bDup1 = $addBatch($invDupFefo, 'CHK-DUP1', 'DATE_ADD(CURDATE(), INTERVAL 5 DAY)', 3);
+    $bDup2 = $addBatch($invDupFefo, 'CHK-DUP2', 'DATE_ADD(CURDATE(), INTERVAL 10 DAY)', 2);
+
+    try {
+        $service->recordSale($unitA, $empUid, $empId, null, 'Cash', [
+            ['business_product_id' => $bpDupFefo, 'quantity' => 3],
+            ['business_product_id' => $bpDupFefo, 'quantity' => 3],
+        ]);
+        check('Duplicate split FEFO lines exceeding eligible batch stock rejected', false);
+    } catch (RuntimeException $e) {
+        $bDup1Before = (int)$pdo->query("SELECT quantity FROM inventory_batch WHERE batch_id = {$bDup1}")->fetchColumn();
+        check(
+            'Duplicate split FEFO lines exceeding eligible batch stock rejected with ERR_UNPROCESSABLE and 0 batch deduction',
+            $e->getCode() === PosSaleService::ERR_UNPROCESSABLE && $bDup1Before === 3
+        );
+    }
+
+    $res3b = $service->recordSale($unitA, $empUid, $empId, null, 'Cash', [
+        ['business_product_id' => $bpDupFefo, 'quantity' => 2],
+        ['business_product_id' => $bpDupFefo, 'quantity' => 2],
+    ]);
+    $cleanup['sales'][] = $res3b['sale_id'];
+
+    $si3bRows = $pdo->query("SELECT sale_item_id, quantity FROM sale_item WHERE sale_id = {$res3b['sale_id']} ORDER BY sale_item_id ASC")->fetchAll(PDO::FETCH_ASSOC);
+    $mov3bRows = $pdo->query(
+        "SELECT sale_item_id, batch_id, quantity
+         FROM inventory_movement
+         WHERE sale_item_id IN (" . implode(',', array_column($si3bRows, 'sale_item_id')) . ")
+         ORDER BY movement_id ASC"
+    )->fetchAll(PDO::FETCH_ASSOC);
+    $bDup1After = (int)$pdo->query("SELECT quantity FROM inventory_batch WHERE batch_id = {$bDup1}")->fetchColumn();
+    $bDup2After = (int)$pdo->query("SELECT quantity FROM inventory_batch WHERE batch_id = {$bDup2}")->fetchColumn();
+    $invDupFefoAfter = (int)$pdo->query("SELECT on_hand FROM inventory WHERE inventory_id = {$invDupFefo}")->fetchColumn();
+    check(
+        'Duplicate batch-tracked lines preserve separate sale_item rows and distribute FEFO movements across items',
+        count($si3bRows) === 2
+            && count($mov3bRows) === 3
+            && (int)$mov3bRows[0]['sale_item_id'] === (int)$si3bRows[0]['sale_item_id'] && (int)$mov3bRows[0]['batch_id'] === $bDup1 && (int)$mov3bRows[0]['quantity'] === -2
+            && (int)$mov3bRows[1]['sale_item_id'] === (int)$si3bRows[1]['sale_item_id'] && (int)$mov3bRows[1]['batch_id'] === $bDup1 && (int)$mov3bRows[1]['quantity'] === -1
+            && (int)$mov3bRows[2]['sale_item_id'] === (int)$si3bRows[1]['sale_item_id'] && (int)$mov3bRows[2]['batch_id'] === $bDup2 && (int)$mov3bRows[2]['quantity'] === -1
+            && $bDup1After === 0
+            && $bDup2After === 1
+            && $invDupFefoAfter === 1
     );
 
     // 4. Active reservation hold protection on batch-tracked product
