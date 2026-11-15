@@ -23,7 +23,8 @@ final class Cart
     public static function items(int $cartId): array
     {
         $s = Database::pdo()->prepare('SELECT ci.cart_item_id, ci.quantity, bp.business_product_id, bp.business_unit_id, bp.selling_price, bp.product_status,
-                p.product_name, i.on_hand, i.committed, GREATEST(COALESCE(i.on_hand,0) - COALESCE(i.committed,0), 0) AS available
+                p.product_name, COALESCE(i.on_hand,0) AS on_hand, COALESCE(i.committed,0) AS committed, COALESCE(i.in_transit,0) AS in_transit,
+                (COALESCE(i.on_hand,0) + COALESCE(i.in_transit,0) - COALESCE(i.committed,0)) AS available
             FROM cart_item ci
             JOIN business_product bp ON bp.business_product_id = ci.business_product_id
             JOIN product p ON p.product_id = bp.product_id

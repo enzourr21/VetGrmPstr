@@ -93,6 +93,28 @@ final class PetStoreReceptionistController extends Controller
         return [(int)$uid, (int)$row['employee_id'], $unitId, $unitName, false];
     }
 
+    /**
+     * Build a one-row-per-parent subquery join for `payment` so order/sale listings never duplicate parent rows
+     * and never pick an arbitrary payment row when multiple payments or refunds exist.
+     */
+    private function paymentSummaryJoinSql(string $foreignKey, string $parentAlias, string $paymentAlias = 'p', string $summaryAlias = 'ps'): string
+    {
+        if (!in_array($foreignKey, ['order_id', 'sale_id'], true)) {
+            throw new \InvalidArgumentException('Unsupported payment foreign key: ' . $foreignKey);
+        }
+
+        return "LEFT JOIN (
+                    SELECT p_sub.{$foreignKey},
+                           MAX(CASE WHEN (p_sub.payment_type = 'refund' AND p_sub.payment_status = 'completed') OR p_sub.payment_status = 'refunded' THEN 1 ELSE 0 END) AS has_refunded,
+                           MAX(CASE WHEN p_sub.payment_type = 'payment' AND p_sub.payment_status = 'completed' THEN p_sub.payment_id END) AS latest_completed_payment_id,
+                           MAX(CASE WHEN p_sub.payment_type = 'payment' THEN p_sub.payment_id END) AS latest_payment_id
+                    FROM payment p_sub
+                    WHERE p_sub.{$foreignKey} IS NOT NULL
+                    GROUP BY p_sub.{$foreignKey}
+                ) {$summaryAlias} ON {$summaryAlias}.{$foreignKey} = {$parentAlias}.{$foreignKey}
+                LEFT JOIN payment {$paymentAlias} ON {$paymentAlias}.payment_id = COALESCE({$summaryAlias}.latest_completed_payment_id, {$summaryAlias}.latest_payment_id)";
+    }
+
     // ==========================================
     // 1. SALES PAGE & ACTIONS
     // ==========================================
@@ -163,11 +185,12 @@ final class PetStoreReceptionistController extends Controller
             "SELECT s.sale_id, s.sale_date, s.total_amount, s.sale_status, s.customer_id,
                     COALESCE(CONCAT(c.first_name, ' ', c.last_name), 'Walk-in Customer') AS customer_name,
                     c.phone AS customer_phone,
-                    p.payment_method, p.payment_status,
+                    p.payment_method,
+                    CASE WHEN COALESCE(ps.has_refunded, 0) = 1 THEN 'refunded' ELSE p.payment_status END AS payment_status,
                     (SELECT COUNT(*) FROM sale_item si WHERE si.sale_id = s.sale_id) AS item_count
              FROM sale s
              LEFT JOIN customer c ON c.customer_id = s.customer_id
-             LEFT JOIN payment p ON p.sale_id = s.sale_id
+             {$this->paymentSummaryJoinSql('sale_id', 's')}
              WHERE s.business_unit_id = ? AND s.sale_status = 'completed'
              ORDER BY s.sale_date DESC, s.sale_id DESC
              LIMIT ? OFFSET ?"
@@ -198,7 +221,8 @@ final class PetStoreReceptionistController extends Controller
             "SELECT bp.business_product_id, bp.selling_price,
                     p.product_name, p.sku, p.product_category,
                     i.inventory_id, COALESCE(i.on_hand, 0) AS on_hand, COALESCE(i.committed, 0) AS committed,
-                    (COALESCE(i.on_hand, 0) - COALESCE(i.committed, 0)) AS available_stock
+                    COALESCE(i.in_transit, 0) AS in_transit,
+                    (COALESCE(i.on_hand, 0) + COALESCE(i.in_transit, 0) - COALESCE(i.committed, 0)) AS available_stock
              FROM business_product bp
              JOIN product p ON p.product_id = bp.product_id
              LEFT JOIN inventory i ON i.business_product_id = bp.business_product_id
@@ -240,7 +264,8 @@ final class PetStoreReceptionistController extends Controller
         $sql = "SELECT bp.business_product_id, bp.selling_price,
                        p.product_name, p.sku, p.product_category,
                        COALESCE(i.on_hand, 0) AS on_hand, COALESCE(i.committed, 0) AS committed,
-                       (COALESCE(i.on_hand, 0) - COALESCE(i.committed, 0)) AS available_stock
+                       COALESCE(i.in_transit, 0) AS in_transit,
+                       (COALESCE(i.on_hand, 0) + COALESCE(i.in_transit, 0) - COALESCE(i.committed, 0)) AS available_stock
                 FROM business_product bp
                 JOIN product p ON p.product_id = bp.product_id
                 LEFT JOIN inventory i ON i.business_product_id = bp.business_product_id
@@ -261,7 +286,7 @@ final class PetStoreReceptionistController extends Controller
 
         $results = [];
         foreach ($rows as $r) {
-            $stock = max(0, (int)$r['available_stock']);
+            $stock = (int)$r['available_stock'];
             $results[] = [
                 'business_product_id' => (int)$r['business_product_id'],
                 'product_name' => $r['product_name'],
@@ -403,7 +428,8 @@ final class PetStoreReceptionistController extends Controller
             // Verify product belongs to Pet Store and fetch current price & inventory
             $pStmt = $this->db->prepare(
                 "SELECT bp.business_product_id, bp.selling_price, p.product_name,
-                        i.inventory_id, COALESCE(i.on_hand, 0) AS on_hand, COALESCE(i.committed, 0) AS committed
+                        i.inventory_id, COALESCE(i.on_hand, 0) AS on_hand, COALESCE(i.committed, 0) AS committed,
+                        COALESCE(i.in_transit, 0) AS in_transit
                  FROM business_product bp
                  JOIN product p ON p.product_id = bp.product_id
                  LEFT JOIN inventory i ON i.business_product_id = bp.business_product_id
@@ -418,7 +444,7 @@ final class PetStoreReceptionistController extends Controller
                 return;
             }
 
-            $availStock = (int)$prod['on_hand'] - (int)$prod['committed'];
+            $availStock = ((int)$prod['on_hand'] + (int)$prod['in_transit']) - (int)$prod['committed'];
             if ($qty > $availStock) {
                 $this->flash('error', "Insufficient stock for '{$prod['product_name']}'. Available: {$availStock}, requested: {$qty}.");
                 $this->redirect('/petstore/receptionist/sales');
@@ -528,12 +554,13 @@ final class PetStoreReceptionistController extends Controller
 
         $sql = "SELECT co.*, CONCAT(c.first_name, ' ', c.last_name) AS customer_name,
                        c.phone AS customer_phone, ua.email AS customer_email,
-                       p.payment_method, p.payment_status,
+                       p.payment_method,
+                       CASE WHEN COALESCE(ps.has_refunded, 0) = 1 THEN 'refunded' ELSE p.payment_status END AS payment_status,
                        CONCAT(deliv_emp.first_name, ' ', deliv_emp.last_name) AS delivery_employee_name
                 FROM customer_order co
                 JOIN customer c ON c.customer_id = co.customer_id
                 LEFT JOIN user_account ua ON ua.user_account_id = c.user_account_id
-                LEFT JOIN payment p ON p.order_id = co.order_id
+                {$this->paymentSummaryJoinSql('order_id', 'co')}
                 LEFT JOIN employee deliv_emp ON deliv_emp.employee_id = co.delivery_employee_id
                 WHERE co.business_unit_id = ?";
         $params = [$unitId];
@@ -597,12 +624,13 @@ final class PetStoreReceptionistController extends Controller
                 $sOrd = $this->db->prepare(
                     "SELECT co.*, CONCAT(c.first_name, ' ', c.last_name) AS customer_name,
                             c.phone AS customer_phone, ua.email AS customer_email,
-                            p.payment_method, p.payment_status,
+                            p.payment_method,
+                            CASE WHEN COALESCE(ps.has_refunded, 0) = 1 THEN 'refunded' ELSE p.payment_status END AS payment_status,
                             CONCAT(deliv_emp.first_name, ' ', deliv_emp.last_name) AS delivery_employee_name
                      FROM customer_order co
                      JOIN customer c ON c.customer_id = co.customer_id
                      LEFT JOIN user_account ua ON ua.user_account_id = c.user_account_id
-                     LEFT JOIN payment p ON p.order_id = co.order_id
+                     {$this->paymentSummaryJoinSql('order_id', 'co')}
                      LEFT JOIN employee deliv_emp ON deliv_emp.employee_id = co.delivery_employee_id
                      WHERE co.order_id = ? AND co.business_unit_id = ?
                      LIMIT 1"
@@ -648,12 +676,13 @@ final class PetStoreReceptionistController extends Controller
         $stmt = $this->db->prepare(
             "SELECT co.*, CONCAT(c.first_name, ' ', c.last_name) AS customer_name,
                     c.phone AS customer_phone, ua.email AS customer_email,
-                    p.payment_method, p.payment_status,
+                    p.payment_method,
+                    CASE WHEN COALESCE(ps.has_refunded, 0) = 1 THEN 'refunded' ELSE p.payment_status END AS payment_status,
                     CONCAT(deliv_emp.first_name, ' ', deliv_emp.last_name) AS delivery_employee_name
              FROM customer_order co
              JOIN customer c ON c.customer_id = co.customer_id
              LEFT JOIN user_account ua ON ua.user_account_id = c.user_account_id
-             LEFT JOIN payment p ON p.order_id = co.order_id
+             {$this->paymentSummaryJoinSql('order_id', 'co')}
              LEFT JOIN employee deliv_emp ON deliv_emp.employee_id = co.delivery_employee_id
              WHERE co.order_id = ? AND co.business_unit_id = ?
              LIMIT 1"

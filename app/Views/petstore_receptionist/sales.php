@@ -391,7 +391,7 @@ $title = $title ?? 'Sales · Pet Store Receptionist';
       'product_category' => (string)($p['product_category'] ?? ''),
       'sku' => (string)($p['sku'] ?? ''),
       'selling_price' => (float)$p['selling_price'],
-      'available_stock' => max(0, (int)$p['available_stock']),
+      'available_stock' => (int)$p['available_stock'],
       'in_stock' => ((int)$p['available_stock']) > 0,
     ];
   }, $availableProducts ?? []), JSON_UNESCAPED_UNICODE) ?>;

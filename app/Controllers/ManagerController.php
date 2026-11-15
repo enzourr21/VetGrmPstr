@@ -163,6 +163,28 @@ final class ManagerController extends Controller
         return [(int)$uid, $empId, $empUnitId, (string)$emp['business_unit_name'], false, true, true, $validGrant];
     }
 
+    /**
+     * Build a one-row-per-parent subquery join for `payment` so order/sale listings never duplicate parent rows
+     * and never pick an arbitrary payment row when multiple payments or refunds exist.
+     */
+    private function paymentSummaryJoinSql(string $foreignKey, string $parentAlias, string $paymentAlias = 'p', string $summaryAlias = 'ps'): string
+    {
+        if (!in_array($foreignKey, ['order_id', 'sale_id'], true)) {
+            throw new \InvalidArgumentException('Unsupported payment foreign key: ' . $foreignKey);
+        }
+
+        return "LEFT JOIN (
+                    SELECT p_sub.{$foreignKey},
+                           MAX(CASE WHEN (p_sub.payment_type = 'refund' AND p_sub.payment_status = 'completed') OR p_sub.payment_status = 'refunded' THEN 1 ELSE 0 END) AS has_refunded,
+                           MAX(CASE WHEN p_sub.payment_type = 'payment' AND p_sub.payment_status = 'completed' THEN p_sub.payment_id END) AS latest_completed_payment_id,
+                           MAX(CASE WHEN p_sub.payment_type = 'payment' THEN p_sub.payment_id END) AS latest_payment_id
+                    FROM payment p_sub
+                    WHERE p_sub.{$foreignKey} IS NOT NULL
+                    GROUP BY p_sub.{$foreignKey}
+                ) {$summaryAlias} ON {$summaryAlias}.{$foreignKey} = {$parentAlias}.{$foreignKey}
+                LEFT JOIN payment {$paymentAlias} ON {$paymentAlias}.payment_id = COALESCE({$summaryAlias}.latest_completed_payment_id, {$summaryAlias}.latest_payment_id)";
+    }
+
     // ==========================================
     // 1. OVERVIEW PAGE
     // ==========================================
@@ -231,13 +253,14 @@ final class ManagerController extends Controller
                     p.product_name, p.product_category,
                     COALESCE(i.on_hand, 0) AS on_hand,
                     COALESCE(i.committed, 0) AS committed,
-                    GREATEST(COALESCE(i.on_hand, 0) - COALESCE(i.committed, 0), 0) AS available
+                    COALESCE(i.in_transit, 0) AS in_transit,
+                    (COALESCE(i.on_hand, 0) + COALESCE(i.in_transit, 0) - COALESCE(i.committed, 0)) AS available
              FROM business_product bp
              JOIN product p ON p.product_id = bp.product_id
              LEFT JOIN inventory i ON i.business_product_id = bp.business_product_id
              WHERE bp.business_unit_id = ?
                AND bp.product_status = 'active'
-               AND GREATEST(COALESCE(i.on_hand, 0) - COALESCE(i.committed, 0), 0) <= 10
+               AND (COALESCE(i.on_hand, 0) + COALESCE(i.in_transit, 0) - COALESCE(i.committed, 0)) <= 10
              ORDER BY available ASC, p.product_name ASC"
         );
         $lowStockStmt->execute([$unitId]);
@@ -366,7 +389,8 @@ final class ManagerController extends Controller
                     p.product_name, p.product_category,
                     COALESCE(i.on_hand, 0) AS on_hand,
                     COALESCE(i.committed, 0) AS committed,
-                    GREATEST(COALESCE(i.on_hand, 0) - COALESCE(i.committed, 0), 0) AS available
+                    COALESCE(i.in_transit, 0) AS in_transit,
+                    (COALESCE(i.on_hand, 0) + COALESCE(i.in_transit, 0) - COALESCE(i.committed, 0)) AS available
              FROM business_product bp
              JOIN product p ON p.product_id = bp.product_id
              LEFT JOIN inventory i ON i.business_product_id = bp.business_product_id
@@ -443,7 +467,8 @@ final class ManagerController extends Controller
                     p.product_name, p.product_category, p.sku,
                     COALESCE(i.on_hand, 0) AS on_hand,
                     COALESCE(i.committed, 0) AS committed,
-                    GREATEST(COALESCE(i.on_hand, 0) - COALESCE(i.committed, 0), 0) AS available,
+                    COALESCE(i.in_transit, 0) AS in_transit,
+                    (COALESCE(i.on_hand, 0) + COALESCE(i.in_transit, 0) - COALESCE(i.committed, 0)) AS available,
                     ib.batch_id, ib.batch_number, ib.expiration_date, ib.quantity AS batch_quantity
              FROM business_product bp
              JOIN product p ON p.product_id = bp.product_id
@@ -452,7 +477,7 @@ final class ManagerController extends Controller
              WHERE bp.business_unit_id = ?
                AND bp.product_status = 'active'
                AND (
-                 GREATEST(COALESCE(i.on_hand, 0) - COALESCE(i.committed, 0), 0) <= 10
+                 (COALESCE(i.on_hand, 0) + COALESCE(i.in_transit, 0) - COALESCE(i.committed, 0)) <= 10
                  OR (bp.requires_batch_tracking = 1 AND ib.expiration_date IS NOT NULL AND ib.expiration_date <= DATE_ADD(CURDATE(), INTERVAL 30 DAY))
                )
              ORDER BY
@@ -2929,10 +2954,11 @@ final class ManagerController extends Controller
         $walkSql = "SELECT s.sale_id, s.sale_date, s.total_amount, s.sale_status,
                            COALESCE(CONCAT(c.first_name, ' ', c.last_name), 'Walk-in Customer') AS customer_name,
                            (SELECT COUNT(*) FROM sale_item si WHERE si.sale_id = s.sale_id) AS item_count,
-                           p.payment_method, p.payment_status
+                           p.payment_method,
+                           CASE WHEN COALESCE(ps.has_refunded, 0) = 1 THEN 'refunded' ELSE p.payment_status END AS payment_status
                     FROM sale s
                     LEFT JOIN customer c ON c.customer_id = s.customer_id
-                    LEFT JOIN payment p ON p.sale_id = s.sale_id
+                    {$this->paymentSummaryJoinSql('sale_id', 's')}
                     WHERE s.business_unit_id = ?";
         $walkParams = [$unitId];
         if ($tab === 'walkin' && $q !== '') {
@@ -2966,11 +2992,12 @@ final class ManagerController extends Controller
         $onlineOrders = [];
         $onSql = "SELECT co.*, CONCAT(c.first_name, ' ', c.last_name) AS customer_name,
                          ua.email AS customer_email, c.phone AS customer_phone,
-                         p.payment_method, p.payment_status
+                         p.payment_method,
+                         CASE WHEN COALESCE(ps.has_refunded, 0) = 1 THEN 'refunded' ELSE p.payment_status END AS payment_status
                   FROM customer_order co
                   JOIN customer c ON c.customer_id = co.customer_id
                   LEFT JOIN user_account ua ON ua.user_account_id = c.user_account_id
-                  LEFT JOIN payment p ON p.order_id = co.order_id
+                  {$this->paymentSummaryJoinSql('order_id', 'co')}
                   WHERE co.business_unit_id = ?";
         $onParams = [$unitId];
         if ($tab === 'online' && $q !== '') {
@@ -3502,7 +3529,8 @@ final class ManagerController extends Controller
                             i.inventory_id,
                             COALESCE(i.on_hand, 0) AS on_hand,
                             COALESCE(i.committed, 0) AS committed,
-                            GREATEST(COALESCE(i.on_hand, 0) - COALESCE(i.committed, 0), 0) AS available
+                            COALESCE(i.in_transit, 0) AS in_transit,
+                            (COALESCE(i.on_hand, 0) + COALESCE(i.in_transit, 0) - COALESCE(i.committed, 0)) AS available
                      FROM business_product bp
                      JOIN product p ON p.product_id = bp.product_id
                      LEFT JOIN inventory i ON i.business_product_id = bp.business_product_id
@@ -3552,15 +3580,16 @@ final class ManagerController extends Controller
             $item['batches'] = $batches;
             $item['expired_quantity'] = $expiredQty;
             $requiresBatch = !empty($item['requires_batch_tracking']);
+            $inTransit = (int)($item['in_transit'] ?? 0);
 
             if ($requiresBatch) {
                 // Rule 6: Expired batches must not be counted as usable available stock
                 $usableOnHand = max(0, (int)$item['on_hand'] - $expiredQty);
                 $item['usable_on_hand'] = $usableOnHand;
-                $item['available'] = max(0, $usableOnHand - (int)$item['committed']);
+                $item['available'] = ($usableOnHand + $inTransit) - (int)$item['committed'];
             } else {
                 $item['usable_on_hand'] = (int)$item['on_hand'];
-                $item['available'] = max(0, (int)$item['on_hand'] - (int)$item['committed']);
+                $item['available'] = ((int)$item['on_hand'] + $inTransit) - (int)$item['committed'];
             }
         }
         unset($item);
@@ -3570,7 +3599,8 @@ final class ManagerController extends Controller
             "SELECT bp.business_product_id, bp.selling_price, bp.requires_batch_tracking, p.product_name, p.sku,
                     COALESCE(i.on_hand, 0) AS on_hand,
                     COALESCE(i.committed, 0) AS committed,
-                    GREATEST(COALESCE(i.on_hand, 0) - COALESCE(i.committed, 0), 0) AS available
+                    COALESCE(i.in_transit, 0) AS in_transit,
+                    (COALESCE(i.on_hand, 0) + COALESCE(i.in_transit, 0) - COALESCE(i.committed, 0)) AS available
              FROM business_product bp
              JOIN product p ON p.product_id = bp.product_id
              LEFT JOIN inventory i ON i.business_product_id = bp.business_product_id
@@ -3670,7 +3700,8 @@ final class ManagerController extends Controller
                 "SELECT pori.*, p.product_name, p.sku,
                         COALESCE(i.on_hand, 0) AS on_hand,
                         COALESCE(i.committed, 0) AS committed,
-                        GREATEST(COALESCE(i.on_hand, 0) - COALESCE(i.committed, 0), 0) AS available
+                        COALESCE(i.in_transit, 0) AS in_transit,
+                        (COALESCE(i.on_hand, 0) + COALESCE(i.in_transit, 0) - COALESCE(i.committed, 0)) AS available
                  FROM purchase_order_request_item pori
                  JOIN business_product bp ON bp.business_product_id = pori.business_product_id
                  JOIN product p ON p.product_id = bp.product_id
@@ -4656,12 +4687,13 @@ final class ManagerController extends Controller
 
         $sql = "SELECT co.*, CONCAT(c.first_name, ' ', c.last_name) AS customer_name,
                        ua.email AS customer_email, c.phone AS customer_phone,
-                       p.payment_method, p.payment_status,
+                       p.payment_method,
+                       CASE WHEN COALESCE(ps.has_refunded, 0) = 1 THEN 'refunded' ELSE p.payment_status END AS payment_status,
                        CONCAT(deliv_emp.first_name, ' ', deliv_emp.last_name) AS delivery_employee_name
                 FROM customer_order co
                 JOIN customer c ON c.customer_id = co.customer_id
                 LEFT JOIN user_account ua ON ua.user_account_id = c.user_account_id
-                LEFT JOIN payment p ON p.order_id = co.order_id
+                {$this->paymentSummaryJoinSql('order_id', 'co')}
                 LEFT JOIN employee deliv_emp ON deliv_emp.employee_id = co.delivery_employee_id
                 WHERE co.business_unit_id = ?";
         $params = [$unitId];

@@ -55,7 +55,7 @@ final class OrderController extends Controller
                 $cartId = Cart::id($cid, $bu);
                 // Prices and stock are read from the DB inside the transaction; nothing comes from the browser.
                 $s = $this->db->prepare('SELECT ci.cart_item_id, ci.quantity, bp.business_product_id, bp.business_unit_id, bp.selling_price, bp.product_status,
-                        p.product_name, i.inventory_id, COALESCE(i.on_hand,0) AS on_hand, COALESCE(i.committed,0) AS committed
+                        p.product_name, i.inventory_id, COALESCE(i.on_hand,0) AS on_hand, COALESCE(i.committed,0) AS committed, COALESCE(i.in_transit,0) AS in_transit
                     FROM cart_item ci
                     JOIN business_product bp ON bp.business_product_id=ci.business_product_id
                     JOIN product p ON p.product_id=bp.product_id
@@ -68,14 +68,15 @@ final class OrderController extends Controller
                 }
                 $total = 0.0;
                 foreach ($lines as $l) {
+                    $available = ((int)$l['on_hand'] + (int)$l['in_transit']) - (int)$l['committed'];
                     if ((int)$l['business_unit_id'] !== $bu) {
                         $errors[] = $l['product_name'] . ' does not belong to this shop and cannot be ordered here.';
                     } elseif ($l['product_status'] !== 'active') {
                         $errors[] = $l['product_name'] . ' is no longer available.';
                     } elseif ((int)$l['quantity'] < 1 || (int)$l['quantity'] > Cart::MAX_QTY) {
                         $errors[] = 'Invalid quantity for ' . $l['product_name'] . '.';
-                    } elseif ($l['inventory_id'] === null || (int)$l['on_hand'] - (int)$l['committed'] < (int)$l['quantity']) {
-                        $errors[] = 'Not enough stock for ' . $l['product_name'] . ' (' . max(0, (int)$l['on_hand'] - (int)$l['committed']) . ' available).';
+                    } elseif ($l['inventory_id'] === null || $available < (int)$l['quantity']) {
+                        $errors[] = 'Not enough stock for ' . $l['product_name'] . ' (' . $available . ' available).';
                     }
                     $total += (float)$l['selling_price'] * (int)$l['quantity'];
                 }

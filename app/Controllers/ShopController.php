@@ -17,7 +17,7 @@ final class ShopController extends Controller
         $allProducts = $this->db->query(
             "SELECT bp.business_product_id, bp.business_unit_id, bp.selling_price,
                     bu.business_unit_name, p.product_name, p.description, p.product_category,
-                    GREATEST(COALESCE(i.on_hand,0)-COALESCE(i.committed,0),0) AS available
+                    (COALESCE(i.on_hand,0) + COALESCE(i.in_transit,0) - COALESCE(i.committed,0)) AS available
              FROM business_product bp
              JOIN product p ON p.product_id = bp.product_id
              JOIN business_unit bu ON bu.business_unit_id = bp.business_unit_id
@@ -39,7 +39,7 @@ final class ShopController extends Controller
         $cid = Session::get('customer_id');
         $unit = Units::find($bu) ?? $this->notFound();
         $s = $this->db->prepare('SELECT bp.business_product_id, bp.selling_price, p.product_name, p.description, p.product_category,
-                GREATEST(COALESCE(i.on_hand,0)-COALESCE(i.committed,0),0) AS available
+                (COALESCE(i.on_hand,0) + COALESCE(i.in_transit,0) - COALESCE(i.committed,0)) AS available
             FROM business_product bp JOIN product p ON p.product_id=bp.product_id
             LEFT JOIN inventory i ON i.business_product_id=bp.business_product_id
             WHERE bp.business_unit_id=? AND bp.product_status="active" ORDER BY p.product_name');
@@ -57,7 +57,7 @@ final class ShopController extends Controller
     {
         $unit = Units::find($bu) ?? $this->notFound();
         $s = $this->db->prepare('SELECT bp.business_product_id, bp.selling_price, p.product_name, p.description, p.product_category,
-                GREATEST(COALESCE(i.on_hand,0)-COALESCE(i.committed,0),0) AS available
+                (COALESCE(i.on_hand,0) + COALESCE(i.in_transit,0) - COALESCE(i.committed,0)) AS available
             FROM business_product bp JOIN product p ON p.product_id=bp.product_id
             LEFT JOIN inventory i ON i.business_product_id=bp.business_product_id
             WHERE bp.business_product_id=? AND bp.business_unit_id=? AND bp.product_status="active"');

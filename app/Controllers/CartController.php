@@ -37,7 +37,7 @@ final class CartController extends Controller
             $this->redirect("/shop/$bu");
         }
         // product must be active AND belong to this business unit
-        $s = $this->db->prepare('SELECT GREATEST(COALESCE(i.on_hand,0)-COALESCE(i.committed,0),0) AS available
+        $s = $this->db->prepare('SELECT (COALESCE(i.on_hand,0) + COALESCE(i.in_transit,0) - COALESCE(i.committed,0)) AS available
             FROM business_product bp LEFT JOIN inventory i ON i.business_product_id=bp.business_product_id
             WHERE bp.business_product_id=? AND bp.business_unit_id=? AND bp.product_status="active"');
         $s->execute([$bpId, $bu]);

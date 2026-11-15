@@ -45,7 +45,7 @@ class InventoryBatch
     public static function calculateStockMetrics(PDO $db, int $businessProductId): array
     {
         $stmt = $db->prepare(
-            "SELECT i.inventory_id, i.on_hand, i.committed, bp.requires_batch_tracking
+            "SELECT i.inventory_id, i.on_hand, i.committed, COALESCE(i.in_transit, 0) AS in_transit, bp.requires_batch_tracking
              FROM inventory i
              JOIN business_product bp ON bp.business_product_id = i.business_product_id
              WHERE i.business_product_id = ?"
@@ -57,6 +57,7 @@ class InventoryBatch
                 'inventory_id' => 0,
                 'on_hand' => 0,
                 'committed' => 0,
+                'in_transit' => 0,
                 'expired_quantity' => 0,
                 'usable_on_hand' => 0,
                 'available' => 0,
@@ -66,6 +67,7 @@ class InventoryBatch
 
         $onHand = (int)$inv['on_hand'];
         $committed = (int)$inv['committed'];
+        $inTransit = (int)$inv['in_transit'];
         $requiresBatch = !empty($inv['requires_batch_tracking']);
         $batches = $requiresBatch ? self::getBatchesForProduct($db, $businessProductId) : [];
 
@@ -77,12 +79,13 @@ class InventoryBatch
         }
 
         $usableOnHand = max(0, $onHand - $expiredQty);
-        $available = max(0, $usableOnHand - $committed);
+        $available = ($usableOnHand + $inTransit) - $committed;
 
         return [
             'inventory_id' => (int)$inv['inventory_id'],
             'on_hand' => $onHand,
             'committed' => $committed,
+            'in_transit' => $inTransit,
             'expired_quantity' => $expiredQty,
             'usable_on_hand' => $usableOnHand,
             'available' => $available,
@@ -233,7 +236,8 @@ class InventoryBatch
             "SELECT bp.business_product_id, bp.requires_batch_tracking,
                     COALESCE(i.inventory_id, 0) AS inventory_id,
                     COALESCE(i.on_hand, 0) AS on_hand,
-                    COALESCE(i.committed, 0) AS committed
+                    COALESCE(i.committed, 0) AS committed,
+                    COALESCE(i.in_transit, 0) AS in_transit
              FROM business_product bp
              LEFT JOIN inventory i ON i.business_product_id = bp.business_product_id
              WHERE bp.business_unit_id = ? AND bp.product_status = 'active'"
@@ -264,6 +268,7 @@ class InventoryBatch
         foreach ($products as $p) {
             $onHand = (int)$p['on_hand'];
             $committed = (int)$p['committed'];
+            $inTransit = (int)$p['in_transit'];
             $totalPhysicalStock += $onHand;
 
             $invId = (int)$p['inventory_id'];
@@ -286,7 +291,7 @@ class InventoryBatch
             }
 
             $usableOnHand = max(0, $onHand - $pExpiredQty);
-            $available = max(0, $usableOnHand - $committed);
+            $available = ($usableOnHand + $inTransit) - $committed;
 
             if ($available <= 0) {
                 $outOfStockCount++;

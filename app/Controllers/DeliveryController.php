@@ -178,7 +178,7 @@ final class DeliveryController extends Controller
             "SELECT payment_method, payment_status
              FROM payment
              WHERE order_id = ? AND payment_type = 'payment'
-             ORDER BY payment_id DESC
+             ORDER BY (payment_status = 'completed') DESC, payment_id DESC
              LIMIT 1"
         );
         $payStmt->execute([$orderId]);
@@ -228,7 +228,7 @@ final class DeliveryController extends Controller
                     SELECT p2.payment_id
                     FROM payment p2
                     WHERE p2.order_id = co.order_id AND p2.payment_type = 'payment'
-                    ORDER BY p2.payment_id DESC
+                    ORDER BY (p2.payment_status = 'completed') DESC, p2.payment_id DESC
                     LIMIT 1
                 )
                 LEFT JOIN employee deliv_emp ON deliv_emp.employee_id = co.delivery_employee_id
@@ -338,7 +338,7 @@ final class DeliveryController extends Controller
                          SELECT p2.payment_id
                          FROM payment p2
                          WHERE p2.order_id = co.order_id AND p2.payment_type = 'payment'
-                         ORDER BY p2.payment_id DESC
+                         ORDER BY (p2.payment_status = 'completed') DESC, p2.payment_id DESC
                          LIMIT 1
                      )
                      LEFT JOIN employee deliv_emp ON deliv_emp.employee_id = co.delivery_employee_id
