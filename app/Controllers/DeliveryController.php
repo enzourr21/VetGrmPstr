@@ -383,113 +383,36 @@ final class DeliveryController extends Controller
         $empId = $auth['emp_id'];
 
         try {
-            $this->db->beginTransaction();
-
-            $stmt = $this->db->prepare(
-                "SELECT * FROM customer_order WHERE order_id = ? AND business_unit_id = ? FOR UPDATE"
-            );
-            $stmt->execute([$orderId, self::PET_STORE_UNIT_ID]);
-            $order = $stmt->fetch();
-
-            if (!$order) {
-                $this->db->rollBack();
-                $this->notFound();
-            }
-
-            if ($order['fulfillment_method'] !== 'delivery') {
-                $this->db->rollBack();
-                $this->forbidden('Only delivery orders may be dispatched by Delivery Personnel.');
-            }
-
-            $currentStatus = (string)$order['order_status'];
-            $assignedEmpId = $order['delivery_employee_id'] !== null ? (int)$order['delivery_employee_id'] : null;
-
-            if ($currentStatus === 'processing') {
-                if ($assignedEmpId !== null && $assignedEmpId !== $empId) {
-                    $this->db->rollBack();
-                    $this->flash('error', "Order #ORD-{$orderId} has already been claimed by another courier.");
-                    $this->redirect('/delivery/orders?tab=queue');
-                    return;
-                }
-                try {
-                    $reservationService = new OrderReservationService($this->db);
-                    $reservationService->assertDeliveryOrderReservedForDispatch($orderId, self::PET_STORE_UNIT_ID);
-                } catch (RuntimeException $resEx) {
-                    $this->db->rollBack();
-                    $code = $resEx->getCode();
-                    if ($code === OrderReservationService::ERR_NOT_FOUND) {
-                        $this->notFound();
-                    }
-                    if ($code === OrderReservationService::ERR_FORBIDDEN) {
-                        $this->forbidden($resEx->getMessage());
-                    }
-                    $this->flash('error', $resEx->getMessage());
-                    $this->redirect('/delivery/orders?tab=queue&view=' . $orderId);
-                    return;
-                }
-                $actionCode = 'delivery.dispatched';
-            } elseif (in_array($currentStatus, ['pending', 'confirmed'], true)) {
-                $this->db->rollBack();
-                $this->flash(
-                    'error',
-                    "Order #ORD-{$orderId} must be confirmed, reserved, and prepared (Processing) by the Pet Store Receptionist before Delivery Personnel can dispatch it."
-                );
-                $this->redirect('/delivery/orders?tab=queue&view=' . $orderId);
-                return;
-            } elseif ($currentStatus === 'delivery_failed') {
-                $this->db->rollBack();
-                $this->flash(
-                    'error',
-                    "Order #ORD-{$orderId} is marked Delivery Failed and cannot be re-dispatched. Failed-delivery return inspection and reconciliation are not enabled."
-                );
-                $this->redirect('/delivery/orders?tab=history&view=' . $orderId);
-                return;
-            } else {
-                $this->db->rollBack();
-                $this->flash('error', "Order #ORD-{$orderId} cannot be dispatched from status '{$currentStatus}'.");
-                $this->redirect('/delivery/orders?tab=queue&view=' . $orderId);
-                return;
-            }
-
-            $eligibility = $this->evaluatePaymentEligibility($orderId);
-            if (!$eligibility['eligible']) {
-                $this->db->rollBack();
-                $this->flash('error', (string)$eligibility['reason']);
-                $this->redirect('/delivery/orders?tab=queue&view=' . $orderId);
-                return;
-            }
-
-            $up = $this->db->prepare(
-                "UPDATE customer_order
-                 SET order_status = 'out_for_delivery', delivery_employee_id = ?, updated_at = NOW()
-                 WHERE order_id = ?"
-            );
-            $up->execute([$empId, $orderId]);
-
-            $oldCourierLabel = $assignedEmpId !== null ? (string)$assignedEmpId : 'none';
-            $summary = "Claimed and dispatched delivery order #ORD-{$orderId} (out for delivery).";
-
-            Audit::record(
-                $this->db,
-                $actionCode,
-                $summary,
+            $reservationService = new OrderReservationService($this->db);
+            $reservationService->dispatchDeliveryOrder(
+                $orderId,
                 self::PET_STORE_UNIT_ID,
-                $uid,
                 $empId,
-                "status:{$currentStatus}; courier:{$oldCourierLabel}",
-                "status:out_for_delivery; courier:{$empId}",
-                'customer_order',
-                $orderId
+                $uid,
+                function () use ($orderId): void {
+                    $eligibility = $this->evaluatePaymentEligibility($orderId);
+                    if (!$eligibility['eligible']) {
+                        throw new RuntimeException(
+                            (string)$eligibility['reason'],
+                            OrderReservationService::ERR_UNPROCESSABLE
+                        );
+                    }
+                }
             );
 
-            $this->db->commit();
             $this->flash('success', "Order #ORD-{$orderId} is now Out for Delivery.");
             $this->redirect('/delivery/orders?tab=active&view=' . $orderId);
-        } catch (Throwable $e) {
-            if ($this->db->inTransaction()) {
-                $this->db->rollBack();
+        } catch (RuntimeException $e) {
+            $code = $e->getCode();
+            if ($code === OrderReservationService::ERR_NOT_FOUND) {
+                $this->notFound();
             }
-            throw $e;
+            if ($code === OrderReservationService::ERR_FORBIDDEN) {
+                $this->forbidden($e->getMessage());
+            }
+            $this->flash('error', $e->getMessage());
+            $tab = str_contains($e->getMessage(), 'Delivery Failed') ? 'history' : 'queue';
+            $this->redirect("/delivery/orders?tab={$tab}&view=" . $orderId);
         }
     }
 
@@ -501,62 +424,21 @@ final class DeliveryController extends Controller
         $empId = $auth['emp_id'];
 
         try {
-            $this->db->beginTransaction();
+            $reservationService = new OrderReservationService($this->db);
+            $reservationService->completeDeliveryOrder($orderId, self::PET_STORE_UNIT_ID, $empId, $uid);
 
-            $stmt = $this->db->prepare(
-                "SELECT * FROM customer_order WHERE order_id = ? AND business_unit_id = ? FOR UPDATE"
-            );
-            $stmt->execute([$orderId, self::PET_STORE_UNIT_ID]);
-            $order = $stmt->fetch();
-
-            if (!$order) {
-                $this->db->rollBack();
-                $this->notFound();
-            }
-
-            if ($order['fulfillment_method'] !== 'delivery') {
-                $this->db->rollBack();
-                $this->forbidden('Only delivery orders may be completed by Delivery Personnel.');
-            }
-
-            if ((int)($order['delivery_employee_id'] ?? 0) !== $empId) {
-                $this->db->rollBack();
-                $this->forbidden('Only the assigned courier may complete this delivery.');
-            }
-
-            if ($order['order_status'] !== 'out_for_delivery') {
-                $this->db->rollBack();
-                $this->flash('error', "Order #ORD-{$orderId} must be Out for Delivery before it can be marked completed.");
-                $this->redirect('/delivery/orders?tab=active&view=' . $orderId);
-                return;
-            }
-
-            $up = $this->db->prepare(
-                "UPDATE customer_order SET order_status = 'completed', updated_at = NOW() WHERE order_id = ?"
-            );
-            $up->execute([$orderId]);
-
-            Audit::record(
-                $this->db,
-                'delivery.completed',
-                "Marked delivery order #ORD-{$orderId} as delivered and completed.",
-                self::PET_STORE_UNIT_ID,
-                $uid,
-                $empId,
-                "status:out_for_delivery; courier:{$empId}",
-                "status:completed; courier:{$empId}",
-                'customer_order',
-                $orderId
-            );
-
-            $this->db->commit();
             $this->flash('success', "Order #ORD-{$orderId} marked as Completed.");
             $this->redirect('/delivery/orders?tab=history&view=' . $orderId);
-        } catch (Throwable $e) {
-            if ($this->db->inTransaction()) {
-                $this->db->rollBack();
+        } catch (RuntimeException $e) {
+            $code = $e->getCode();
+            if ($code === OrderReservationService::ERR_NOT_FOUND) {
+                $this->notFound();
             }
-            throw $e;
+            if ($code === OrderReservationService::ERR_FORBIDDEN) {
+                $this->forbidden($e->getMessage());
+            }
+            $this->flash('error', $e->getMessage());
+            $this->redirect('/delivery/orders?tab=active&view=' . $orderId);
         }
     }
 

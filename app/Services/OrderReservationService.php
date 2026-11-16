@@ -154,6 +154,410 @@ final class OrderReservationService
     }
 
     /**
+     * Atomically dispatch a prepared ('processing') Pet Store delivery order:
+     * moves reserved stock from inventory.on_hand (and pinned inventory_batch.quantity)
+     * into inventory.in_transit while retaining inventory.committed, transitions reservations
+     * from 'active' to 'in_transit', logs 'order_dispatch' movements, assigns courier, and audits.
+     *
+     * @param callable():void|null $paymentEligibilityCheck
+     * @return array{order_id:int, order_status:string, dispatched_quantity:int, reservations_dispatched:int, movements_created:int}
+     * @throws RuntimeException
+     * @throws Throwable
+     */
+    public function dispatchDeliveryOrder(
+        int $orderId,
+        int $businessUnitId,
+        int $courierEmployeeId,
+        int $actorUserId,
+        ?callable $paymentEligibilityCheck = null
+    ): array {
+        $this->assertTopLevelTransaction('Delivery order dispatch');
+
+        $this->db->exec('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
+        $this->db->beginTransaction();
+        try {
+            // 1. Lock order exclusively and verify scope, fulfillment method, status, and courier ownership.
+            $order = $this->lockDeliveryOrder($orderId, $businessUnitId);
+            $currentStatus = (string)$order['order_status'];
+            $assignedEmpId = $order['delivery_employee_id'] !== null ? (int)$order['delivery_employee_id'] : null;
+
+            if ($currentStatus === 'delivery_failed') {
+                throw new RuntimeException(
+                    "Order #ORD-{$orderId} is marked Delivery Failed and cannot be re-dispatched. Failed-delivery return inspection and reconciliation are not enabled.",
+                    self::ERR_CONFLICT
+                );
+            }
+            if (in_array($currentStatus, ['pending', 'confirmed'], true)) {
+                throw new RuntimeException(
+                    "Order #ORD-{$orderId} must be confirmed, reserved, and prepared (Processing) by the Pet Store Receptionist before Delivery Personnel can dispatch it.",
+                    self::ERR_CONFLICT
+                );
+            }
+            if ($currentStatus !== 'processing') {
+                throw new RuntimeException(
+                    "Order #ORD-{$orderId} cannot be dispatched from status '{$currentStatus}'.",
+                    self::ERR_CONFLICT
+                );
+            }
+            if ($assignedEmpId !== null && $assignedEmpId !== $courierEmployeeId) {
+                throw new RuntimeException(
+                    "Order #ORD-{$orderId} has already been claimed by another courier.",
+                    self::ERR_CONFLICT
+                );
+            }
+
+            // 2. Lock order items -> inventories (ASC) -> batches (ASC) -> active reservations (ASC) -> movements (ASC).
+            $orderItems = $this->lockOrderItems($orderId);
+            $metaByBpId = $this->resolveUnitProductMetadata($orderId, $businessUnitId, $orderItems);
+            $lockedInventory = $this->lockOrderItemInventories($orderItems, $metaByBpId);
+
+            $batchInvIds = [];
+            foreach ($orderItems as $item) {
+                $bpId = (int)$item['business_product_id'];
+                if (!empty($metaByBpId[$bpId]['requires_batch_tracking'])) {
+                    $invId = (int)$metaByBpId[$bpId]['inventory_id'];
+                    $batchInvIds[$invId] = $invId;
+                }
+            }
+            $lockedBatches = $batchInvIds ? $this->lockInventoryBatchesByInventories(array_values($batchInvIds)) : [];
+            $activeReservations = $this->lockCompleteActiveReservations($orderId, $businessUnitId, $orderItems, 'dispatch', $metaByBpId);
+
+            if ($paymentEligibilityCheck !== null) {
+                $paymentEligibilityCheck();
+            }
+
+            // 3. Aggregate per-inventory & per-batch dispatch deductions and validate physical balances.
+            $invDispatchQty = [];
+            $batchDispatchQty = [];
+            $expectedBatchInv = [];
+            $totalDispatched = 0;
+
+            foreach ($activeReservations as $res) {
+                $invId = (int)$res['inventory_id'];
+                $qty = (int)$res['reserved_quantity'];
+                $batchId = $res['batch_id'] !== null ? (int)$res['batch_id'] : null;
+
+                $invDispatchQty[$invId] = ($invDispatchQty[$invId] ?? 0) + $qty;
+                $totalDispatched += $qty;
+                if ($batchId !== null) {
+                    $batchDispatchQty[$batchId] = ($batchDispatchQty[$batchId] ?? 0) + $qty;
+                    $expectedBatchInv[$batchId] = $invId;
+                }
+            }
+
+            foreach ($invDispatchQty as $invId => $dispatchQty) {
+                $inv = $lockedInventory[$invId] ?? null;
+                if (!$inv) {
+                    throw new RuntimeException("Inventory record #{$invId} could not be locked.", self::ERR_UNPROCESSABLE);
+                }
+                $onHand = (int)$inv['on_hand'];
+                $committed = (int)$inv['committed'];
+                $inTransit = (int)$inv['in_transit'];
+                $shelfCommitted = $committed - $inTransit;
+
+                if ($onHand < $dispatchQty) {
+                    throw new RuntimeException(
+                        "Insufficient on-hand stock for inventory #{$invId} during dispatch (on_hand: {$onHand}, dispatch: {$dispatchQty}).",
+                        self::ERR_UNPROCESSABLE
+                    );
+                }
+                if ($committed < $dispatchQty || $shelfCommitted < $dispatchQty) {
+                    throw new RuntimeException(
+                        "Insufficient shelf commitment for inventory #{$invId} during dispatch (committed: {$committed}, in_transit: {$inTransit}, dispatch: {$dispatchQty}).",
+                        self::ERR_UNPROCESSABLE
+                    );
+                }
+            }
+
+            $batchNumbersById = [];
+            foreach ($batchDispatchQty as $batchId => $deductQty) {
+                $batch = $lockedBatches[$batchId] ?? null;
+                if (!$batch || (int)$batch['inventory_id'] !== $expectedBatchInv[$batchId]) {
+                    throw new RuntimeException(
+                        "Pinned inventory batch #{$batchId} was not found for Order #{$orderId}.",
+                        self::ERR_UNPROCESSABLE
+                    );
+                }
+                $batchQty = (int)$batch['quantity'];
+                if ($batchQty < $deductQty) {
+                    throw new RuntimeException(
+                        "Insufficient quantity in pinned batch '{$batch['batch_number']}' during dispatch (available: {$batchQty}, dispatch: {$deductQty}).",
+                        self::ERR_UNPROCESSABLE
+                    );
+                }
+                $batchNumbersById[$batchId] = (string)$batch['batch_number'];
+            }
+
+            // 4. Atomically move on_hand (and batch quantity) into in_transit, keeping committed intact.
+            if ($batchDispatchQty) {
+                $updBatchStmt = $this->db->prepare(
+                    "UPDATE inventory_batch
+                     SET quantity = quantity - ?, updated_at = NOW()
+                     WHERE batch_id = ?"
+                );
+                foreach ($batchDispatchQty as $batchId => $deductQty) {
+                    $updBatchStmt->execute([$deductQty, $batchId]);
+                }
+            }
+
+            $updInvStmt = $this->db->prepare(
+                "UPDATE inventory
+                 SET on_hand = on_hand - ?, in_transit = in_transit + ?, updated_at = NOW()
+                 WHERE inventory_id = ?"
+            );
+            foreach ($invDispatchQty as $invId => $dispatchQty) {
+                $updInvStmt->execute([$dispatchQty, $dispatchQty, $invId]);
+            }
+
+            $updResStmt = $this->db->prepare(
+                "UPDATE inventory_reservation
+                 SET reservation_status = 'in_transit', updated_at = NOW()
+                 WHERE reservation_id = ? AND reservation_status = 'active'"
+            );
+            $movStmt = $this->db->prepare(
+                "INSERT INTO inventory_movement (inventory_id, batch_id, sale_item_id, reservation_id, movement_type, quantity, notes)
+                 VALUES (?, ?, NULL, ?, 'order_dispatch', ?, ?)"
+            );
+            $movementsCreated = 0;
+
+            foreach ($activeReservations as $res) {
+                $resId = (int)$res['reservation_id'];
+                $invId = (int)$res['inventory_id'];
+                $batchId = $res['batch_id'] !== null ? (int)$res['batch_id'] : null;
+                $qty = (int)$res['reserved_quantity'];
+
+                $updResStmt->execute([$resId]);
+                if ($updResStmt->rowCount() !== 1) {
+                    throw new RuntimeException("Reservation #{$resId} could not be moved to in_transit.", self::ERR_CONFLICT);
+                }
+
+                $batchLabel = $batchId !== null && isset($batchNumbersById[$batchId])
+                    ? " (Batch: {$batchNumbersById[$batchId]})"
+                    : '';
+                $notes = mb_substr("Delivery dispatch for Order #ORD-{$orderId}{$batchLabel}", 0, 255);
+                $movStmt->execute([$invId, $batchId, $resId, -$qty, $notes]);
+                $movementsCreated++;
+            }
+
+            $updOrdStmt = $this->db->prepare(
+                "UPDATE customer_order
+                 SET order_status = 'out_for_delivery', delivery_employee_id = ?, updated_at = NOW()
+                 WHERE order_id = ? AND order_status = 'processing'"
+            );
+            $updOrdStmt->execute([$courierEmployeeId, $orderId]);
+            if ($updOrdStmt->rowCount() !== 1) {
+                throw new RuntimeException("Order #ORD-{$orderId} could not be transitioned to out_for_delivery.", self::ERR_CONFLICT);
+            }
+
+            $oldCourierLabel = $assignedEmpId !== null ? (string)$assignedEmpId : 'none';
+            Audit::record(
+                $this->db,
+                'delivery.dispatched',
+                "Claimed and dispatched delivery order #ORD-{$orderId} (out for delivery; {$totalDispatched} unit(s) moved to in_transit).",
+                $businessUnitId,
+                $actorUserId,
+                $courierEmployeeId,
+                "status:{$currentStatus}; courier:{$oldCourierLabel}",
+                "status:out_for_delivery; courier:{$courierEmployeeId}",
+                'customer_order',
+                $orderId
+            );
+
+            $this->db->commit();
+
+            return [
+                'order_id' => $orderId,
+                'order_status' => 'out_for_delivery',
+                'dispatched_quantity' => $totalDispatched,
+                'reservations_dispatched' => count($activeReservations),
+                'movements_created' => $movementsCreated,
+            ];
+        } catch (Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $e;
+        }
+    }
+
+    /**
+     * Atomically settle a delivered ('out_for_delivery') Pet Store order:
+     * decreases inventory.in_transit and inventory.committed without re-deducting on_hand or batches,
+     * marks reservations 'fulfilled', logs 'order_fulfillment' movements, updates order to 'completed', and audits.
+     *
+     * @return array{order_id:int, order_status:string, fulfilled_quantity:int, reservations_fulfilled:int, movements_created:int}
+     * @throws RuntimeException
+     * @throws Throwable
+     */
+    public function completeDeliveryOrder(
+        int $orderId,
+        int $businessUnitId,
+        int $courierEmployeeId,
+        int $actorUserId
+    ): array {
+        $this->assertTopLevelTransaction('Delivery order completion');
+
+        $this->db->exec('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
+        $this->db->beginTransaction();
+        try {
+            // 1. Lock order exclusively and enforce scope, fulfillment method, courier ownership, and state.
+            $order = $this->lockDeliveryOrder($orderId, $businessUnitId);
+            $assignedEmpId = (int)($order['delivery_employee_id'] ?? 0);
+            if ($assignedEmpId !== $courierEmployeeId) {
+                throw new RuntimeException('Only the assigned courier may complete this delivery.', self::ERR_FORBIDDEN);
+            }
+
+            $currentStatus = (string)$order['order_status'];
+            if ($currentStatus !== 'out_for_delivery') {
+                throw new RuntimeException(
+                    "Order #ORD-{$orderId} must be Out for Delivery before it can be marked completed.",
+                    self::ERR_CONFLICT
+                );
+            }
+
+            // 2. Lock order items -> inventories (ASC) -> batches (ASC) -> in_transit reservations (ASC) -> movements (ASC).
+            $orderItems = $this->lockOrderItems($orderId);
+            $metaByBpId = $this->resolveUnitProductMetadata($orderId, $businessUnitId, $orderItems);
+            $lockedInventory = $this->lockOrderItemInventories($orderItems, $metaByBpId);
+
+            $batchInvIds = [];
+            foreach ($orderItems as $item) {
+                $bpId = (int)$item['business_product_id'];
+                if (!empty($metaByBpId[$bpId]['requires_batch_tracking'])) {
+                    $invId = (int)$metaByBpId[$bpId]['inventory_id'];
+                    $batchInvIds[$invId] = $invId;
+                }
+            }
+            $lockedBatches = $batchInvIds ? $this->lockInventoryBatchesByInventories(array_values($batchInvIds)) : [];
+            $inTransitReservations = $this->lockCompleteInTransitReservations($orderId, $businessUnitId, $orderItems, $metaByBpId);
+
+            // 3. Aggregate per-inventory settlement totals and verify in_transit / committed balances.
+            $invSettleQty = [];
+            $batchNumbersById = [];
+            $totalSettled = 0;
+
+            foreach ($inTransitReservations as $res) {
+                $invId = (int)$res['inventory_id'];
+                $qty = (int)$res['reserved_quantity'];
+                $batchId = $res['batch_id'] !== null ? (int)$res['batch_id'] : null;
+
+                $invSettleQty[$invId] = ($invSettleQty[$invId] ?? 0) + $qty;
+                $totalSettled += $qty;
+                if ($batchId !== null) {
+                    $batch = $lockedBatches[$batchId] ?? null;
+                    if (!$batch || (int)$batch['inventory_id'] !== $invId) {
+                        throw new RuntimeException(
+                            "Pinned inventory batch #{$batchId} was not found for Order #{$orderId}.",
+                            self::ERR_UNPROCESSABLE
+                        );
+                    }
+                    $batchNumbersById[$batchId] = (string)$batch['batch_number'];
+                }
+            }
+
+            foreach ($invSettleQty as $invId => $settleQty) {
+                $inv = $lockedInventory[$invId] ?? null;
+                if (!$inv) {
+                    throw new RuntimeException("Inventory record #{$invId} could not be locked.", self::ERR_UNPROCESSABLE);
+                }
+                $committed = (int)$inv['committed'];
+                $inTransit = (int)$inv['in_transit'];
+
+                if ($inTransit < $settleQty) {
+                    throw new RuntimeException(
+                        "Insufficient in-transit stock for inventory #{$invId} during completion (in_transit: {$inTransit}, settle: {$settleQty}).",
+                        self::ERR_UNPROCESSABLE
+                    );
+                }
+                if ($committed < $settleQty || ($committed - $settleQty) < ($inTransit - $settleQty)) {
+                    throw new RuntimeException(
+                        "Insufficient committed stock for inventory #{$invId} during completion (committed: {$committed}, in_transit: {$inTransit}, settle: {$settleQty}).",
+                        self::ERR_UNPROCESSABLE
+                    );
+                }
+            }
+
+            // 4. Decrease inventory.in_transit and inventory.committed only (on_hand and batches were already deducted at dispatch).
+            $updInvStmt = $this->db->prepare(
+                "UPDATE inventory
+                 SET in_transit = in_transit - ?, committed = committed - ?, updated_at = NOW()
+                 WHERE inventory_id = ?"
+            );
+            foreach ($invSettleQty as $invId => $settleQty) {
+                $updInvStmt->execute([$settleQty, $settleQty, $invId]);
+            }
+
+            $updResStmt = $this->db->prepare(
+                "UPDATE inventory_reservation
+                 SET reservation_status = 'fulfilled', updated_at = NOW()
+                 WHERE reservation_id = ? AND reservation_status = 'in_transit'"
+            );
+            $movStmt = $this->db->prepare(
+                "INSERT INTO inventory_movement (inventory_id, batch_id, sale_item_id, reservation_id, movement_type, quantity, notes)
+                 VALUES (?, ?, NULL, ?, 'order_fulfillment', ?, ?)"
+            );
+            $movementsCreated = 0;
+
+            foreach ($inTransitReservations as $res) {
+                $resId = (int)$res['reservation_id'];
+                $invId = (int)$res['inventory_id'];
+                $batchId = $res['batch_id'] !== null ? (int)$res['batch_id'] : null;
+                $qty = (int)$res['reserved_quantity'];
+
+                $updResStmt->execute([$resId]);
+                if ($updResStmt->rowCount() !== 1) {
+                    throw new RuntimeException("Reservation #{$resId} could not be transitioned to fulfilled.", self::ERR_CONFLICT);
+                }
+
+                $batchLabel = $batchId !== null && isset($batchNumbersById[$batchId])
+                    ? " (Batch: {$batchNumbersById[$batchId]})"
+                    : '';
+                $notes = mb_substr("Delivery completed for Order #ORD-{$orderId}{$batchLabel}", 0, 255);
+                $movStmt->execute([$invId, $batchId, $resId, -$qty, $notes]);
+                $movementsCreated++;
+            }
+
+            $updOrdStmt = $this->db->prepare(
+                "UPDATE customer_order
+                 SET order_status = 'completed', updated_at = NOW()
+                 WHERE order_id = ? AND order_status = 'out_for_delivery'"
+            );
+            $updOrdStmt->execute([$orderId]);
+            if ($updOrdStmt->rowCount() !== 1) {
+                throw new RuntimeException("Order #ORD-{$orderId} could not be transitioned to completed.", self::ERR_CONFLICT);
+            }
+
+            Audit::record(
+                $this->db,
+                'delivery.completed',
+                "Marked delivery order #ORD-{$orderId} as delivered and completed ({$totalSettled} unit(s) settled).",
+                $businessUnitId,
+                $actorUserId,
+                $courierEmployeeId,
+                "status:out_for_delivery; courier:{$courierEmployeeId}",
+                "status:completed; courier:{$courierEmployeeId}",
+                'customer_order',
+                $orderId
+            );
+
+            $this->db->commit();
+
+            return [
+                'order_id' => $orderId,
+                'order_status' => 'completed',
+                'fulfilled_quantity' => $totalSettled,
+                'reservations_fulfilled' => count($inTransitReservations),
+                'movements_created' => $movementsCreated,
+            ];
+        } catch (Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $e;
+        }
+    }
+
+    /**
      * Shared atomic order confirmation and FEFO reservation implementation for store-accepted pending orders.
      *
      * @return array{order_id:int, reservations_created:int, total_reserved_quantity:int}
@@ -726,7 +1130,7 @@ final class OrderReservationService
         string $forbiddenMessage
     ): array {
         $ordStmt = $this->db->prepare(
-            "SELECT order_id, business_unit_id, fulfillment_method, order_status
+            "SELECT order_id, business_unit_id, fulfillment_method, order_status, delivery_employee_id
              FROM customer_order
              WHERE order_id = ? AND business_unit_id = ?
              FOR UPDATE"
@@ -970,6 +1374,38 @@ final class OrderReservationService
     }
 
     /**
+     * Lock outbound movements of a given type for the supplied reservations and return cumulative outbound quantities.
+     *
+     * @param array<int,int> $reservationIds
+     * @return array<int,int>
+     */
+    private function loadOutboundReservationMovements(array $reservationIds, string $movementType): array
+    {
+        $placeholders = implode(',', array_fill(0, count($reservationIds), '?'));
+        $movStmt = $this->db->prepare(
+            "SELECT movement_id, reservation_id, quantity
+             FROM inventory_movement
+             WHERE reservation_id IN ({$placeholders})
+               AND movement_type = ?
+             ORDER BY movement_id ASC
+             FOR UPDATE"
+        );
+        $movStmt->execute(array_merge($reservationIds, [$movementType]));
+
+        $totals = [];
+        foreach ($movStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $resId = (int)$row['reservation_id'];
+            $qty = (int)$row['quantity'];
+            if ($qty >= 0) {
+                throw new RuntimeException("Invalid non-negative {$movementType} movement #{$row['movement_id']}.", self::ERR_UNPROCESSABLE);
+            }
+            $totals[$resId] = ($totals[$resId] ?? 0) + (-$qty);
+        }
+
+        return $totals;
+    }
+
+    /**
      * Lock outbound order_fulfillment movements for the supplied reservations and return cumulative outbound quantities.
      *
      * @param array<int,int> $reservationIds
@@ -977,34 +1413,7 @@ final class OrderReservationService
      */
     private function loadOutboundFulfillmentTotals(array $reservationIds): array
     {
-        $placeholders = implode(',', array_fill(0, count($reservationIds), '?'));
-        $movStmt = $this->db->prepare(
-            "SELECT movement_id, reservation_id, quantity
-             FROM inventory_movement
-             WHERE reservation_id IN ({$placeholders})
-               AND movement_type = 'order_fulfillment'
-             ORDER BY movement_id ASC
-             FOR UPDATE"
-        );
-        $movStmt->execute($reservationIds);
-
-        $totals = [];
-        foreach ($movStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
-            $resId = (int)$row['reservation_id'];
-            $qty = (int)$row['quantity'];
-            if ($qty >= 0) {
-                throw new RuntimeException("Invalid non-negative order_fulfillment movement #{$row['movement_id']}.", self::ERR_UNPROCESSABLE);
-            }
-            $totals[$resId] = ($totals[$resId] ?? 0) + (-$qty);
-        }
-
-        foreach ($totals as $resId => $total) {
-            if ($total < 0) {
-                throw new RuntimeException("Reservation #{$resId} has negative outbound fulfillment total ({$total}).", self::ERR_UNPROCESSABLE);
-            }
-        }
-
-        return $totals;
+        return $this->loadOutboundReservationMovements($reservationIds, 'order_fulfillment');
     }
 
     /**
@@ -1071,9 +1480,9 @@ final class OrderReservationService
 
     /**
      * Lock and validate complete active reservation coverage for a delivery order prior to dispatch.
-     * Rejects missing, partial, excessive, non-active, inventory-mismatched, or movement-corrupted reservations.
      *
      * @param array<int,array<string,mixed>> $orderItems
+     * @return array<int,array<string,mixed>>
      */
     private function lockCompleteActiveReservations(
         int $orderId,
@@ -1081,7 +1490,54 @@ final class OrderReservationService
         array $orderItems,
         string $stage,
         ?array $metaByBpId = null
-    ): void {
+    ): array {
+        return $this->lockCompleteDeliveryStageReservations(
+            $orderId,
+            $businessUnitId,
+            $orderItems,
+            'active',
+            $stage,
+            $metaByBpId
+        );
+    }
+
+    /**
+     * Lock and validate complete in-transit reservation coverage for a delivery order prior to completion.
+     *
+     * @param array<int,array<string,mixed>> $orderItems
+     * @return array<int,array<string,mixed>>
+     */
+    private function lockCompleteInTransitReservations(
+        int $orderId,
+        int $businessUnitId,
+        array $orderItems,
+        ?array $metaByBpId = null
+    ): array {
+        return $this->lockCompleteDeliveryStageReservations(
+            $orderId,
+            $businessUnitId,
+            $orderItems,
+            'in_transit',
+            'completion',
+            $metaByBpId
+        );
+    }
+
+    /**
+     * Shared lock and integrity verifier for delivery reservation stages ('active' or 'in_transit').
+     * Rejects missing, partial, excessive, wrong-status, inventory/batch-mismatched, or movement-corrupted rows.
+     *
+     * @param array<int,array<string,mixed>> $orderItems
+     * @return array<int,array<string,mixed>>
+     */
+    private function lockCompleteDeliveryStageReservations(
+        int $orderId,
+        int $businessUnitId,
+        array $orderItems,
+        string $requiredStatus,
+        string $stage,
+        ?array $metaByBpId = null
+    ): array {
         $metaByBpId ??= $this->resolveUnitProductMetadata($orderId, $businessUnitId, $orderItems);
 
         $orderedQtyByItemId = [];
@@ -1113,7 +1569,8 @@ final class OrderReservationService
         $resStmt->execute($orderItemIds);
         $rows = $resStmt->fetchAll(PDO::FETCH_ASSOC);
 
-        $activeResIds = [];
+        $matchingRows = [];
+        $matchingResIds = [];
         $coveredQtyByItemId = [];
 
         foreach ($rows as $row) {
@@ -1125,7 +1582,7 @@ final class OrderReservationService
             if ($status === 'cancelled') {
                 continue;
             }
-            if ($status !== 'active') {
+            if ($status !== $requiredStatus) {
                 throw new RuntimeException(
                     "Order #{$orderId} has reservation #{$resId} in state '{$status}' which is invalid for delivery {$stage}.",
                     self::ERR_CONFLICT
@@ -1161,14 +1618,16 @@ final class OrderReservationService
             }
 
             $coveredQtyByItemId[$itemId] = ($coveredQtyByItemId[$itemId] ?? 0) + $reservedQty;
-            $activeResIds[] = $resId;
+            $matchingRows[] = $row;
+            $matchingResIds[] = $resId;
         }
 
         foreach ($orderedQtyByItemId as $itemId => $orderedQty) {
             $coveredQty = $coveredQtyByItemId[$itemId] ?? 0;
             if ($coveredQty === 0) {
+                $statusLabel = $requiredStatus === 'in_transit' ? 'in-transit' : $requiredStatus;
                 throw new RuntimeException(
-                    "Order item #{$itemId} on Order #{$orderId} is missing an active inventory reservation.",
+                    "Order item #{$itemId} on Order #{$orderId} is missing an {$statusLabel} inventory reservation.",
                     self::ERR_UNPROCESSABLE
                 );
             }
@@ -1186,19 +1645,36 @@ final class OrderReservationService
             }
         }
 
-        $outboundByResId = $activeResIds
-            ? $this->loadOutboundFulfillmentTotals($activeResIds)
-            : [];
+        $fulfillByResId = $matchingResIds ? $this->loadOutboundFulfillmentTotals($matchingResIds) : [];
+        $dispatchByResId = $matchingResIds ? $this->loadOutboundReservationMovements($matchingResIds, 'order_dispatch') : [];
 
-        foreach ($activeResIds as $resId) {
-            $outboundQty = $outboundByResId[$resId] ?? 0;
-            if ($outboundQty !== 0) {
+        foreach ($matchingRows as $row) {
+            $resId = (int)$row['reservation_id'];
+            $reservedQty = (int)$row['reserved_quantity'];
+            $outboundFulfill = $fulfillByResId[$resId] ?? 0;
+            $outboundDispatch = $dispatchByResId[$resId] ?? 0;
+
+            if ($outboundFulfill !== 0) {
                 throw new RuntimeException(
-                    "Active reservation #{$resId} on Order #{$orderId} has unexpected outbound fulfillment movements ({$outboundQty}).",
+                    "Reservation #{$resId} on Order #{$orderId} has unexpected outbound fulfillment movements ({$outboundFulfill}).",
+                    self::ERR_UNPROCESSABLE
+                );
+            }
+            if ($requiredStatus === 'active' && $outboundDispatch !== 0) {
+                throw new RuntimeException(
+                    "Active reservation #{$resId} on Order #{$orderId} has unexpected outbound dispatch movements ({$outboundDispatch}).",
+                    self::ERR_UNPROCESSABLE
+                );
+            }
+            if ($requiredStatus === 'in_transit' && $outboundDispatch !== $reservedQty) {
+                throw new RuntimeException(
+                    "In-transit reservation #{$resId} on Order #{$orderId} does not match outbound dispatch movements ({$outboundDispatch} of {$reservedQty}).",
                     self::ERR_UNPROCESSABLE
                 );
             }
         }
+
+        return $matchingRows;
     }
 
     /**
