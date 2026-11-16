@@ -278,6 +278,13 @@ final class OrderReservationService
                         self::ERR_UNPROCESSABLE
                     );
                 }
+                if (!empty($batch['is_expired'])) {
+                    $expDate = (string)($batch['expiration_date'] ?? '');
+                    throw new RuntimeException(
+                        "Pinned inventory batch '{$batch['batch_number']}' expired on {$expDate} and cannot be dispatched for Order #{$orderId}.",
+                        self::ERR_UNPROCESSABLE
+                    );
+                }
                 $batchQty = (int)$batch['quantity'];
                 if ($batchQty < $deductQty) {
                     throw new RuntimeException(
@@ -1934,7 +1941,8 @@ final class OrderReservationService
         sort($ids, SORT_NUMERIC);
         $placeholders = implode(',', array_fill(0, count($ids), '?'));
         $stmt = $this->db->prepare(
-            "SELECT batch_id, inventory_id, batch_number, quantity
+            "SELECT batch_id, inventory_id, batch_number, quantity, expiration_date,
+                    (expiration_date IS NOT NULL AND expiration_date < CURDATE()) AS is_expired
              FROM inventory_batch
              WHERE inventory_id IN ({$placeholders})
              ORDER BY batch_id ASC
@@ -1981,7 +1989,8 @@ final class OrderReservationService
     {
         $placeholders = implode(',', array_fill(0, count($sortedBatchIds), '?'));
         $stmt = $this->db->prepare(
-            "SELECT batch_id, inventory_id, batch_number, quantity
+            "SELECT batch_id, inventory_id, batch_number, quantity, expiration_date,
+                    (expiration_date IS NOT NULL AND expiration_date < CURDATE()) AS is_expired
              FROM inventory_batch
              WHERE batch_id IN ({$placeholders})
              ORDER BY batch_id ASC

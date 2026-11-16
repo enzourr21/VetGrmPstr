@@ -35,6 +35,40 @@ if ($dbName === '' || !in_array($dbName, $allowedTestDatabases, true)) {
     exit(1);
 }
 
+final class S3bFaultInjector
+{
+    public ?Closure $beforeExecute = null;
+    public ?Closure $afterExecute = null;
+}
+
+final class S3bFailureInjectingStatement extends PDOStatement
+{
+    private S3bFaultInjector $injector;
+
+    protected function __construct(S3bFaultInjector $injector)
+    {
+        $this->injector = $injector;
+    }
+
+    public function execute(?array $params = null): bool
+    {
+        if ($this->injector->beforeExecute !== null) {
+            ($this->injector->beforeExecute)($this->queryString, $params);
+        }
+        $result = parent::execute($params);
+        if ($this->injector->afterExecute !== null) {
+            ($this->injector->afterExecute)($this->queryString, $params);
+        }
+        return $result;
+    }
+}
+
+$openIsolatedPdo = static function (): PDO {
+    require APP_ROOT . '/config/database.php';
+    /** @var PDO $pdo */
+    return $pdo;
+};
+
 $passed = 0;
 $failed = 0;
 
@@ -150,6 +184,15 @@ try {
         }
 
         return [$orderId, $itemIds];
+    };
+
+    $createBatch = static function (int $inventoryId, string $batchNumber, int $qty, int $daysAhead) use ($pdo): int {
+        $stmt = $pdo->prepare(
+            "INSERT INTO inventory_batch (inventory_id, batch_number, expiration_date, quantity)
+             VALUES (?, ?, DATE_ADD(CURDATE(), INTERVAL ? DAY), ?)"
+        );
+        $stmt->execute([$inventoryId, $batchNumber, $daysAhead, $qty]);
+        return (int)$pdo->lastInsertId();
     };
 
     // 1. Successful dispatch with non-batch and multi-batch FEFO inventory
@@ -402,6 +445,192 @@ try {
         $pickupCompForbidden = $e->getCode() === OrderReservationService::ERR_FORBIDDEN;
     }
     check('Delivery dispatch and completion strictly reject pickup orders (ERR_FORBIDDEN)', $pickupDispForbidden && $pickupCompForbidden);
+
+    // 10. Expired pinned-batch protection: blocks dispatch without reallocating stock or mutating state
+    [$bpExp, $invExp] = $createProduct('ChkS3B ExpiredBatch', 9, 0, 0, 1);
+    $batchPinnedExp = $createBatch($invExp, 'B-PIN-EXP', 4, 3);
+    $batchFreshAlt = $createBatch($invExp, 'B-FRESH-ALT', 5, 20);
+
+    [$ordExp, [$oiExp]] = $createOrder('delivery', 'pending', [[$bpExp, 3]]);
+    $service->confirmDeliveryOrderAndReserve($ordExp, $unitId, $recepUid);
+    $service->markDeliveryOrderProcessing($ordExp, $unitId, $recepUid);
+
+    // Age the pinned batch past expiration after reservation/preparation
+    $pdo->prepare("UPDATE inventory_batch SET expiration_date = DATE_SUB(CURDATE(), INTERVAL 1 DAY) WHERE batch_id = ?")
+        ->execute([$batchPinnedExp]);
+
+    $expRejected = false;
+    $expMsgHasReason = false;
+    try {
+        $service->dispatchDeliveryOrder($ordExp, $unitId, $courier1EmpId, $courier1Uid);
+    } catch (RuntimeException $e) {
+        $expRejected = $e->getCode() === OrderReservationService::ERR_UNPROCESSABLE;
+        $expMsgHasReason = stripos($e->getMessage(), 'expired') !== false;
+    }
+
+    $ordExpAfter = $pdo->query("SELECT order_status, delivery_employee_id FROM customer_order WHERE order_id = {$ordExp}")->fetch();
+    $invExpAfter = $pdo->query("SELECT on_hand, committed, in_transit FROM inventory WHERE inventory_id = {$invExp}")->fetch();
+    $bPinnedQtyAfter = (int)$pdo->query("SELECT quantity FROM inventory_batch WHERE batch_id = {$batchPinnedExp}")->fetchColumn();
+    $bFreshQtyAfter = (int)$pdo->query("SELECT quantity FROM inventory_batch WHERE batch_id = {$batchFreshAlt}")->fetchColumn();
+    $resExpRows = $pdo->query("SELECT reservation_id, batch_id, reserved_quantity, reservation_status FROM inventory_reservation WHERE order_item_id = {$oiExp}")->fetchAll();
+    $movExpCnt = (int)$pdo->query(
+        "SELECT COUNT(*) FROM inventory_movement im
+         JOIN inventory_reservation ir ON ir.reservation_id = im.reservation_id
+         WHERE ir.order_item_id = {$oiExp}"
+    )->fetchColumn();
+    $auditExpDispatchCnt = (int)$pdo->query(
+        "SELECT COUNT(*) FROM audit_log WHERE target_type = 'customer_order' AND target_id = {$ordExp} AND action_code = 'delivery.dispatched'"
+    )->fetchColumn();
+
+    check(
+        'Expired pinned batch blocks dispatch (ERR_UNPROCESSABLE) and preserves order, inventory, batches, reservation, movements, and audit without reallocation',
+        $expRejected
+            && $expMsgHasReason
+            && $ordExpAfter['order_status'] === 'processing'
+            && $ordExpAfter['delivery_employee_id'] === null
+            && (int)$invExpAfter['on_hand'] === 9
+            && (int)$invExpAfter['committed'] === 3
+            && (int)$invExpAfter['in_transit'] === 0
+            && $bPinnedQtyAfter === 4
+            && $bFreshQtyAfter === 5
+            && count($resExpRows) === 1
+            && (int)$resExpRows[0]['batch_id'] === $batchPinnedExp
+            && (int)$resExpRows[0]['reserved_quantity'] === 3
+            && $resExpRows[0]['reservation_status'] === 'active'
+            && $movExpCnt === 0
+            && $auditExpDispatchCnt === 0
+    );
+
+    // 11. Mid-transaction failure injection: dispatch failure after stock/batch updates rolls back completely
+    [$bpRbNb, $invRbNb] = $createProduct('ChkS3B Rollback NonBatch', 7, 0, 0, 0);
+    [$bpRbB, $invRbB] = $createProduct('ChkS3B Rollback Batch', 8, 0, 0, 1);
+    $batchRb = $createBatch($invRbB, 'B-RB-1', 8, 12);
+    [$ordRb, [$oiRbNb, $oiRbB]] = $createOrder('delivery', 'pending', [[$bpRbNb, 2], [$bpRbB, 3]]);
+    $service->confirmDeliveryOrderAndReserve($ordRb, $unitId, $recepUid);
+    $service->markDeliveryOrderProcessing($ordRb, $unitId, $recepUid);
+
+    $snapshotOrder = static function (int $orderId, array $invIds, array $batchIds) use ($pdo): array {
+        $ord = $pdo->query("SELECT order_status, delivery_employee_id FROM customer_order WHERE order_id = {$orderId}")->fetch();
+        $invList = implode(',', $invIds);
+        $invs = $pdo->query("SELECT inventory_id, on_hand, committed, in_transit FROM inventory WHERE inventory_id IN ({$invList}) ORDER BY inventory_id ASC")->fetchAll();
+        $bList = implode(',', $batchIds);
+        $batches = $pdo->query("SELECT batch_id, quantity FROM inventory_batch WHERE batch_id IN ({$bList}) ORDER BY batch_id ASC")->fetchAll();
+        $res = $pdo->query(
+            "SELECT ir.reservation_id, ir.batch_id, ir.reserved_quantity, ir.reservation_status
+             FROM inventory_reservation ir
+             JOIN order_item oi ON oi.order_item_id = ir.order_item_id
+             WHERE oi.order_id = {$orderId}
+             ORDER BY ir.reservation_id ASC"
+        )->fetchAll();
+        $movs = $pdo->query(
+            "SELECT im.movement_type, im.quantity, im.reservation_id
+             FROM inventory_movement im
+             JOIN inventory_reservation ir ON ir.reservation_id = im.reservation_id
+             JOIN order_item oi ON oi.order_item_id = ir.order_item_id
+             WHERE oi.order_id = {$orderId}
+             ORDER BY im.movement_id ASC"
+        )->fetchAll();
+        $audits = $pdo->query(
+            "SELECT action_code, target_id
+             FROM audit_log
+             WHERE target_type = 'customer_order' AND target_id = {$orderId}
+             ORDER BY log_id ASC"
+        )->fetchAll();
+        return compact('ord', 'invs', 'batches', 'res', 'movs', 'audits');
+    };
+
+    $preDispatchSnap = $snapshotOrder($ordRb, [$invRbNb, $invRbB], [$batchRb]);
+
+    $injector = new S3bFaultInjector();
+    $faultyPdo = $openIsolatedPdo();
+    $faultyPdo->setAttribute(PDO::ATTR_STATEMENT_CLASS, [S3bFailureInjectingStatement::class, [$injector]]);
+    $faultyService = new OrderReservationService($faultyPdo);
+
+    $seenDispBatchUpd = false;
+    $seenDispInvUpd = false;
+    $dispFaultCaught = false;
+    $injector->afterExecute = static function (string $sql) use (&$seenDispBatchUpd, &$seenDispInvUpd): void {
+        if (str_contains($sql, 'UPDATE inventory_batch') && str_contains($sql, 'quantity = quantity - ?')) {
+            $seenDispBatchUpd = true;
+        }
+        if (str_contains($sql, 'UPDATE inventory') && str_contains($sql, 'in_transit = in_transit + ?')) {
+            $seenDispInvUpd = true;
+        }
+    };
+    $injector->beforeExecute = static function (string $sql) use (&$seenDispBatchUpd, &$seenDispInvUpd): void {
+        if (
+            str_contains($sql, 'UPDATE inventory_reservation')
+            && str_contains($sql, "reservation_status = 'in_transit'")
+            && $seenDispBatchUpd
+            && $seenDispInvUpd
+        ) {
+            throw new PDOException('Injected mid-transaction failure after dispatch stock/batch updates');
+        }
+    };
+
+    try {
+        $faultyService->dispatchDeliveryOrder($ordRb, $unitId, $courier1EmpId, $courier1Uid);
+    } catch (PDOException $e) {
+        $dispFaultCaught = str_contains($e->getMessage(), 'Injected mid-transaction failure after dispatch');
+    } finally {
+        $injector->beforeExecute = null;
+        $injector->afterExecute = null;
+    }
+
+    $postFailedDispSnap = $snapshotOrder($ordRb, [$invRbNb, $invRbB], [$batchRb]);
+    check(
+        'Mid-transaction dispatch failure after stock & batch updates rolls back order, inventory, batches, reservations, movements, and audit cleanly',
+        $seenDispBatchUpd
+            && $seenDispInvUpd
+            && $dispFaultCaught
+            && !$faultyPdo->inTransaction()
+            && $postFailedDispSnap === $preDispatchSnap
+    );
+
+    // Confirm dispatch still succeeds cleanly after rollback
+    $dispCleanAfterRb = $service->dispatchDeliveryOrder($ordRb, $unitId, $courier1EmpId, $courier1Uid);
+
+    // 12. Mid-transaction failure injection: completion failure after inventory updates rolls back completely
+    $preCompSnap = $snapshotOrder($ordRb, [$invRbNb, $invRbB], [$batchRb]);
+
+    $seenCompInvUpd = false;
+    $compFaultCaught = false;
+    $injector->afterExecute = static function (string $sql) use (&$seenCompInvUpd): void {
+        if (str_contains($sql, 'UPDATE inventory') && str_contains($sql, 'in_transit = in_transit - ?')) {
+            $seenCompInvUpd = true;
+        }
+    };
+    $injector->beforeExecute = static function (string $sql) use (&$seenCompInvUpd): void {
+        if (
+            str_contains($sql, 'UPDATE inventory_reservation')
+            && str_contains($sql, "reservation_status = 'fulfilled'")
+            && $seenCompInvUpd
+        ) {
+            throw new PDOException('Injected mid-transaction failure after completion inventory updates');
+        }
+    };
+
+    try {
+        $faultyService->completeDeliveryOrder($ordRb, $unitId, $courier1EmpId, $courier1Uid);
+    } catch (PDOException $e) {
+        $compFaultCaught = str_contains($e->getMessage(), 'Injected mid-transaction failure after completion');
+    } finally {
+        $injector->beforeExecute = null;
+        $injector->afterExecute = null;
+        $faultyPdo = null;
+    }
+
+    $postFailedCompSnap = $snapshotOrder($ordRb, [$invRbNb, $invRbB], [$batchRb]);
+    $compCleanAfterRb = $service->completeDeliveryOrder($ordRb, $unitId, $courier1EmpId, $courier1Uid);
+
+    check(
+        'Mid-transaction completion failure after inventory updates rolls back order, inventory, batches, reservations, movements, and audit cleanly',
+        $dispCleanAfterRb['order_status'] === 'out_for_delivery'
+            && $seenCompInvUpd
+            && $compFaultCaught
+            && $postFailedCompSnap === $preCompSnap
+            && $compCleanAfterRb['order_status'] === 'completed'
+    );
 } finally {
     if ($pdo->inTransaction()) {
         $pdo->rollBack();
