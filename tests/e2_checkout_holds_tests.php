@@ -178,6 +178,55 @@ try {
             && $unconfiguredBlocked
     );
 
+    // 1b. Delivery checkout MUST be blocked when no valid delivery fee is configured (never silently 0.00)
+    $pdo->prepare('UPDATE business_settings SET delivery_fee = NULL WHERE business_unit_id = ?')->execute([$unitId]);
+    $noFeeSettings = $checkoutService->getUnitPaymentSettings($unitId);
+    $noFeeAmountsDelivery = $checkoutService->calculateOrderAmounts(150.00, 'delivery', $unitId);
+    $noFeeAmountsPickup = $checkoutService->calculateOrderAmounts(150.00, 'pickup', $unitId);
+
+    $missingFeeCodDeliveryBlocked = false;
+    try {
+        $checkoutService->placeCodOrder($cid1, $unitId, $uid1, 'delivery', [
+            'address_line1' => '100 Paw St',
+            'city' => 'Makati',
+            'postal_code' => '1200',
+        ], '', 'e2-nofee-cod-deliv');
+    } catch (RuntimeException $e) {
+        $missingFeeCodDeliveryBlocked = $e->getCode() === CheckoutHoldService::ERR_UNPROCESSABLE;
+    }
+
+    $missingFeeOnlineDeliveryBlocked = false;
+    try {
+        $checkoutService->initiateOnlineCheckoutHold($cid1, $unitId, $uid1, 'delivery', [
+            'address_line1' => '100 Paw St',
+            'city' => 'Makati',
+            'postal_code' => '1200',
+        ], '', 'e2-nofee-online-deliv', $configuredTestGateway);
+    } catch (RuntimeException $e) {
+        $missingFeeOnlineDeliveryBlocked = $e->getCode() === CheckoutHoldService::ERR_UNPROCESSABLE;
+    }
+
+    // Restore configured delivery fee = 50.00 after verifying pickup still works without fee if needed
+    $pickupWhileNoFee = $checkoutService->initiateOnlineCheckoutHold($cid1, $unitId, $uid1, 'pickup', [], '', 'e2-nofee-pickup-ok', $configuredTestGateway);
+    $cleanup['attempts'][] = $pickupWhileNoFee['attempt_id'];
+    $checkoutService->cancelActiveHoldByCustomer($pickupWhileNoFee['attempt_id'], $cid1, $uid1);
+    $pdo->prepare('UPDATE business_settings SET delivery_fee = 50.00 WHERE business_unit_id = ?')->execute([$unitId]);
+
+    check(
+        'Missing delivery fee returns unconfigured null delivery fee, blocks COD & online delivery checkout, and keeps pickup at 0.00',
+        $noFeeSettings['delivery_fee_configured'] === false
+            && $noFeeSettings['delivery_fee'] === null
+            && $noFeeAmountsDelivery['delivery_fee_configured'] === false
+            && $noFeeAmountsDelivery['delivery_fee'] === null
+            && $noFeeAmountsDelivery['total_amount'] === null
+            && $noFeeAmountsPickup['delivery_fee_configured'] === true
+            && $noFeeAmountsPickup['delivery_fee'] === 0.00
+            && $noFeeAmountsPickup['total_amount'] === 150.00
+            && $missingFeeCodDeliveryBlocked
+            && $missingFeeOnlineDeliveryBlocked
+            && (float)$pickupWhileNoFee['delivery_fee'] === 0.00
+    );
+
     // 2. 3-unit threshold rejects stock = 2 for both COD and configured Online
     [$bpLow, $invLow] = $createProduct('ChkE2 LowStock', 100.00, 2, 0);
     $cart1 = $setCart($cid1, $bpLow, 1);
@@ -417,12 +466,222 @@ try {
     $cleanup['orders'][] = $codMulti['order_id'];
     $cleanup['attempts'][] = $codMulti['attempt_id'];
     check('Multi-inventory batch-tracked COD succeeds cleanly after lock release', $codMulti['order_id'] > 0 && $codMulti['reservations_created'] === 2);
+
+    // 8. Genuine two-connection parallel contention: capture vs customer cancel & capture vs expired hold cleanup
+    $runParallelPhp = static function (array $scripts): array {
+        $procs = [];
+        foreach ($scripts as $key => $code) {
+            $desc = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+            $proc = proc_open([PHP_BINARY], $desc, $pipes, dirname(__DIR__));
+            if (!is_resource($proc)) {
+                throw new RuntimeException("Failed to spawn parallel PHP worker '{$key}'.");
+            }
+            fwrite($pipes[0], $code);
+            fclose($pipes[0]);
+            $procs[$key] = ['proc' => $proc, 'pipes' => $pipes];
+        }
+        $results = [];
+        foreach ($procs as $key => $entry) {
+            $stdout = stream_get_contents($entry['pipes'][1]);
+            $stderr = stream_get_contents($entry['pipes'][2]);
+            fclose($entry['pipes'][1]);
+            fclose($entry['pipes'][2]);
+            $exit = proc_close($entry['proc']);
+            $results[$key] = [
+                'exit' => $exit,
+                'stdout' => trim((string)$stdout),
+                'stderr' => trim((string)$stderr),
+                'json' => json_decode(trim((string)$stdout), true),
+            ];
+        }
+        return $results;
+    };
+
+    $appRootExport = var_export(dirname(__DIR__), true);
+
+    // Race A: Verified payment capture vs customer cancellation on the SAME active hold & attempt
+    [$bpRaceCancel, $invRaceCancel] = $createProduct('ChkE2 RaceCancel', 60.00, 5, 1);
+    $pdo->exec("INSERT INTO inventory_batch (inventory_id, batch_number, expiration_date, quantity) VALUES ({$invRaceCancel}, 'RC-B1', DATE_ADD(CURDATE(), INTERVAL 20 DAY), 5)");
+    $setCart($cid1, $bpRaceCancel, 3);
+    $raceCancelHold = $checkoutService->initiateOnlineCheckoutHold($cid1, $unitId, $uid1, 'pickup', [], '', 'e2-race-cancel-1', $configuredTestGateway);
+    $cleanup['attempts'][] = $raceCancelHold['attempt_id'];
+    $raceCancelAmt = number_format((float)$raceCancelHold['total_amount'], 2, '.', '');
+
+    $workerCaptureCancel = <<<PHP
+<?php
+require_once {$appRootExport} . '/app/bootstrap.php';
+use App\Core\Database;
+use App\Services\CheckoutHoldService;
+try {
+    \$svc = new CheckoutHoldService(Database::pdo());
+    \$res = \$svc->handleVerifiedPaymentCapture([
+        'attempt_id' => {$raceCancelHold['attempt_id']},
+        'provider_name' => 'test_gateway',
+        'provider_payment_id' => 'pay_race_cancel_001',
+        'provider_event_id' => 'evt_race_cancel_001',
+        'captured_amount' => {$raceCancelAmt},
+        'payment_method' => 'online',
+    ]);
+    echo json_encode(['ok' => true, 'result' => \$res]);
+} catch (Throwable \$e) {
+    echo json_encode(['ok' => false, 'code' => \$e->getCode(), 'error' => \$e->getMessage()]);
+}
+PHP;
+
+    $workerCustomerCancel = <<<PHP
+<?php
+require_once {$appRootExport} . '/app/bootstrap.php';
+use App\Core\Database;
+use App\Services\CheckoutHoldService;
+try {
+    \$svc = new CheckoutHoldService(Database::pdo());
+    \$res = \$svc->cancelActiveHoldByCustomer({$raceCancelHold['attempt_id']}, {$cid1}, {$uid1}, 'concurrent_customer_cancel');
+    echo json_encode(['ok' => true, 'result' => \$res]);
+} catch (Throwable \$e) {
+    echo json_encode(['ok' => false, 'code' => \$e->getCode(), 'error' => \$e->getMessage()]);
+}
+PHP;
+
+    $raceAResults = $runParallelPhp([
+        'capture' => $workerCaptureCancel,
+        'cancel' => $workerCustomerCancel,
+    ]);
+    $raceACapOk = !empty($raceAResults['capture']['json']['ok']);
+    $raceACanOk = !empty($raceAResults['cancel']['json']['ok']);
+    $raceAAtt = $pdo->query("SELECT attempt_status, order_id FROM checkout_attempt WHERE attempt_id = {$raceCancelHold['attempt_id']}")->fetch();
+    $raceAHold = $pdo->query("SELECT hold_status, converted_order_id FROM inventory_hold WHERE hold_id = {$raceCancelHold['hold_id']}")->fetch();
+    $raceAInv = $pdo->query("SELECT on_hand, committed FROM inventory WHERE inventory_id = {$invRaceCancel}")->fetch();
+    $raceAPayCnt = (int)$pdo->query("SELECT COUNT(*) FROM payment WHERE attempt_id = {$raceCancelHold['attempt_id']} AND payment_status = 'completed'")->fetchColumn();
+    check(
+        'Two-connection parallel capture vs customer cancellation completes without deadlock and leaves consistent converted order & committed inventory',
+        $raceACapOk
+            && $raceACanOk
+            && $raceAAtt['attempt_status'] === 'completed'
+            && (int)$raceAAtt['order_id'] > 0
+            && $raceAHold['hold_status'] === 'converted'
+            && (int)$raceAHold['converted_order_id'] === (int)$raceAAtt['order_id']
+            && (int)$raceAInv['on_hand'] === 5
+            && (int)$raceAInv['committed'] === 3
+            && $raceAPayCnt === 1
+    );
+
+    // Race B: Verified payment capture vs expired hold cleanup + concurrent POS sale contending on inventory
+    [$bpRaceExp, $invRaceExp] = $createProduct('ChkE2 RaceExpiry', 45.00, 4, 0);
+    $setCart($cid1, $bpRaceExp, 3);
+    $raceExpHold = $checkoutService->initiateOnlineCheckoutHold($cid1, $unitId, $uid1, 'pickup', [], '', 'e2-race-expiry-1', $configuredTestGateway);
+    $cleanup['attempts'][] = $raceExpHold['attempt_id'];
+    $raceExpAmt = number_format((float)$raceExpHold['total_amount'], 2, '.', '');
+    $pdo->prepare("UPDATE inventory_hold SET created_at = DATE_SUB(UTC_TIMESTAMP(), INTERVAL 181 SECOND), expires_at = DATE_SUB(UTC_TIMESTAMP(), INTERVAL 1 SECOND) WHERE hold_id = ?")
+        ->execute([$raceExpHold['hold_id']]);
+
+    $workerCaptureExp = <<<PHP
+<?php
+require_once {$appRootExport} . '/app/bootstrap.php';
+use App\Core\Database;
+use App\Services\CheckoutHoldService;
+try {
+    \$svc = new CheckoutHoldService(Database::pdo());
+    \$res = \$svc->handleVerifiedPaymentCapture([
+        'attempt_id' => {$raceExpHold['attempt_id']},
+        'provider_name' => 'test_gateway',
+        'provider_payment_id' => 'pay_race_exp_001',
+        'provider_event_id' => 'evt_race_exp_001',
+        'captured_amount' => {$raceExpAmt},
+        'payment_method' => 'online',
+    ]);
+    echo json_encode(['ok' => true, 'result' => \$res]);
+} catch (Throwable \$e) {
+    echo json_encode(['ok' => false, 'code' => \$e->getCode(), 'error' => \$e->getMessage()]);
+}
+PHP;
+
+    $workerCleanupExp = <<<PHP
+<?php
+require_once {$appRootExport} . '/app/bootstrap.php';
+use App\Core\Database;
+use App\Services\CheckoutHoldService;
+try {
+    \$svc = new CheckoutHoldService(Database::pdo());
+    \$res = \$svc->releaseAllExpiredHolds(100, 5);
+    echo json_encode(['ok' => true, 'result' => \$res]);
+} catch (Throwable \$e) {
+    echo json_encode(['ok' => false, 'code' => \$e->getCode(), 'error' => \$e->getMessage()]);
+}
+PHP;
+
+    $workerPosRace = <<<PHP
+<?php
+require_once {$appRootExport} . '/app/bootstrap.php';
+use App\Core\Database;
+use App\Services\PosSaleService;
+try {
+    \$svc = new PosSaleService(Database::pdo());
+    \$res = \$svc->recordSale({$unitId}, {$empUid}, {$empId}, null, 'Cash', [['business_product_id' => {$bpRaceExp}, 'quantity' => 2]]);
+    echo json_encode(['ok' => true, 'sold' => true, 'sale_id' => \$res['sale_id']]);
+} catch (RuntimeException \$e) {
+    // Rejection when capture acquired lock first and committed 3 of 4 units is an expected business outcome.
+    \$ok = \$e->getCode() === PosSaleService::ERR_UNPROCESSABLE;
+    echo json_encode(['ok' => \$ok, 'sold' => false, 'code' => \$e->getCode(), 'error' => \$e->getMessage()]);
+} catch (Throwable \$e) {
+    echo json_encode(['ok' => false, 'code' => \$e->getCode(), 'error' => \$e->getMessage()]);
+}
+PHP;
+
+    $raceBResults = $runParallelPhp([
+        'capture' => $workerCaptureExp,
+        'cleanup' => $workerCleanupExp,
+        'pos' => $workerPosRace,
+    ]);
+    $raceBCapOk = !empty($raceBResults['capture']['json']['ok']);
+    $raceBCleanOk = !empty($raceBResults['cleanup']['json']['ok']);
+    $raceBPosOk = !empty($raceBResults['pos']['json']['ok']);
+    $raceBAtt = $pdo->query("SELECT attempt_status, order_id FROM checkout_attempt WHERE attempt_id = {$raceExpHold['attempt_id']}")->fetch();
+    $raceBHold = $pdo->query("SELECT hold_status, converted_order_id FROM inventory_hold WHERE hold_id = {$raceExpHold['hold_id']}")->fetch();
+    $raceBInv = $pdo->query("SELECT on_hand, committed FROM inventory WHERE inventory_id = {$invRaceExp}")->fetch();
+    $raceBPayStatus = (string)$pdo->query("SELECT payment_status FROM payment WHERE attempt_id = {$raceExpHold['attempt_id']} AND payment_status = 'completed' LIMIT 1")->fetchColumn();
+    $raceBReconCnt = (int)$pdo->query("SELECT COUNT(*) FROM payment_reconciliation WHERE attempt_id = {$raceExpHold['attempt_id']} AND reconciliation_status = 'pending_review'")->fetchColumn();
+    $raceBValidCompleted = $raceBAtt['attempt_status'] === 'completed'
+        && (int)$raceBAtt['order_id'] > 0
+        && $raceBHold['hold_status'] === 'converted'
+        && (int)$raceBHold['converted_order_id'] === (int)$raceBAtt['order_id']
+        && (int)$raceBInv['on_hand'] === 4
+        && (int)$raceBInv['committed'] === 3;
+    $raceBValidRecon = $raceBAtt['attempt_status'] === 'reconciliation_required'
+        && $raceBAtt['order_id'] === null
+        && $raceBHold['hold_status'] === 'expired'
+        && (int)$raceBInv['on_hand'] === 2
+        && (int)$raceBInv['committed'] === 0
+        && $raceBReconCnt === 1;
+    check(
+        'Multi-connection parallel capture vs expired-hold cleanup & POS sale completes without deadlock and preserves fulfillability/reconciliation invariants',
+        $raceBCapOk
+            && $raceBCleanOk
+            && $raceBPosOk
+            && $raceBPayStatus === 'completed'
+            && ((int)$raceBInv['on_hand'] >= (int)$raceBInv['committed'])
+            && ($raceBValidCompleted || $raceBValidRecon)
+    );
 } finally {
     if ($pdo->inTransaction()) {
         $pdo->rollBack();
     }
     if (isset($pdo2) && $pdo2 instanceof PDO && $pdo2->inTransaction()) {
         $pdo2->rollBack();
+    }
+    if ($cleanup['business_units']) {
+        $uListPre = implode(',', $cleanup['business_units']);
+        foreach ($pdo->query("SELECT attempt_id FROM checkout_attempt WHERE business_unit_id IN ({$uListPre})")->fetchAll(PDO::FETCH_COLUMN) as $aId) {
+            $cleanup['attempts'][] = (int)$aId;
+        }
+        foreach ($pdo->query("SELECT order_id FROM customer_order WHERE business_unit_id IN ({$uListPre})")->fetchAll(PDO::FETCH_COLUMN) as $oId) {
+            $cleanup['orders'][] = (int)$oId;
+        }
+        foreach ($pdo->query("SELECT sale_id FROM sale WHERE business_unit_id IN ({$uListPre})")->fetchAll(PDO::FETCH_COLUMN) as $sId) {
+            $cleanup['sales'][] = (int)$sId;
+        }
+        $cleanup['attempts'] = array_values(array_unique($cleanup['attempts']));
+        $cleanup['orders'] = array_values(array_unique($cleanup['orders']));
+        $cleanup['sales'] = array_values(array_unique($cleanup['sales']));
     }
     if ($cleanup['attempts']) {
         $aList = implode(',', $cleanup['attempts']);

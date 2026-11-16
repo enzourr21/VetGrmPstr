@@ -1,6 +1,44 @@
 -- Down Migration 022: Revert E2 Corrective Checkout Schema
+--
+-- Safety guarantee:
+--   Before dropping any indexes, columns, or constraints, this rollback inspects `payment` for
+--   duplicate (provider_name, provider_payment_id, payment_type) references (e.g., a failed attempt
+--   followed by a completed capture or multiple failed attempts sharing a provider_payment_id).
+--   If incompatible rows exist, rollback stops immediately BEFORE any destructive DDL runs,
+--   preserving all payment and payment_reconciliation records untouched.
+--
+-- To inspect incompatible rows without modifying history:
+--   SELECT provider_name, provider_payment_id, payment_type, COUNT(*) AS row_count
+--   FROM payment
+--   WHERE provider_name IS NOT NULL AND provider_payment_id IS NOT NULL
+--   GROUP BY provider_name, provider_payment_id, payment_type
+--   HAVING COUNT(*) > 1;
 
--- 1. Revert payment unique/index and generated column back to uk_payment_provider_ref (if no duplicate provider refs exist)
+-- 0. Preflight check BEFORE any DDL change
+SET @uk_pay_old_pre = (
+    SELECT COUNT(*) FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'payment' AND INDEX_NAME = 'uk_payment_provider_ref'
+);
+SET @dup_provider_payment_refs = (
+    SELECT COUNT(*) FROM (
+        SELECT provider_name, provider_payment_id, payment_type
+        FROM payment
+        WHERE provider_name IS NOT NULL
+          AND provider_payment_id IS NOT NULL
+        GROUP BY provider_name, provider_payment_id, payment_type
+        HAVING COUNT(*) > 1
+    ) dup_refs
+);
+SET @sql_abort_dup_pay_refs = IF(
+    @uk_pay_old_pre = 0 AND @dup_provider_payment_refs > 0,
+    'SELECT 1 FROM err_rollback_022_blocked_duplicate_provider_payment_refs_exist',
+    'DO 0'
+);
+PREPARE stmt_abort_dup_pay_refs FROM @sql_abort_dup_pay_refs;
+EXECUTE stmt_abort_dup_pay_refs;
+DEALLOCATE PREPARE stmt_abort_dup_pay_refs;
+
+-- 1. Revert payment unique/index and generated column back to uk_payment_provider_ref
 SET @uk_pay_comp = (
     SELECT COUNT(*) FROM information_schema.STATISTICS
     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'payment' AND INDEX_NAME = 'uk_payment_completed_provider_ref'

@@ -12,12 +12,15 @@ if ($selectedPayment === 'online' && !$onlineEnabled) {
 }
 $minThreshold = (int)($minStockThreshold ?? 3);
 $holdMins = (int)($holdMinutes ?? 3);
-$subtotalAmount = isset($amounts['subtotal_amount']) ? (float)$amounts['subtotal_amount'] : (float)($subtotal ?? $total);
-$deliveryFee = isset($amounts['delivery_fee']) ? (float)$amounts['delivery_fee'] : 0.0;
-$finalTotal = isset($amounts['total_amount']) ? (float)$amounts['total_amount'] : (float)$total;
+$subtotalAmount = isset($amounts['subtotal_amount']) ? (float)$amounts['subtotal_amount'] : (float)($subtotal ?? $total ?? 0);
 $deliveryFeeConfigured = !empty($paymentSettings['delivery_fee_configured']);
-$configuredDeliveryFee = $deliveryFeeConfigured ? (float)$paymentSettings['delivery_fee'] : 0.0;
+$configuredDeliveryFee = ($deliveryFeeConfigured && $paymentSettings['delivery_fee'] !== null) ? (float)$paymentSettings['delivery_fee'] : null;
+$deliveryFee = ($selectedFulfillment === 'pickup')
+    ? 0.0
+    : (($deliveryFeeConfigured && $configuredDeliveryFee !== null) ? $configuredDeliveryFee : null);
+$finalTotal = ($deliveryFee !== null) ? round($subtotalAmount + $deliveryFee, 2) : null;
 $noPaymentAvailable = !$codEnabled && !$onlineEnabled;
+$submitBlocked = $noPaymentAvailable || ($selectedFulfillment === 'delivery' && !$deliveryFeeConfigured);
 ?>
 <a class="breadcrumb-link" href="/cart/<?= (int)$unit['business_unit_id'] ?>"><span class="arrow-back" aria-hidden="true">&larr;</span> Back to <?= e($unit['business_unit_name']) ?> cart</a>
 <div class="page-header">
@@ -61,25 +64,29 @@ $noPaymentAvailable = !$codEnabled && !$onlineEnabled;
     </tr>
   <?php endforeach; ?>
   </tbody>
-  <tfoot>
+  <tfoot data-checkout-summary>
     <tr>
       <th colspan="4" class="right">Product subtotal</th>
-      <th class="right tabular"><?= money($subtotalAmount) ?></th>
+      <th class="right tabular" data-checkout-subtotal><?= money($subtotalAmount) ?></th>
     </tr>
     <tr>
       <th colspan="4" class="right">
         Delivery fee
-        <?php if ($selectedFulfillment === 'pickup'): ?>
-          <span class="caption muted">(Pickup — no delivery fee)</span>
-        <?php elseif (!$deliveryFeeConfigured): ?>
-          <span class="caption muted">(Delivery fee schedule pending configuration)</span>
-        <?php endif; ?>
+        <span class="caption muted" data-checkout-delivery-note>
+          <?php if ($selectedFulfillment === 'pickup'): ?>
+            (Pickup — no delivery fee)
+          <?php elseif ($deliveryFeeConfigured): ?>
+            (Configured delivery fee)
+          <?php else: ?>
+            (Delivery unavailable — fee not configured)
+          <?php endif; ?>
+        </span>
       </th>
-      <th class="right tabular"><?= money($deliveryFee) ?></th>
+      <th class="right tabular" data-checkout-delivery-fee><?= $deliveryFee !== null ? money($deliveryFee) : 'Unavailable' ?></th>
     </tr>
     <tr>
       <th colspan="4" class="right">Total (recalculated on the server when you submit)</th>
-      <th class="right price"><?= money($finalTotal) ?></th>
+      <th class="right price" data-checkout-total><?= $finalTotal !== null ? money($finalTotal) : 'Unavailable' ?></th>
     </tr>
   </tfoot>
 </table>
@@ -92,12 +99,16 @@ $noPaymentAvailable = !$codEnabled && !$onlineEnabled;
     <strong>Online Payment</strong> is currently unavailable because no payment provider is configured;
   <?php endif; ?>
   <strong>Cash on Delivery (COD)</strong> immediately confirms your order and reserves stock without a temporary hold.
-  <?php if ($selectedFulfillment === 'delivery' && !$deliveryFeeConfigured): ?>
-    Delivery fee calculation is currently set to <?= money($configuredDeliveryFee) ?> pending store delivery-fee configuration.
+  <?php if (!$deliveryFeeConfigured): ?>
+    <strong>Delivery</strong> is currently unavailable because no valid delivery fee is configured for this shop (branch pickup has no delivery fee).
   <?php endif; ?>
 </p>
 
-<form method="post" action="/checkout/<?= (int)$unit['business_unit_id'] ?>" class="card" data-checkout-form>
+<form method="post" action="/checkout/<?= (int)$unit['business_unit_id'] ?>" class="card" data-checkout-form
+      data-subtotal="<?= e(number_format($subtotalAmount, 2, '.', '')) ?>"
+      data-delivery-fee="<?= ($deliveryFeeConfigured && $configuredDeliveryFee !== null) ? e(number_format($configuredDeliveryFee, 2, '.', '')) : '' ?>"
+      data-delivery-fee-configured="<?= $deliveryFeeConfigured ? '1' : '0' ?>"
+      data-no-payment-available="<?= $noPaymentAvailable ? '1' : '0' ?>">
   <?= \App\Core\CSRF::field() ?>
   <input type="hidden" name="checkout_token" value="<?= e($checkoutToken ?? '') ?>">
 
@@ -111,11 +122,20 @@ $noPaymentAvailable = !$codEnabled && !$onlineEnabled;
           <span class="caption">Collect your order directly at <?= e($unit['business_unit_name']) ?> (no delivery fee)</span>
         </span>
       </label>
-      <label class="check" style="margin: 0;">
-        <input type="radio" name="fulfillment_method" value="delivery" <?= $selectedFulfillment === 'delivery' ? 'checked' : '' ?>>
+      <label class="check" style="margin: 0;<?= !$deliveryFeeConfigured ? ' opacity: 0.6; cursor: not-allowed;' : '' ?>">
+        <input type="radio" name="fulfillment_method" value="delivery" <?= $selectedFulfillment === 'delivery' ? 'checked' : '' ?> <?= !$deliveryFeeConfigured ? 'disabled' : '' ?>>
         <span>
-          <strong>Delivery</strong><br>
-          <span class="caption">Ship to your specified street address<?= $deliveryFeeConfigured ? ' (' . money($configuredDeliveryFee) . ' delivery fee)' : '' ?></span>
+          <strong>Delivery</strong>
+          <?php if (!$deliveryFeeConfigured): ?>
+            <span class="badge secondary">Unavailable</span>
+          <?php endif; ?><br>
+          <span class="caption">
+            <?php if ($deliveryFeeConfigured && $configuredDeliveryFee !== null): ?>
+              Ship to your specified street address (<?= money($configuredDeliveryFee) ?> delivery fee)
+            <?php else: ?>
+              Currently unavailable (no valid delivery fee configured for this shop)
+            <?php endif; ?>
+          </span>
         </span>
       </label>
     </div>
@@ -201,6 +221,6 @@ $noPaymentAvailable = !$codEnabled && !$onlineEnabled;
 
   <div class="row" style="margin-top: 1.25rem; justify-content: space-between;">
     <a class="btn secondary" href="/cart/<?= (int)$unit['business_unit_id'] ?>">Back to cart</a>
-    <button class="btn" type="submit" <?= $noPaymentAvailable ? 'disabled' : '' ?>>Place order</button>
+    <button class="btn" type="submit" data-checkout-submit <?= $submitBlocked ? 'disabled' : '' ?>>Place order</button>
   </div>
 </form>

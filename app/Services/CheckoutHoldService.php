@@ -86,9 +86,13 @@ final class CheckoutHoldService
         $stmt->execute([$businessUnitId]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
 
-        $feeRaw = ($row && array_key_exists('delivery_fee', $row) && $row['delivery_fee'] !== null)
-            ? round((float)$row['delivery_fee'], 2)
-            : null;
+        $feeRaw = null;
+        if ($row && array_key_exists('delivery_fee', $row) && $row['delivery_fee'] !== null && is_numeric($row['delivery_fee'])) {
+            $parsedFee = round((float)$row['delivery_fee'], 2);
+            if ($parsedFee >= 0.0) {
+                $feeRaw = $parsedFee;
+            }
+        }
 
         return [
             'cod_enabled' => $row ? !empty($row['cod_enabled']) : true,
@@ -100,11 +104,11 @@ final class CheckoutHoldService
 
     /**
      * Calculate separated product subtotal, delivery fee, and final total.
-     * Pickup orders strictly have zero delivery fee. For delivery orders, uses the
-     * unit's configured business_settings.delivery_fee when set, or 0.00 with
-     * delivery_fee_configured=false until a delivery-fee business rule is approved.
+     * Pickup orders strictly have zero delivery fee. For delivery orders, requires a valid
+     * non-negative configured business_settings.delivery_fee; never silently substitutes 0.00
+     * when missing (returns null fee/total with delivery_fee_configured=false).
      *
-     * @return array{subtotal_amount:float, delivery_fee:float, total_amount:float, delivery_fee_configured:bool}
+     * @return array{subtotal_amount:float, delivery_fee:?float, total_amount:?float, delivery_fee_configured:bool}
      */
     public function calculateOrderAmounts(float $productSubtotal, string $fulfillmentMethod, int $businessUnitId): array
     {
@@ -119,14 +123,22 @@ final class CheckoutHoldService
         }
 
         $settings = $this->getUnitPaymentSettings($businessUnitId);
-        $configured = $settings['delivery_fee_configured'];
-        $fee = $configured ? round((float)$settings['delivery_fee'], 2) : 0.00;
+        if (!$settings['delivery_fee_configured'] || $settings['delivery_fee'] === null || $settings['delivery_fee'] < 0.0) {
+            return [
+                'subtotal_amount' => $subtotal,
+                'delivery_fee' => null,
+                'total_amount' => null,
+                'delivery_fee_configured' => false,
+            ];
+        }
+
+        $fee = round((float)$settings['delivery_fee'], 2);
 
         return [
             'subtotal_amount' => $subtotal,
             'delivery_fee' => $fee,
             'total_amount' => round($subtotal + $fee, 2),
-            'delivery_fee_configured' => $configured,
+            'delivery_fee_configured' => true,
         ];
     }
 
@@ -354,6 +366,12 @@ final class CheckoutHoldService
 
                 $attemptToken = bin2hex(random_bytes(32));
                 $amounts = $this->calculateOrderAmounts((float)$snapshot['subtotal_amount'], $fulfillmentMethod, $businessUnitId);
+                if (empty($amounts['delivery_fee_configured']) || $amounts['delivery_fee'] === null || $amounts['total_amount'] === null) {
+                    throw new RuntimeException(
+                        'Delivery checkout is unavailable because no valid delivery fee is configured for this shop. Please select branch pickup.',
+                        self::ERR_UNPROCESSABLE
+                    );
+                }
                 $subtotalAmount = $amounts['subtotal_amount'];
                 $deliveryFee = $amounts['delivery_fee'];
                 $totalAmount = $amounts['total_amount'];
@@ -546,6 +564,12 @@ final class CheckoutHoldService
 
                 $attemptToken = bin2hex(random_bytes(32));
                 $amounts = $this->calculateOrderAmounts((float)$snapshot['subtotal_amount'], $fulfillmentMethod, $businessUnitId);
+                if (empty($amounts['delivery_fee_configured']) || $amounts['delivery_fee'] === null || $amounts['total_amount'] === null) {
+                    throw new RuntimeException(
+                        'Delivery checkout is unavailable because no valid delivery fee is configured for this shop. Please select branch pickup.',
+                        self::ERR_UNPROCESSABLE
+                    );
+                }
                 $subtotalAmount = $amounts['subtotal_amount'];
                 $deliveryFee = $amounts['delivery_fee'];
                 $totalAmount = $amounts['total_amount'];
@@ -759,7 +783,53 @@ final class CheckoutHoldService
         $this->db->exec('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
         $this->db->beginTransaction();
         try {
-            // 1. Webhook event deduplication inside transaction.
+            // 1. Canonical lock order: inventory (ASC) -> inventory_batch (ASC) -> inventory_reservation (ASC).
+            $lockedInventory = $sortedInvIds ? $this->lockInventories($sortedInvIds) : [];
+            $batchPoolsByInv = $batchInvIds
+                ? InventoryBatch::lockEligibleFefoBatchesForInventories($this->db, $batchInvIds, true)
+                : [];
+
+            // 2. Lock checkout_attempt -> inventory_hold -> inventory_hold_item before webhook/payment locks.
+            $attStmt = $this->db->prepare('SELECT * FROM checkout_attempt WHERE attempt_id = ? FOR UPDATE');
+            $attStmt->execute([$attemptId]);
+            $attempt = $attStmt->fetch(PDO::FETCH_ASSOC);
+            if (!$attempt) {
+                throw new RuntimeException("Checkout attempt #{$attemptId} was not found.", self::ERR_NOT_FOUND);
+            }
+            if ($attempt['payment_channel'] !== 'online') {
+                throw new RuntimeException("Checkout attempt #{$attemptId} is not an online payment attempt.", self::ERR_CONFLICT);
+            }
+
+            $holdStmt = $this->db->prepare(
+                "SELECT *, (expires_at > UTC_TIMESTAMP()) AS is_unexpired
+                 FROM inventory_hold
+                 WHERE attempt_id = ?
+                 FOR UPDATE"
+            );
+            $holdStmt->execute([$attemptId]);
+            $hold = $holdStmt->fetch(PDO::FETCH_ASSOC);
+            if (!$hold) {
+                throw new RuntimeException("Inventory hold missing for online checkout attempt #{$attemptId}.", self::ERR_CONFLICT);
+            }
+            $holdId = (int)$hold['hold_id'];
+
+            $hiStmt = $this->db->prepare(
+                "SELECT ihi.hold_item_id, ihi.inventory_id, ihi.business_product_id, ihi.quantity, ihi.unit_price,
+                        bp.requires_batch_tracking, bp.product_status, bp.business_unit_id, p.product_name
+                 FROM inventory_hold_item ihi
+                 JOIN business_product bp ON bp.business_product_id = ihi.business_product_id
+                 JOIN product p ON p.product_id = bp.product_id
+                 WHERE ihi.hold_id = ?
+                 ORDER BY ihi.inventory_id ASC, ihi.hold_item_id ASC
+                 FOR UPDATE"
+            );
+            $hiStmt->execute([$holdId]);
+            $holdItems = $hiStmt->fetchAll(PDO::FETCH_ASSOC);
+            if (!$holdItems) {
+                throw new RuntimeException("Inventory hold #{$holdId} has no items.", self::ERR_UNPROCESSABLE);
+            }
+
+            // 3. Webhook event deduplication after checkout_attempt X-lock is held (avoids FK S-to-X deadlock).
             $webhookEventId = null;
             if ($providerEventId !== null) {
                 $webhookEventId = $this->claimWebhookEvent(
@@ -775,31 +845,14 @@ final class CheckoutHoldService
                     return [
                         'status' => 'duplicate_ignored',
                         'attempt_id' => $attemptId,
-                        'order_id' => $targetAttempt['order_id'] !== null ? (int)$targetAttempt['order_id'] : null,
+                        'order_id' => $attempt['order_id'] !== null ? (int)$attempt['order_id'] : null,
                         'reconciliation_id' => null,
                         'reconciled_after_expiry' => false,
                     ];
                 }
             }
 
-            // 2. Acquire inventory (inventory_id ASC) -> inventory_batch (batch_id ASC) -> inventory_reservation (reservation_id ASC).
-            $lockedInventory = $sortedInvIds ? $this->lockInventories($sortedInvIds) : [];
-            $batchPoolsByInv = $batchInvIds
-                ? InventoryBatch::lockEligibleFefoBatchesForInventories($this->db, $batchInvIds, true)
-                : [];
-
-            // 3. Lock attempt, hold, and hold items.
-            $attStmt = $this->db->prepare('SELECT * FROM checkout_attempt WHERE attempt_id = ? FOR UPDATE');
-            $attStmt->execute([$attemptId]);
-            $attempt = $attStmt->fetch(PDO::FETCH_ASSOC);
-            if (!$attempt) {
-                throw new RuntimeException("Checkout attempt #{$attemptId} was not found.", self::ERR_NOT_FOUND);
-            }
-            if ($attempt['payment_channel'] !== 'online') {
-                throw new RuntimeException("Checkout attempt #{$attemptId} is not an online payment attempt.", self::ERR_CONFLICT);
-            }
-
-            // Deduplicate ONLY against already-completed/refunded captures (never block on prior 'failed' attempts).
+            // 4. Deduplicate ONLY against already-completed/refunded captures (never block on prior 'failed' attempts).
             $dupPayStmt = $this->db->prepare(
                 "SELECT payment_id, order_id, attempt_id
                  FROM payment
@@ -846,35 +899,6 @@ final class CheckoutHoldService
                     'reconciliation_id' => $this->findReconciliationId($attemptId),
                     'reconciled_after_expiry' => false,
                 ];
-            }
-
-            $holdStmt = $this->db->prepare(
-                "SELECT *, (expires_at > UTC_TIMESTAMP()) AS is_unexpired
-                 FROM inventory_hold
-                 WHERE attempt_id = ?
-                 FOR UPDATE"
-            );
-            $holdStmt->execute([$attemptId]);
-            $hold = $holdStmt->fetch(PDO::FETCH_ASSOC);
-            if (!$hold) {
-                throw new RuntimeException("Inventory hold missing for online checkout attempt #{$attemptId}.", self::ERR_CONFLICT);
-            }
-            $holdId = (int)$hold['hold_id'];
-
-            $hiStmt = $this->db->prepare(
-                "SELECT ihi.hold_item_id, ihi.inventory_id, ihi.business_product_id, ihi.quantity, ihi.unit_price,
-                        bp.requires_batch_tracking, bp.product_status, bp.business_unit_id, p.product_name
-                 FROM inventory_hold_item ihi
-                 JOIN business_product bp ON bp.business_product_id = ihi.business_product_id
-                 JOIN product p ON p.product_id = bp.product_id
-                 WHERE ihi.hold_id = ?
-                 ORDER BY ihi.inventory_id ASC, ihi.hold_item_id ASC
-                 FOR UPDATE"
-            );
-            $hiStmt->execute([$holdId]);
-            $holdItems = $hiStmt->fetchAll(PDO::FETCH_ASSOC);
-            if (!$holdItems) {
-                throw new RuntimeException("Inventory hold #{$holdId} has no items.", self::ERR_UNPROCESSABLE);
             }
 
             $wasExpired = ($hold['hold_status'] === 'expired') || ($hold['hold_status'] === 'active' && (int)$hold['is_unexpired'] !== 1);
@@ -1108,6 +1132,25 @@ final class CheckoutHoldService
         $this->db->exec('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
         $this->db->beginTransaction();
         try {
+            // Canonical lock order: inventory (ASC) -> checkout_attempt -> inventory_hold -> payment_webhook_event -> payment.
+            if ($sortedInvIds) {
+                $this->lockInventories($sortedInvIds);
+            }
+
+            $attStmt = $this->db->prepare('SELECT * FROM checkout_attempt WHERE attempt_id = ? FOR UPDATE');
+            $attStmt->execute([$attemptId]);
+            $attempt = $attStmt->fetch(PDO::FETCH_ASSOC);
+            if (!$attempt) {
+                throw new RuntimeException("Checkout attempt #{$attemptId} was not found.", self::ERR_NOT_FOUND);
+            }
+            if ($attempt['payment_channel'] !== 'online') {
+                throw new RuntimeException("Checkout attempt #{$attemptId} is not an online payment attempt.", self::ERR_CONFLICT);
+            }
+
+            $holdStmt = $this->db->prepare('SELECT * FROM inventory_hold WHERE attempt_id = ? FOR UPDATE');
+            $holdStmt->execute([$attemptId]);
+            $hold = $holdStmt->fetch(PDO::FETCH_ASSOC);
+
             $webhookEventId = null;
             if ($providerEventId !== null) {
                 $webhookEventId = $this->claimWebhookEvent(
@@ -1124,29 +1167,11 @@ final class CheckoutHoldService
                 }
             }
 
-            if ($sortedInvIds) {
-                $this->lockInventories($sortedInvIds);
-            }
-
-            $attStmt = $this->db->prepare('SELECT * FROM checkout_attempt WHERE attempt_id = ? FOR UPDATE');
-            $attStmt->execute([$attemptId]);
-            $attempt = $attStmt->fetch(PDO::FETCH_ASSOC);
-            if (!$attempt) {
-                throw new RuntimeException("Checkout attempt #{$attemptId} was not found.", self::ERR_NOT_FOUND);
-            }
-            if ($attempt['payment_channel'] !== 'online') {
-                throw new RuntimeException("Checkout attempt #{$attemptId} is not an online payment attempt.", self::ERR_CONFLICT);
-            }
-
             if (in_array($attempt['attempt_status'], ['completed', 'reconciliation_required'], true)) {
                 $this->finalizeWebhookEvent($webhookEventId, 'ignored_duplicate', 'Ignored failure after terminal paid state.');
                 $this->db->commit();
                 return ['status' => 'ignored_already_paid', 'attempt_id' => $attemptId, 'hold_released' => false];
             }
-
-            $holdStmt = $this->db->prepare('SELECT * FROM inventory_hold WHERE attempt_id = ? FOR UPDATE');
-            $holdStmt->execute([$attemptId]);
-            $hold = $holdStmt->fetch(PDO::FETCH_ASSOC);
 
             $nowUtc = $this->dbUtcNow();
             $holdReleased = false;
@@ -1334,14 +1359,26 @@ final class CheckoutHoldService
         ?int $actorUserId,
         bool $requireExpired = false
     ): bool {
+        $preHoldStmt = $this->db->prepare('SELECT attempt_id FROM inventory_hold WHERE hold_id = ? LIMIT 1');
+        $preHoldStmt->execute([$holdId]);
+        $attemptIdRaw = $preHoldStmt->fetchColumn();
+        if ($attemptIdRaw === false) {
+            return false;
+        }
+        $attemptId = (int)$attemptIdRaw;
         $invIds = $this->loadHoldInventoryIdsByHoldId($holdId);
 
         $this->db->exec('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
         $this->db->beginTransaction();
         try {
+            // Canonical lock order: inventory (ASC) -> checkout_attempt -> inventory_hold.
             if ($invIds) {
                 $this->lockInventories($invIds);
             }
+
+            $attStmt = $this->db->prepare('SELECT * FROM checkout_attempt WHERE attempt_id = ? FOR UPDATE');
+            $attStmt->execute([$attemptId]);
+            $attempt = $attStmt->fetch(PDO::FETCH_ASSOC);
 
             $holdStmt = $this->db->prepare(
                 "SELECT *, (expires_at <= UTC_TIMESTAMP()) AS is_expired_now
@@ -1360,11 +1397,6 @@ final class CheckoutHoldService
                 $this->db->commit();
                 return false;
             }
-
-            $attemptId = (int)$hold['attempt_id'];
-            $attStmt = $this->db->prepare('SELECT * FROM checkout_attempt WHERE attempt_id = ? FOR UPDATE');
-            $attStmt->execute([$attemptId]);
-            $attempt = $attStmt->fetch(PDO::FETCH_ASSOC);
 
             $nowUtc = $this->dbUtcNow();
             $this->db->prepare(
@@ -1899,6 +1931,13 @@ final class CheckoutHoldService
             throw new RuntimeException('Choose pickup or delivery.', self::ERR_UNPROCESSABLE);
         }
         if ($fulfillmentMethod === 'delivery') {
+            $settings = $this->getUnitPaymentSettings($businessUnitId);
+            if (!$settings['delivery_fee_configured'] || $settings['delivery_fee'] === null || $settings['delivery_fee'] < 0.0) {
+                throw new RuntimeException(
+                    'Delivery checkout is unavailable because no valid delivery fee is configured for this shop. Please select branch pickup.',
+                    self::ERR_UNPROCESSABLE
+                );
+            }
             $a1 = trim((string)($addr['address_line1'] ?? ''));
             $a2 = trim((string)($addr['address_line2'] ?? ''));
             $city = trim((string)($addr['city'] ?? ''));
@@ -2184,6 +2223,7 @@ final class CheckoutHoldService
             $bpId = (int)$hi['business_product_id'];
             $qtyByBp[$bpId] = ($qtyByBp[$bpId] ?? 0) + (int)$hi['quantity'];
         }
+        ksort($qtyByBp, SORT_NUMERIC);
 
         $selStmt = $this->db->prepare('SELECT cart_item_id, quantity FROM cart_item WHERE cart_id = ? AND business_product_id = ? FOR UPDATE');
         $delStmt = $this->db->prepare('DELETE FROM cart_item WHERE cart_item_id = ?');
