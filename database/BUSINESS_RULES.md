@@ -325,15 +325,24 @@
     quarantined in In Transit/Committed until inspection; only inspected
     sellable quantities may return to On Hand. This clarification does
     not approve Rule 6/8 movement names or accounting treatment.
--   **OD-10 — COD collection and remittance (CONFIRMED):** Courier
-    collection and staff remittance verification are separate events.
-    At actual customer handover, record the amount, collecting courier,
-    collection time, and `collected_pending_remittance`; the COD payment
-    remains pending and is not settled revenue. A different authorized
-    staff member verifies the cash remittance; only then does the COD
-    payment become completed. The eligible verifier-role matrix and
-    exception handling remain unresolved. OD-10 does not approve COD
-    availability or enabled business units.
+-   **OD-10 — COD collection and remittance (CONFIRMED):** Customer COD
+    payment collection and courier-to-store cash remittance are separate
+    lifecycle stages. When the courier completes delivery and collects
+    COD, the customer's `payment` becomes `completed` (`collection_channel
+    = 'courier_cod'`, `collected_by_employee_id`, `collected_at`) for the
+    full order `total_amount` (`subtotal_amount + delivery_fee`), and
+    never reverts to owing based on remittance state. The courier remits
+    only the purchase `subtotal_amount` (excluding `delivery_fee`) via
+    `courier_cod_remittance` and per-order
+    `courier_cod_remittance_allocation` rows (`handover_status`:
+    `submitted` → `completed`; `verification_status`: `pending` →
+    `verified`). Pet Store Receptionist records per-order handover
+    completion; Business Manager collects and verifies individual
+    allocations or batches (with direct Business Manager collection
+    auto-verified, and optional forward-only
+    `business_settings.auto_verify_cod_remittance` auto-verifying future
+    Receptionist completions). Discrepancy-resolution and ordinary
+    remittance cancellation workflows are out of scope.
 -   **OD-11 — Phase 1 refund scope (CONFIRMED):** Pre-fulfillment partial
     refunds are excluded in Phase 1. Eligible Phase 1 requests use the
     existing full-refund approval workflow; approval is not itself proof

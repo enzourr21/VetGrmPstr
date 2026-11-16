@@ -250,6 +250,16 @@ Clinic, Grooming Services.
     row.
 -   **CONFIRMED (uploaded ERD rule):** Refund rows reference an original
     payment and preserve the original payment row.
+-   **CONFIRMED (OD-10 COD collection & remittance):** `PAYMENT` records
+    `collection_channel`, `collected_by_employee_id`, and `collected_at`
+    (`payment_status = 'completed'` upon customer collection). Courier
+    COD remittance batches (`COURIER_COD_REMITTANCE`) and per-order
+    allocations (`COURIER_COD_REMITTANCE_ALLOCATION`) track remittable
+    order `subtotal_amount` (excluding `delivery_fee`), per-allocation
+    `handover_status` (`submitted` → `completed`) and
+    `verification_status` (`pending` → `verified` with
+    `verification_mode`), and derived batch `remittance_status`
+    (`submitted`, `completed`, `verified`).
 -   **UNRESOLVED:** The uploaded ERD's stock return movement rules
     conflict; see `BUSINESS_RULES.md`.
 
