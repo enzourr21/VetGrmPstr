@@ -164,6 +164,7 @@ final class OrderReservationService
     ): array {
         $this->assertTopLevelTransaction('Order confirmation');
 
+        $this->db->exec('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
         $this->db->beginTransaction();
         try {
             // 1. Lock the target order exclusively and verify scope, fulfillment method, and state.
@@ -230,118 +231,18 @@ final class OrderReservationService
             sort($sortedInvIds, SORT_NUMERIC);
             $lockedInventory = $this->lockInventories($sortedInvIds);
 
-            // 6. Revalidate aggregate availability and allocate FEFO batches without partial reservations.
-            $plannedReservations = [];
-            $committedDeltaByInventory = [];
-            $totalReservedQty = 0;
-
-            foreach ($sortedInvIds as $invId) {
-                if (!isset($lockedInventory[$invId])) {
-                    throw new RuntimeException("Inventory record #{$invId} could not be locked.", self::ERR_UNPROCESSABLE);
-                }
-
-                $inv = $lockedInventory[$invId];
-                $onHand = (int)$inv['on_hand'];
-                $committed = (int)$inv['committed'];
-                $inTransit = (int)$inv['in_transit'];
-                $available = ($onHand + $inTransit) - $committed;
-
-                $invItems = $itemsByInventory[$invId];
-                $productName = $invItems[0]['product_name'];
-                $requiresBatch = $invItems[0]['requires_batch_tracking'];
-
-                $totalRequestedForInv = 0;
-                foreach ($invItems as $invItem) {
-                    $totalRequestedForInv += $invItem['quantity'];
-                }
-
-                if ($available < $totalRequestedForInv) {
-                    throw new RuntimeException(
-                        "Insufficient available stock for '{$productName}'. Available: {$available}, requested: {$totalRequestedForInv}.",
-                        self::ERR_UNPROCESSABLE
-                    );
-                }
-
-                if ($requiresBatch) {
-                    $batchPool = InventoryBatch::lockEligibleFefoBatchesForReservation($this->db, $invId);
-                    $totalUnreservedBatchQty = 0;
-                    foreach ($batchPool as $batch) {
-                        $totalUnreservedBatchQty += $batch['unreserved_quantity'];
-                    }
-
-                    if ($totalUnreservedBatchQty < $totalRequestedForInv) {
-                        throw new RuntimeException(
-                            "Insufficient eligible non-expired batch stock for '{$productName}'. Available: {$totalUnreservedBatchQty}, requested: {$totalRequestedForInv}.",
-                            self::ERR_UNPROCESSABLE
-                        );
-                    }
-
-                    foreach ($invItems as $invItem) {
-                        $remaining = $invItem['quantity'];
-                        foreach ($batchPool as &$batch) {
-                            if ($remaining <= 0) {
-                                break;
-                            }
-                            if ($batch['unreserved_quantity'] <= 0) {
-                                continue;
-                            }
-
-                            $take = min($remaining, $batch['unreserved_quantity']);
-                            $plannedReservations[] = [
-                                'order_item_id' => $invItem['order_item_id'],
-                                'inventory_id' => $invId,
-                                'batch_id' => $batch['batch_id'],
-                                'reserved_quantity' => $take,
-                            ];
-                            $batch['unreserved_quantity'] -= $take;
-                            $remaining -= $take;
-                        }
-                        unset($batch);
-
-                        if ($remaining > 0) {
-                            throw new RuntimeException(
-                                "Failed to allocate full FEFO quantity for '{$productName}' on Order #{$orderId}.",
-                                self::ERR_UNPROCESSABLE
-                            );
-                        }
-                    }
-                } else {
-                    foreach ($invItems as $invItem) {
-                        $plannedReservations[] = [
-                            'order_item_id' => $invItem['order_item_id'],
-                            'inventory_id' => $invId,
-                            'batch_id' => null,
-                            'reserved_quantity' => $invItem['quantity'],
-                        ];
-                    }
-                }
-
-                $committedDeltaByInventory[$invId] = $totalRequestedForInv;
-                $totalReservedQty += $totalRequestedForInv;
-            }
-
-            // 7. Persist active reservations, increment inventory.committed, update order_status, and log Audit::record().
-            $insResStmt = $this->db->prepare(
-                "INSERT INTO inventory_reservation (order_item_id, inventory_id, batch_id, reserved_quantity, reservation_status)
-                 VALUES (?, ?, ?, ?, 'active')"
+            // 6. Read active unexpired online-checkout holds (non-locking under READ COMMITTED after inventory FOR UPDATE),
+            //    revalidate availability, allocate FEFO batches, and persist reservations + inventory.committed.
+            $activeHeldByInventory = self::activeHeldQuantitiesByInventory($this->db, $sortedInvIds);
+            $resSummary = $this->reserveLockedOrderItems(
+                $orderId,
+                $sortedInvIds,
+                $itemsByInventory,
+                $lockedInventory,
+                $activeHeldByInventory
             );
-            foreach ($plannedReservations as $res) {
-                $insResStmt->execute([
-                    $res['order_item_id'],
-                    $res['inventory_id'],
-                    $res['batch_id'],
-                    $res['reserved_quantity'],
-                ]);
-            }
-
-            $updInvStmt = $this->db->prepare(
-                "UPDATE inventory
-                 SET committed = committed + ?, updated_at = NOW()
-                 WHERE inventory_id = ?"
-            );
-            foreach ($committedDeltaByInventory as $invId => $delta) {
-                $updInvStmt->execute([$delta, $invId]);
-            }
+            $reservationsCreated = $resSummary['reservations_created'];
+            $totalReservedQty = $resSummary['total_reserved_quantity'];
 
             $updOrdStmt = $this->db->prepare(
                 "UPDATE customer_order
@@ -375,7 +276,7 @@ final class OrderReservationService
 
             return [
                 'order_id' => $orderId,
-                'reservations_created' => count($plannedReservations),
+                'reservations_created' => $reservationsCreated,
                 'total_reserved_quantity' => $totalReservedQty,
             ];
         } catch (Throwable $e) {
@@ -1305,6 +1206,186 @@ final class OrderReservationService
                 );
             }
         }
+    }
+
+    /**
+     * Read active unexpired temporary checkout hold quantities grouped by inventory_id.
+     * Non-locking read intended for use under READ COMMITTED after parent inventory FOR UPDATE locks are held.
+     *
+     * @param array<int,int> $inventoryIds
+     * @return array<int,int> Map of inventory_id => active held quantity
+     */
+    public static function activeHeldQuantitiesByInventory(PDO $db, array $inventoryIds, ?int $excludeHoldId = null): array
+    {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $inventoryIds), static fn(int $id): bool => $id > 0)));
+        if (!$ids) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $sql = "SELECT ihi.inventory_id, COALESCE(SUM(ihi.quantity), 0) AS held_qty
+                FROM inventory_hold_item ihi
+                JOIN inventory_hold ih ON ih.hold_id = ihi.hold_id
+                WHERE ihi.inventory_id IN ({$placeholders})
+                  AND ih.hold_status = 'active'
+                  AND ih.expires_at > UTC_TIMESTAMP()";
+        $params = $ids;
+        if ($excludeHoldId !== null && $excludeHoldId > 0) {
+            $sql .= " AND ih.hold_id <> ?";
+            $params[] = $excludeHoldId;
+        }
+        $sql .= " GROUP BY ihi.inventory_id";
+
+        $stmt = $db->prepare($sql);
+        $stmt->execute($params);
+
+        $heldByInv = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $heldByInv[(int)$row['inventory_id']] = (int)$row['held_qty'];
+        }
+        return $heldByInv;
+    }
+
+    /**
+     * Shared FEFO reservation allocator and inventory.committed updater for an order whose
+     * inventory rows are already locked FOR UPDATE in ascending inventory_id order inside an active transaction.
+     *
+     * @param array<int,int> $sortedInvIds
+     * @param array<int,array<int,array{order_item_id:int,business_product_id:int,quantity:int,requires_batch_tracking:bool,product_name:string}>> $itemsByInventory
+     * @param array<int,array<string,mixed>> $lockedInventory
+     * @param array<int,int> $activeHeldByInventory
+     * @return array{reservations_created:int, total_reserved_quantity:int}
+     */
+    public function reserveLockedOrderItems(
+        int $orderId,
+        array $sortedInvIds,
+        array $itemsByInventory,
+        array $lockedInventory,
+        array $activeHeldByInventory = []
+    ): array {
+        if (!$this->db->inTransaction()) {
+            throw new RuntimeException('Reservation allocation must run inside an active transaction.', self::ERR_CONFLICT);
+        }
+
+        $plannedReservations = [];
+        $committedDeltaByInventory = [];
+        $totalReservedQty = 0;
+
+        foreach ($sortedInvIds as $invId) {
+            if (!isset($lockedInventory[$invId])) {
+                throw new RuntimeException("Inventory record #{$invId} could not be locked.", self::ERR_UNPROCESSABLE);
+            }
+
+            $inv = $lockedInventory[$invId];
+            $onHand = (int)$inv['on_hand'];
+            $committed = (int)$inv['committed'];
+            $inTransit = (int)$inv['in_transit'];
+            $activeHeld = (int)($activeHeldByInventory[$invId] ?? 0);
+            $available = (($onHand + $inTransit) - $committed) - $activeHeld;
+
+            $invItems = $itemsByInventory[$invId];
+            $productName = $invItems[0]['product_name'];
+            $requiresBatch = $invItems[0]['requires_batch_tracking'];
+
+            $totalRequestedForInv = 0;
+            foreach ($invItems as $invItem) {
+                $totalRequestedForInv += $invItem['quantity'];
+            }
+
+            if ($available < $totalRequestedForInv) {
+                $displayAvail = max(0, $available);
+                throw new RuntimeException(
+                    "Insufficient available stock for '{$productName}'. Available: {$displayAvail}, requested: {$totalRequestedForInv}.",
+                    self::ERR_UNPROCESSABLE
+                );
+            }
+
+            if ($requiresBatch) {
+                $batchPool = InventoryBatch::lockEligibleFefoBatchesForReservation($this->db, $invId);
+                $totalUnreservedBatchQty = 0;
+                foreach ($batchPool as $batch) {
+                    $totalUnreservedBatchQty += $batch['unreserved_quantity'];
+                }
+                $effectiveBatchAvail = $totalUnreservedBatchQty - $activeHeld;
+
+                if ($effectiveBatchAvail < $totalRequestedForInv) {
+                    $displayBatchAvail = max(0, $effectiveBatchAvail);
+                    throw new RuntimeException(
+                        "Insufficient eligible non-expired batch stock for '{$productName}'. Available: {$displayBatchAvail}, requested: {$totalRequestedForInv}.",
+                        self::ERR_UNPROCESSABLE
+                    );
+                }
+
+                foreach ($invItems as $invItem) {
+                    $remaining = $invItem['quantity'];
+                    foreach ($batchPool as &$batch) {
+                        if ($remaining <= 0) {
+                            break;
+                        }
+                        if ($batch['unreserved_quantity'] <= 0) {
+                            continue;
+                        }
+
+                        $take = min($remaining, $batch['unreserved_quantity']);
+                        $plannedReservations[] = [
+                            'order_item_id' => $invItem['order_item_id'],
+                            'inventory_id' => $invId,
+                            'batch_id' => $batch['batch_id'],
+                            'reserved_quantity' => $take,
+                        ];
+                        $batch['unreserved_quantity'] -= $take;
+                        $remaining -= $take;
+                    }
+                    unset($batch);
+
+                    if ($remaining > 0) {
+                        throw new RuntimeException(
+                            "Failed to allocate full FEFO quantity for '{$productName}' on Order #{$orderId}.",
+                            self::ERR_UNPROCESSABLE
+                        );
+                    }
+                }
+            } else {
+                foreach ($invItems as $invItem) {
+                    $plannedReservations[] = [
+                        'order_item_id' => $invItem['order_item_id'],
+                        'inventory_id' => $invId,
+                        'batch_id' => null,
+                        'reserved_quantity' => $invItem['quantity'],
+                    ];
+                }
+            }
+
+            $committedDeltaByInventory[$invId] = $totalRequestedForInv;
+            $totalReservedQty += $totalRequestedForInv;
+        }
+
+        $insResStmt = $this->db->prepare(
+            "INSERT INTO inventory_reservation (order_item_id, inventory_id, batch_id, reserved_quantity, reservation_status)
+             VALUES (?, ?, ?, ?, 'active')"
+        );
+        foreach ($plannedReservations as $res) {
+            $insResStmt->execute([
+                $res['order_item_id'],
+                $res['inventory_id'],
+                $res['batch_id'],
+                $res['reserved_quantity'],
+            ]);
+        }
+
+        $updInvStmt = $this->db->prepare(
+            "UPDATE inventory
+             SET committed = committed + ?, updated_at = NOW()
+             WHERE inventory_id = ?"
+        );
+        foreach ($committedDeltaByInventory as $invId => $delta) {
+            $updInvStmt->execute([$delta, $invId]);
+        }
+
+        return [
+            'reservations_created' => count($plannedReservations),
+            'total_reserved_quantity' => $totalReservedQty,
+        ];
     }
 
     /**

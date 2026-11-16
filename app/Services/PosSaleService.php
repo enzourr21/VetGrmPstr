@@ -161,8 +161,9 @@ final class PosSaleService
             $sortedInvIds = array_values($inventoryIds);
             sort($sortedInvIds, SORT_NUMERIC);
             $lockedInventory = $this->lockInventories($sortedInvIds);
+            $activeHeldByInventory = OrderReservationService::activeHeldQuantitiesByInventory($this->db, $sortedInvIds);
 
-            // 4. Revalidate physically sellable on-hand stock (excluding shelf commitments) and distribute FEFO batches.
+            // 4. Revalidate physically sellable on-hand stock (excluding shelf commitments and active online holds) and distribute FEFO batches.
             $allocationsByLineIndex = [];
             $batchDeductionByBatchId = [];
             $onHandDeductionByInv = [];
@@ -186,7 +187,8 @@ final class PosSaleService
 
                 // Committed >= In Transit >= 0; in_transit is quarantined/dispatched and excluded from shelf commitments.
                 $shelfCommitted = $committed - $inTransit;
-                $physicallySellableOnHand = $onHand - $shelfCommitted;
+                $activeHeld = (int)($activeHeldByInventory[$invId] ?? 0);
+                $physicallySellableOnHand = ($onHand - $shelfCommitted) - $activeHeld;
 
                 $invLines = $itemsByInventory[$invId];
                 $productName = $invLines[0]['product_name'];
@@ -211,10 +213,12 @@ final class PosSaleService
                     foreach ($batchPool as $batch) {
                         $totalUnreserved += $batch['unreserved_quantity'];
                     }
+                    $effectiveBatchUnreserved = $totalUnreserved - $activeHeld;
 
-                    if ($totalUnreserved < $totalRequestedForInv) {
+                    if ($effectiveBatchUnreserved < $totalRequestedForInv) {
+                        $displayBatchAvail = max(0, $effectiveBatchUnreserved);
                         throw new RuntimeException(
-                            "Insufficient eligible non-expired unreserved batch stock for '{$productName}'. Available: {$totalUnreserved}, requested: {$totalRequestedForInv}.",
+                            "Insufficient eligible non-expired unreserved batch stock for '{$productName}'. Available: {$displayBatchAvail}, requested: {$totalRequestedForInv}.",
                             self::ERR_UNPROCESSABLE
                         );
                     }

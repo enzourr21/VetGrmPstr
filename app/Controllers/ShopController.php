@@ -7,6 +7,7 @@ use App\Core\Controller;
 use App\Core\Session;
 use App\Models\Cart;
 use App\Models\Units;
+use App\Services\CheckoutHoldService;
 
 final class ShopController extends Controller
 {
@@ -14,10 +15,11 @@ final class ShopController extends Controller
     {
         $cid = Session::get('customer_id');
         $counts = $cid ? Cart::countsByUnit((int)$cid) : [];
+        $availSql = CheckoutHoldService::availableStockSql('i', 'bp');
         $allProducts = $this->db->query(
             "SELECT bp.business_product_id, bp.business_unit_id, bp.selling_price,
                     bu.business_unit_name, p.product_name, p.description, p.product_category,
-                    (COALESCE(i.on_hand,0) + COALESCE(i.in_transit,0) - COALESCE(i.committed,0)) AS available
+                    {$availSql} AS available
              FROM business_product bp
              JOIN product p ON p.product_id = bp.product_id
              JOIN business_unit bu ON bu.business_unit_id = bp.business_unit_id
@@ -38,11 +40,12 @@ final class ShopController extends Controller
     {
         $cid = Session::get('customer_id');
         $unit = Units::find($bu) ?? $this->notFound();
-        $s = $this->db->prepare('SELECT bp.business_product_id, bp.selling_price, p.product_name, p.description, p.product_category,
-                (COALESCE(i.on_hand,0) + COALESCE(i.in_transit,0) - COALESCE(i.committed,0)) AS available
+        $availSql = CheckoutHoldService::availableStockSql('i', 'bp');
+        $s = $this->db->prepare("SELECT bp.business_product_id, bp.selling_price, p.product_name, p.description, p.product_category,
+                {$availSql} AS available
             FROM business_product bp JOIN product p ON p.product_id=bp.product_id
             LEFT JOIN inventory i ON i.business_product_id=bp.business_product_id
-            WHERE bp.business_unit_id=? AND bp.product_status="active" ORDER BY p.product_name');
+            WHERE bp.business_unit_id=? AND bp.product_status='active' ORDER BY p.product_name");
         $s->execute([$bu]);
         $cartCount = $cid ? (int)(Cart::countsByUnit((int)$cid)[$bu] ?? 0) : 0;
         $this->render('shop/catalog', [
@@ -56,11 +59,12 @@ final class ShopController extends Controller
     public function product(int $bu, int $id): void
     {
         $unit = Units::find($bu) ?? $this->notFound();
-        $s = $this->db->prepare('SELECT bp.business_product_id, bp.selling_price, p.product_name, p.description, p.product_category,
-                (COALESCE(i.on_hand,0) + COALESCE(i.in_transit,0) - COALESCE(i.committed,0)) AS available
+        $availSql = CheckoutHoldService::availableStockSql('i', 'bp');
+        $s = $this->db->prepare("SELECT bp.business_product_id, bp.selling_price, p.product_name, p.description, p.product_category,
+                {$availSql} AS available
             FROM business_product bp JOIN product p ON p.product_id=bp.product_id
             LEFT JOIN inventory i ON i.business_product_id=bp.business_product_id
-            WHERE bp.business_product_id=? AND bp.business_unit_id=? AND bp.product_status="active"');
+            WHERE bp.business_product_id=? AND bp.business_unit_id=? AND bp.product_status='active'");
         $s->execute([$id, $bu]);
         $this->render('shop/product', [
             'title' => 'Product Details',
