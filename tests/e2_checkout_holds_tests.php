@@ -594,7 +594,7 @@ PHP;
         ? (int)$pdo->query("SELECT COALESCE(SUM(quantity), 0) FROM order_item WHERE order_id = " . (int)$raceAAtt['order_id'])->fetchColumn()
         : 0;
     $raceAActiveResQty = $raceAAtt['order_id'] !== null
-        ? (int)$pdo->query("SELECT COALESCE(SUM(ir.quantity), 0) FROM inventory_reservation ir JOIN order_item oi ON oi.order_item_id = ir.order_item_id WHERE oi.order_id = " . (int)$raceAAtt['order_id'] . " AND ir.reservation_status = 'active'")->fetchColumn()
+        ? (int)$pdo->query("SELECT COALESCE(SUM(ir.reserved_quantity), 0) FROM inventory_reservation ir JOIN order_item oi ON oi.order_item_id = ir.order_item_id WHERE oi.order_id = " . (int)$raceAAtt['order_id'] . " AND ir.reservation_status = 'active'")->fetchColumn()
         : 0;
 
     $raceANoDeadlock = !empty($raceAResults['capture']['ready'])

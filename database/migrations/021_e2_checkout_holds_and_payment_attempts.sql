@@ -218,7 +218,7 @@ CREATE TABLE IF NOT EXISTS payment_reconciliation (
     reconciliation_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     attempt_id BIGINT UNSIGNED NOT NULL,
     hold_id BIGINT UNSIGNED NULL,
-    payment_id BIGINT UNSIGNED NULL,
+    payment_id INT UNSIGNED NULL,
     business_unit_id INT UNSIGNED NOT NULL,
     customer_id INT UNSIGNED NOT NULL,
     provider_name VARCHAR(50) NULL,
