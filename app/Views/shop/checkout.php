@@ -15,6 +15,7 @@ $holdMins = (int)($holdMinutes ?? 3);
 $subtotalAmount = isset($amounts['subtotal_amount']) ? (float)$amounts['subtotal_amount'] : (float)($subtotal ?? $total ?? 0);
 $deliveryFeeConfigured = !empty($paymentSettings['delivery_fee_configured']);
 $configuredDeliveryFee = ($deliveryFeeConfigured && $paymentSettings['delivery_fee'] !== null) ? (float)$paymentSettings['delivery_fee'] : null;
+$deliveryTotalAmount = ($deliveryFeeConfigured && $configuredDeliveryFee !== null) ? round($subtotalAmount + $configuredDeliveryFee, 2) : null;
 $deliveryFee = ($selectedFulfillment === 'pickup')
     ? 0.0
     : (($deliveryFeeConfigured && $configuredDeliveryFee !== null) ? $configuredDeliveryFee : null);
@@ -105,8 +106,11 @@ $submitBlocked = $noPaymentAvailable || ($selectedFulfillment === 'delivery' && 
 </p>
 
 <form method="post" action="/checkout/<?= (int)$unit['business_unit_id'] ?>" class="card" data-checkout-form
-      data-subtotal="<?= e(number_format($subtotalAmount, 2, '.', '')) ?>"
-      data-delivery-fee="<?= ($deliveryFeeConfigured && $configuredDeliveryFee !== null) ? e(number_format($configuredDeliveryFee, 2, '.', '')) : '' ?>"
+      data-subtotal-formatted="<?= e(money($subtotalAmount)) ?>"
+      data-pickup-fee-formatted="<?= e(money(0.0)) ?>"
+      data-pickup-total-formatted="<?= e(money($subtotalAmount)) ?>"
+      data-delivery-fee-formatted="<?= ($deliveryFeeConfigured && $configuredDeliveryFee !== null) ? e(money($configuredDeliveryFee)) : '' ?>"
+      data-delivery-total-formatted="<?= ($deliveryTotalAmount !== null) ? e(money($deliveryTotalAmount)) : '' ?>"
       data-delivery-fee-configured="<?= $deliveryFeeConfigured ? '1' : '0' ?>"
       data-no-payment-available="<?= $noPaymentAvailable ? '1' : '0' ?>">
   <?= \App\Core\CSRF::field() ?>

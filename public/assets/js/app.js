@@ -842,22 +842,15 @@
     var totalEl = summaryBox ? summaryBox.querySelector('[data-checkout-total]') : null;
     var radios = checkoutForm.querySelectorAll('input[name="fulfillment_method"]');
 
-    var formatMoney = function (value) {
-      var num = Number(value);
-      if (!Number.isFinite(num)) num = 0;
-      return '$' + num.toLocaleString('en-US', {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2
-      });
-    };
-
     var updateFulfillment = function () {
       var selected = checkoutForm.querySelector('input[name="fulfillment_method"]:checked');
       var isDelivery = selected && selected.value === 'delivery';
-      var subtotalVal = parseFloat(checkoutForm.getAttribute('data-subtotal') || '0');
-      var feeConfigured = checkoutForm.getAttribute('data-delivery-fee-configured') === '1';
-      var rawFee = checkoutForm.getAttribute('data-delivery-fee') || '';
-      var feeVal = (feeConfigured && rawFee !== '') ? parseFloat(rawFee) : NaN;
+      var subtotalFmt = checkoutForm.getAttribute('data-subtotal-formatted') || '';
+      var pickupFeeFmt = checkoutForm.getAttribute('data-pickup-fee-formatted') || '';
+      var pickupTotalFmt = checkoutForm.getAttribute('data-pickup-total-formatted') || subtotalFmt;
+      var deliveryFeeFmt = checkoutForm.getAttribute('data-delivery-fee-formatted') || '';
+      var deliveryTotalFmt = checkoutForm.getAttribute('data-delivery-total-formatted') || '';
+      var feeConfigured = checkoutForm.getAttribute('data-delivery-fee-configured') === '1' && deliveryFeeFmt !== '' && deliveryTotalFmt !== '';
       var noPayment = checkoutForm.getAttribute('data-no-payment-available') === '1';
 
       if (deliveryWrap) {
@@ -871,18 +864,17 @@
             : 'Optional for branch pickup — only required when Delivery is selected.'
         );
       }
-      if (subtotalEl && Number.isFinite(subtotalVal)) {
-        subtotalEl.textContent = formatMoney(subtotalVal);
+      if (subtotalEl && subtotalFmt !== '') {
+        subtotalEl.textContent = subtotalFmt;
       }
       if (feeEl && totalEl) {
         if (!isDelivery) {
-          feeEl.textContent = formatMoney(0);
-          totalEl.textContent = formatMoney(subtotalVal);
+          if (pickupFeeFmt !== '') feeEl.textContent = pickupFeeFmt;
+          if (pickupTotalFmt !== '') totalEl.textContent = pickupTotalFmt;
           if (feeNoteEl) feeNoteEl.textContent = '(Pickup — no delivery fee)';
-        } else if (feeConfigured && Number.isFinite(feeVal) && feeVal >= 0) {
-          var roundedTotal = Math.round((subtotalVal + feeVal) * 100) / 100;
-          feeEl.textContent = formatMoney(feeVal);
-          totalEl.textContent = formatMoney(roundedTotal);
+        } else if (feeConfigured) {
+          feeEl.textContent = deliveryFeeFmt;
+          totalEl.textContent = deliveryTotalFmt;
           if (feeNoteEl) feeNoteEl.textContent = '(Configured delivery fee)';
         } else {
           feeEl.textContent = 'Unavailable';
@@ -891,7 +883,7 @@
         }
       }
       if (submitBtn) {
-        submitBtn.disabled = noPayment || (isDelivery && (!feeConfigured || !Number.isFinite(feeVal) || feeVal < 0));
+        submitBtn.disabled = noPayment || (isDelivery && !feeConfigured);
       }
     };
     radios.forEach(function (r) {

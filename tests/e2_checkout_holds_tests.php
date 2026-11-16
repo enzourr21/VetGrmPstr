@@ -468,8 +468,9 @@ try {
     check('Multi-inventory batch-tracked COD succeeds cleanly after lock release', $codMulti['order_id'] > 0 && $codMulti['reservations_created'] === 2);
 
     // 8. Genuine two-connection parallel contention: capture vs customer cancel & capture vs expired hold cleanup
-    $runParallelPhp = static function (array $scripts): array {
+    $runParallelPhp = static function (array $scripts, ?callable $onReadyBarrier = null): array {
         $procs = [];
+        $stdoutPipes = [];
         foreach ($scripts as $key => $code) {
             $desc = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
             $proc = proc_open([PHP_BINARY], $desc, $pipes, dirname(__DIR__));
@@ -479,7 +480,18 @@ try {
             fwrite($pipes[0], $code);
             fclose($pipes[0]);
             $procs[$key] = ['proc' => $proc, 'pipes' => $pipes];
+            $stdoutPipes[$key] = $pipes[1];
         }
+
+        $readySeen = [];
+        if ($onReadyBarrier !== null) {
+            foreach (array_keys($procs) as $key) {
+                $line = fgets($stdoutPipes[$key]);
+                $readySeen[$key] = $line !== false && trim($line) === 'READY';
+            }
+            $onReadyBarrier($readySeen);
+        }
+
         $results = [];
         foreach ($procs as $key => $entry) {
             $stdout = stream_get_contents($entry['pipes'][1]);
@@ -489,6 +501,7 @@ try {
             $exit = proc_close($entry['proc']);
             $results[$key] = [
                 'exit' => $exit,
+                'ready' => $readySeen[$key] ?? false,
                 'stdout' => trim((string)$stdout),
                 'stderr' => trim((string)$stderr),
                 'json' => json_decode(trim((string)$stdout), true),
@@ -499,7 +512,9 @@ try {
 
     $appRootExport = var_export(dirname(__DIR__), true);
 
-    // Race A: Verified payment capture vs customer cancellation on the SAME active hold & attempt
+    // Race A: Verified payment capture vs customer cancellation on the SAME active hold & attempt.
+    // A second DB connection ($pdo2) holds an X-lock on $invRaceCancel until BOTH workers boot & connect,
+    // then releases so both collide immediately on inventory -> checkout_attempt -> inventory_hold.
     [$bpRaceCancel, $invRaceCancel] = $createProduct('ChkE2 RaceCancel', 60.00, 5, 1);
     $pdo->exec("INSERT INTO inventory_batch (inventory_id, batch_number, expiration_date, quantity) VALUES ({$invRaceCancel}, 'RC-B1', DATE_ADD(CURDATE(), INTERVAL 20 DAY), 5)");
     $setCart($cid1, $bpRaceCancel, 3);
@@ -513,7 +528,11 @@ require_once {$appRootExport} . '/app/bootstrap.php';
 use App\Core\Database;
 use App\Services\CheckoutHoldService;
 try {
-    \$svc = new CheckoutHoldService(Database::pdo());
+    \$workerPdo = Database::pdo();
+    \$workerPdo->exec('DO 0');
+    echo "READY\n";
+    fflush(STDOUT);
+    \$svc = new CheckoutHoldService(\$workerPdo);
     \$res = \$svc->handleVerifiedPaymentCapture([
         'attempt_id' => {$raceCancelHold['attempt_id']},
         'provider_name' => 'test_gateway',
@@ -534,7 +553,11 @@ require_once {$appRootExport} . '/app/bootstrap.php';
 use App\Core\Database;
 use App\Services\CheckoutHoldService;
 try {
-    \$svc = new CheckoutHoldService(Database::pdo());
+    \$workerPdo = Database::pdo();
+    \$workerPdo->exec('DO 0');
+    echo "READY\n";
+    fflush(STDOUT);
+    \$svc = new CheckoutHoldService(\$workerPdo);
     \$res = \$svc->cancelActiveHoldByCustomer({$raceCancelHold['attempt_id']}, {$cid1}, {$uid1}, 'concurrent_customer_cancel');
     echo json_encode(['ok' => true, 'result' => \$res]);
 } catch (Throwable \$e) {
@@ -542,27 +565,94 @@ try {
 }
 PHP;
 
-    $raceAResults = $runParallelPhp([
-        'capture' => $workerCaptureCancel,
-        'cancel' => $workerCustomerCancel,
-    ]);
-    $raceACapOk = !empty($raceAResults['capture']['json']['ok']);
-    $raceACanOk = !empty($raceAResults['cancel']['json']['ok']);
+    $pdo2 = $openSecondConnection();
+    $pdo2->beginTransaction();
+    $pdo2->query("SELECT inventory_id FROM inventory WHERE inventory_id = {$invRaceCancel} FOR UPDATE")->fetch();
+    $raceAResults = $runParallelPhp(
+        ['capture' => $workerCaptureCancel, 'cancel' => $workerCustomerCancel],
+        static function () use ($pdo2): void {
+            if ($pdo2->inTransaction()) {
+                $pdo2->rollBack();
+            }
+        }
+    );
+    $capJson = $raceAResults['capture']['json'] ?? [];
+    $canJson = $raceAResults['cancel']['json'] ?? [];
+    $capResA = $capJson['result'] ?? [];
+    $canResA = $canJson['result'] ?? [];
+
     $raceAAtt = $pdo->query("SELECT attempt_status, order_id FROM checkout_attempt WHERE attempt_id = {$raceCancelHold['attempt_id']}")->fetch();
     $raceAHold = $pdo->query("SELECT hold_status, converted_order_id FROM inventory_hold WHERE hold_id = {$raceCancelHold['hold_id']}")->fetch();
     $raceAInv = $pdo->query("SELECT on_hand, committed FROM inventory WHERE inventory_id = {$invRaceCancel}")->fetch();
-    $raceAPayCnt = (int)$pdo->query("SELECT COUNT(*) FROM payment WHERE attempt_id = {$raceCancelHold['attempt_id']} AND payment_status = 'completed'")->fetchColumn();
+    $raceAPayTotalCnt = (int)$pdo->query("SELECT COUNT(*) FROM payment WHERE attempt_id = {$raceCancelHold['attempt_id']}")->fetchColumn();
+    $raceAPayCompCnt = (int)$pdo->query("SELECT COUNT(*) FROM payment WHERE attempt_id = {$raceCancelHold['attempt_id']} AND payment_status = 'completed'")->fetchColumn();
+    $raceAReconCnt = (int)$pdo->query("SELECT COUNT(*) FROM payment_reconciliation WHERE attempt_id = {$raceCancelHold['attempt_id']}")->fetchColumn();
+    $raceAOrderCnt = $raceAAtt['order_id'] !== null
+        ? (int)$pdo->query("SELECT COUNT(*) FROM customer_order WHERE order_id = " . (int)$raceAAtt['order_id'] . " AND order_status = 'confirmed'")->fetchColumn()
+        : 0;
+    $raceAOrderItemQty = $raceAAtt['order_id'] !== null
+        ? (int)$pdo->query("SELECT COALESCE(SUM(quantity), 0) FROM order_item WHERE order_id = " . (int)$raceAAtt['order_id'])->fetchColumn()
+        : 0;
+    $raceAActiveResQty = $raceAAtt['order_id'] !== null
+        ? (int)$pdo->query("SELECT COALESCE(SUM(ir.quantity), 0) FROM inventory_reservation ir JOIN order_item oi ON oi.order_item_id = ir.order_item_id WHERE oi.order_id = " . (int)$raceAAtt['order_id'] . " AND ir.reservation_status = 'active'")->fetchColumn()
+        : 0;
+
+    $raceANoDeadlock = !empty($raceAResults['capture']['ready'])
+        && !empty($raceAResults['cancel']['ready'])
+        && !empty($capJson['ok'])
+        && !empty($canJson['ok']);
+
+    // Serialized Outcome 1: capture acquired locks first -> confirmed order & converted hold; cancel saw non-active hold and returned released=false.
+    $raceAOutcomeCaptureFirst = ($capResA['status'] ?? '') === 'confirmed'
+        && empty($capResA['reconciled_after_expiry'])
+        && ($canResA['released'] ?? null) === false
+        && $raceAAtt['attempt_status'] === 'completed'
+        && (int)$raceAAtt['order_id'] === (int)($capResA['order_id'] ?? 0)
+        && $raceAHold['hold_status'] === 'converted'
+        && (int)$raceAHold['converted_order_id'] === (int)$raceAAtt['order_id']
+        && $raceAOrderCnt === 1
+        && $raceAOrderItemQty === 3
+        && $raceAActiveResQty === 3
+        && (int)$raceAInv['on_hand'] === 5
+        && (int)$raceAInv['committed'] === 3
+        && $raceAPayCompCnt === 1
+        && $raceAPayTotalCnt === 1
+        && $raceAReconCnt === 0;
+
+    // Serialized Outcome 2a: cancel acquired locks first & released hold -> delayed capture ran next while stock was still fulfillable and reconciled cleanly into a confirmed order.
+    $raceAOutcomeCancelThenFulfilled = ($canResA['released'] ?? null) === true
+        && ($capResA['status'] ?? '') === 'reconciled_after_expiry'
+        && !empty($capResA['reconciled_after_expiry'])
+        && $raceAAtt['attempt_status'] === 'completed'
+        && (int)$raceAAtt['order_id'] === (int)($capResA['order_id'] ?? 0)
+        && $raceAHold['hold_status'] === 'converted'
+        && (int)$raceAHold['converted_order_id'] === (int)$raceAAtt['order_id']
+        && $raceAOrderCnt === 1
+        && $raceAOrderItemQty === 3
+        && $raceAActiveResQty === 3
+        && (int)$raceAInv['on_hand'] === 5
+        && (int)$raceAInv['committed'] === 3
+        && $raceAPayCompCnt === 1
+        && $raceAPayTotalCnt === 1
+        && $raceAReconCnt === 0;
+
+    // Serialized Outcome 2b: cancel acquired locks first & released hold -> capture ran second under insufficient stock and queued reconciliation without creating an unfulfillable order.
+    $raceAOutcomeCancelThenRecon = ($canResA['released'] ?? null) === true
+        && ($capResA['status'] ?? '') === 'reconciliation_required'
+        && ($capResA['order_id'] ?? null) === null
+        && $raceAAtt['attempt_status'] === 'reconciliation_required'
+        && $raceAAtt['order_id'] === null
+        && $raceAHold['hold_status'] === 'released'
+        && $raceAOrderCnt === 0
+        && $raceAActiveResQty === 0
+        && (int)$raceAInv['committed'] === 0
+        && $raceAPayCompCnt === 1
+        && $raceAPayTotalCnt === 1
+        && $raceAReconCnt === 1;
+
     check(
-        'Two-connection parallel capture vs customer cancellation completes without deadlock and leaves consistent converted order & committed inventory',
-        $raceACapOk
-            && $raceACanOk
-            && $raceAAtt['attempt_status'] === 'completed'
-            && (int)$raceAAtt['order_id'] > 0
-            && $raceAHold['hold_status'] === 'converted'
-            && (int)$raceAHold['converted_order_id'] === (int)$raceAAtt['order_id']
-            && (int)$raceAInv['on_hand'] === 5
-            && (int)$raceAInv['committed'] === 3
-            && $raceAPayCnt === 1
+        'Race A: parallel capture vs customer cancellation serializes without deadlock and validates whichever outcome locked first',
+        $raceANoDeadlock && ($raceAOutcomeCaptureFirst || $raceAOutcomeCancelThenFulfilled || $raceAOutcomeCancelThenRecon)
     );
 
     // Race B: Verified payment capture vs expired hold cleanup + concurrent POS sale contending on inventory

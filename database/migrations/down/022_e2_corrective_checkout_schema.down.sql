@@ -15,6 +15,14 @@
 --   HAVING COUNT(*) > 1;
 
 -- 0. Preflight check BEFORE any DDL change
+--    Uses a single-statement SIGNAL SQLSTATE '45000' stored procedure (no inner semicolons) so MySQL
+--    raises an explicit, intentional error if incompatible duplicate payment references exist.
+--    When uk_payment_provider_ref already exists, duplicate references are impossible by that index.
+DROP PROCEDURE IF EXISTS _p_rollback_022_preflight;
+CREATE PROCEDURE _p_rollback_022_preflight()
+SIGNAL SQLSTATE '45000'
+    SET MESSAGE_TEXT = 'Rollback 022 aborted: duplicate (provider_name, provider_payment_id, payment_type) exist in payment; no records modified.';
+
 SET @uk_pay_old_pre = (
     SELECT COUNT(*) FROM information_schema.STATISTICS
     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'payment' AND INDEX_NAME = 'uk_payment_provider_ref'
@@ -31,12 +39,13 @@ SET @dup_provider_payment_refs = (
 );
 SET @sql_abort_dup_pay_refs = IF(
     @uk_pay_old_pre = 0 AND @dup_provider_payment_refs > 0,
-    'SELECT 1 FROM err_rollback_022_blocked_duplicate_provider_payment_refs_exist',
+    'CALL _p_rollback_022_preflight()',
     'DO 0'
 );
 PREPARE stmt_abort_dup_pay_refs FROM @sql_abort_dup_pay_refs;
 EXECUTE stmt_abort_dup_pay_refs;
 DEALLOCATE PREPARE stmt_abort_dup_pay_refs;
+DROP PROCEDURE IF EXISTS _p_rollback_022_preflight;
 
 -- 1. Revert payment unique/index and generated column back to uk_payment_provider_ref
 SET @uk_pay_comp = (
