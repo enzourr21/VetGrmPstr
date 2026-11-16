@@ -1,3 +1,7 @@
+<?php
+$payMethod = !empty($o['payment_method']) ? strtoupper((string)$o['payment_method']) : 'Pending';
+$payStatus = !empty($o['payment_status']) ? ucfirst((string)$o['payment_status']) : 'Pending';
+?>
 <a class="breadcrumb-link" href="/orders"><span class="arrow-back" aria-hidden="true">&larr;</span> Back to orders</a>
 <div class="page-header">
   <div>
@@ -11,7 +15,8 @@
   <p>
     <strong><?= e($o['business_unit_name']) ?></strong> · <span class="tabular"><?= e($o['order_date']) ?></span><br>
     Status: <span class="badge warn"><?= e(str_replace('_', ' ', ucfirst($o['order_status']))) ?></span><br>
-    Fulfillment: <strong><?= e(ucfirst($o['fulfillment_method'])) ?></strong>
+    Fulfillment: <strong><?= e(ucfirst($o['fulfillment_method'])) ?></strong><br>
+    Payment: <strong><?= e($payMethod) ?></strong> (<span class="badge <?= ($o['payment_status'] ?? '') === 'completed' ? 'ok' : 'secondary' ?>"><?= e($payStatus) ?></span>)
   </p>
   <?php if ($o['fulfillment_method'] === 'delivery'): ?>
     <p class="muted">Deliver to: <?= e(implode(', ', array_filter([$o['delivery_address_line1'], $o['delivery_address_line2'], $o['delivery_city'], $o['delivery_province'], $o['delivery_postal_code']]))) ?></p>
@@ -29,4 +34,8 @@
   <tfoot><tr><th colspan="3" class="right">Total</th><th class="right price"><?= money($o['total_amount']) ?></th></tr></tfoot>
 </table>
 
-<p class="muted" style="margin-top: 1rem;">Stock reservation and payment are not implemented yet; this order is recorded as pending.</p>
+<?php if (($o['payment_method'] ?? '') === 'cod' && ($o['payment_status'] ?? '') === 'pending'): ?>
+  <p class="muted" style="margin-top: 1rem;">Stock is reserved for this Cash on Delivery order. Payment will be collected upon handover.</p>
+<?php elseif (($o['payment_status'] ?? '') === 'completed'): ?>
+  <p class="muted" style="margin-top: 1rem;">Payment has been verified and stock is reserved for fulfillment.</p>
+<?php endif; ?>

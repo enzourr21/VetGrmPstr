@@ -1,45 +1,118 @@
+<?php
+$codEnabled = !empty($paymentSettings['cod_enabled']);
+$selectedFulfillment = $old['fulfillment_method'] ?? 'pickup';
+$defaultPayment = $codEnabled ? 'cod' : 'online';
+$selectedPayment = $old['payment_method'] ?? $defaultPayment;
+if ($selectedPayment === 'cod' && !$codEnabled) {
+    $selectedPayment = 'online';
+}
+$minThreshold = (int)($minStockThreshold ?? 3);
+$holdMins = (int)($holdMinutes ?? 3);
+$belowThresholdItems = [];
+foreach ($items as $it) {
+    if ((int)$it['available'] < $minThreshold || (int)$it['available'] < (int)$it['quantity']) {
+        $belowThresholdItems[] = $it;
+    }
+}
+?>
 <a class="breadcrumb-link" href="/cart/<?= (int)$unit['business_unit_id'] ?>"><span class="arrow-back" aria-hidden="true">&larr;</span> Back to <?= e($unit['business_unit_name']) ?> cart</a>
 <div class="page-header">
   <div>
     <h1>Checkout · <?= e($unit['business_unit_name']) ?></h1>
-    <p class="muted">Review your items and choose branch pickup or delivery.</p>
+    <p class="muted">Review your items, choose branch pickup or delivery, and select a payment method.</p>
   </div>
 </div>
 
 <?php foreach ($errors as $er): ?><div class="flash flash-error" role="alert"><?= e($er) ?></div><?php endforeach; ?>
 
+<?php if (!empty($activeHold)): ?>
+  <div class="flash flash-info" role="status">
+    You have an active online checkout hold (#<?= (int)$activeHold['attempt_id'] ?>) expiring at
+    <strong class="tabular"><?= e($activeHold['expires_at']) ?> UTC</strong>.
+    <a href="/checkout/attempts/<?= (int)$activeHold['attempt_id'] ?>">View pending payment hold &rarr;</a>
+  </div>
+<?php endif; ?>
+
 <table>
-  <thead><tr><th>Product</th><th>Price</th><th>Qty</th><th class="right">Subtotal</th></tr></thead>
+  <thead><tr><th>Product</th><th>Price</th><th>Qty</th><th>Available</th><th class="right">Subtotal</th></tr></thead>
   <tbody>
-  <?php foreach ($items as $i): ?>
-    <tr><td><strong><?= e($i['product_name']) ?></strong></td><td class="tabular"><?= money($i['selling_price']) ?></td><td class="tabular"><?= (int)$i['quantity'] ?></td><td class="right price"><?= money((float)$i['selling_price'] * (int)$i['quantity']) ?></td></tr>
+  <?php foreach ($items as $i):
+    $avail = (int)$i['available'];
+    $qty = (int)$i['quantity'];
+    $eligible = $avail >= $minThreshold && $avail >= $qty;
+  ?>
+    <tr>
+      <td>
+        <strong><?= e($i['product_name']) ?></strong>
+        <?php if ($avail < $minThreshold): ?>
+          <br><span class="badge warn">Requires at least <?= $minThreshold ?> in stock (<?= $avail ?> available)</span>
+        <?php elseif ($avail < $qty): ?>
+          <br><span class="badge err">Only <?= $avail ?> available</span>
+        <?php endif; ?>
+      </td>
+      <td class="tabular"><?= money($i['selling_price']) ?></td>
+      <td class="tabular"><?= $qty ?></td>
+      <td class="tabular"><span class="badge <?= $eligible ? 'ok' : 'warn' ?>"><?= $avail ?></span></td>
+      <td class="right price"><?= money((float)$i['selling_price'] * $qty) ?></td>
+    </tr>
   <?php endforeach; ?>
   </tbody>
-  <tfoot><tr><th colspan="3" class="right">Total (recalculated on the server when you submit)</th><th class="right price"><?= money($total) ?></th></tr></tfoot>
+  <tfoot><tr><th colspan="4" class="right">Total (recalculated on the server when you submit)</th><th class="right price"><?= money($total) ?></th></tr></tfoot>
 </table>
 
-<p class="notice">Stock is checked when you submit but is <strong>not reserved</strong> in this version. Payment is not handled online yet.</p>
+<p class="notice">
+  Online purchases require at least <strong><?= $minThreshold ?> units</strong> in available stock before checkout is accepted.
+  <strong>Online Payment</strong> places a <strong><?= $holdMins ?>-minute temporary stock hold</strong> while awaiting server-side payment verification;
+  <strong>Cash on Delivery (COD)</strong> immediately confirms your order and reserves stock without a temporary hold.
+</p>
 
 <form method="post" action="/checkout/<?= (int)$unit['business_unit_id'] ?>" class="card" data-checkout-form>
   <?= \App\Core\CSRF::field() ?>
-  <fieldset style="border:0;padding:0;margin:0">
+  <input type="hidden" name="checkout_token" value="<?= e($checkoutToken ?? '') ?>">
+
+  <fieldset style="border:0;padding:0;margin:0 0 1.25rem 0;">
     <legend style="font-weight: 700; margin-bottom: 0.45rem;">Fulfillment Method</legend>
     <div class="form-grid-2">
       <label class="check" style="margin: 0;">
-        <input type="radio" name="fulfillment_method" value="pickup" checked>
+        <input type="radio" name="fulfillment_method" value="pickup" <?= $selectedFulfillment === 'pickup' ? 'checked' : '' ?>>
         <span>
           <strong>Pickup at the branch</strong><br>
           <span class="caption">Collect your order directly at <?= e($unit['business_unit_name']) ?></span>
         </span>
       </label>
       <label class="check" style="margin: 0;">
-        <input type="radio" name="fulfillment_method" value="delivery">
+        <input type="radio" name="fulfillment_method" value="delivery" <?= $selectedFulfillment === 'delivery' ? 'checked' : '' ?>>
         <span>
           <strong>Delivery</strong><br>
           <span class="caption">Ship to your specified street address</span>
         </span>
       </label>
     </div>
+  </fieldset>
+
+  <fieldset style="border:0;padding:0;margin:0 0 1.25rem 0;">
+    <legend style="font-weight: 700; margin-bottom: 0.45rem;">Payment Method</legend>
+    <div class="form-grid-2">
+      <?php if ($codEnabled): ?>
+        <label class="check" style="margin: 0;">
+          <input type="radio" name="payment_method" value="cod" <?= $selectedPayment === 'cod' ? 'checked' : '' ?>>
+          <span>
+            <strong>Cash on Delivery (COD)</strong><br>
+            <span class="caption">Confirm order immediately and reserve stock; pay cash upon handover</span>
+          </span>
+        </label>
+      <?php endif; ?>
+      <label class="check" style="margin: 0;">
+        <input type="radio" name="payment_method" value="online" <?= $selectedPayment === 'online' ? 'checked' : '' ?>>
+        <span>
+          <strong>Online Payment</strong><br>
+          <span class="caption">Hold stock for <?= $holdMins ?> minutes and proceed to online payment verification</span>
+        </span>
+      </label>
+    </div>
+    <?php if (!$codEnabled): ?>
+      <p class="caption muted" style="margin-top: 0.45rem;">Cash on Delivery is currently disabled for <?= e($unit['business_unit_name']) ?>.</p>
+    <?php endif; ?>
   </fieldset>
 
   <div class="delivery-fields-wrap" data-delivery-fields>
@@ -80,11 +153,11 @@
       <label for="notes" style="margin:0">Notes</label>
       <span class="label-optional">Optional</span>
     </div>
-    <textarea id="notes" name="notes" rows="2"></textarea>
+    <textarea id="notes" name="notes" rows="2"><?= e($old['notes'] ?? '') ?></textarea>
   </div>
 
   <div class="row" style="margin-top: 1.25rem; justify-content: space-between;">
     <a class="btn secondary" href="/cart/<?= (int)$unit['business_unit_id'] ?>">Back to cart</a>
-    <button class="btn" type="submit">Submit order</button>
+    <button class="btn" type="submit">Place order</button>
   </div>
 </form>

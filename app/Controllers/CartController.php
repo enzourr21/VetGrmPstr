@@ -8,6 +8,7 @@ use App\Core\CSRF;
 use App\Core\Session;
 use App\Models\Cart;
 use App\Models\Units;
+use App\Services\CheckoutHoldService;
 
 final class CartController extends Controller
 {
@@ -37,9 +38,10 @@ final class CartController extends Controller
             $this->redirect("/shop/$bu");
         }
         // product must be active AND belong to this business unit
-        $s = $this->db->prepare('SELECT (COALESCE(i.on_hand,0) + COALESCE(i.in_transit,0) - COALESCE(i.committed,0)) AS available
+        $availSql = CheckoutHoldService::availableStockSql('i', 'bp');
+        $s = $this->db->prepare("SELECT {$availSql} AS available
             FROM business_product bp LEFT JOIN inventory i ON i.business_product_id=bp.business_product_id
-            WHERE bp.business_product_id=? AND bp.business_unit_id=? AND bp.product_status="active"');
+            WHERE bp.business_product_id=? AND bp.business_unit_id=? AND bp.product_status='active'");
         $s->execute([$bpId, $bu]);
         $row = $s->fetch();
         if (!$row) {

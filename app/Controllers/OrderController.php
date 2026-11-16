@@ -8,6 +8,8 @@ use App\Core\CSRF;
 use App\Core\Session;
 use App\Models\Cart;
 use App\Models\Units;
+use App\Services\CheckoutHoldService;
+use RuntimeException;
 
 final class OrderController extends Controller
 {
@@ -20,24 +22,53 @@ final class OrderController extends Controller
             Session::flash('info', 'Your cart is empty.');
             $this->redirect("/cart/$bu");
         }
+
         $c = $this->db->prepare('SELECT address_line1, address_line2, city, province, postal_code FROM customer WHERE customer_id=?');
         $c->execute([$cid]);
-        $this->render('shop/checkout', ['title' => 'Checkout', 'unit' => $unit, 'items' => $items, 'total' => Cart::total($items), 'addr' => $c->fetch() ?: [], 'errors' => []]);
+        $checkoutService = new CheckoutHoldService($this->db);
+
+        $this->render('shop/checkout', [
+            'title' => 'Checkout',
+            'unit' => $unit,
+            'items' => $items,
+            'total' => Cart::total($items),
+            'addr' => $c->fetch() ?: [],
+            'errors' => [],
+            'paymentSettings' => $checkoutService->getUnitPaymentSettings($bu),
+            'activeHold' => $checkoutService->getActiveHoldForCustomerUnit($cid, $bu),
+            'checkoutToken' => bin2hex(random_bytes(16)),
+            'minStockThreshold' => CheckoutHoldService::MIN_ONLINE_STOCK_THRESHOLD,
+            'holdMinutes' => (int)(CheckoutHoldService::HOLD_DURATION_SECONDS / 60),
+            'old' => [],
+        ]);
     }
 
     public function place(int $bu): void
     {
-        [, $cid] = $this->requireCustomer();
+        [$uid, $cid] = $this->requireCustomer();
         CSRF::check();
         $unit = Units::find($bu) ?? $this->notFound();
+
+        $checkoutService = new CheckoutHoldService($this->db);
+        $paymentSettings = $checkoutService->getUnitPaymentSettings($bu);
+
         $method = $this->post('fulfillment_method');
+        $paymentMethod = strtolower($this->post('payment_method'));
+        $checkoutToken = $this->post('checkout_token');
         $addr = [];
         foreach (['address_line1', 'address_line2', 'city', 'province', 'postal_code'] as $k) {
             $addr[$k] = $this->post($k);
         }
+        $notes = $this->post('notes');
+
         $errors = [];
         if (!in_array($method, ['pickup', 'delivery'], true)) {
             $errors[] = 'Choose pickup or delivery.';
+        }
+        if (!in_array($paymentMethod, ['cod', 'online'], true)) {
+            $errors[] = 'Choose a valid payment method.';
+        } elseif ($paymentMethod === 'cod' && !$paymentSettings['cod_enabled']) {
+            $errors[] = 'Cash on Delivery is not enabled for this shop.';
         }
         if ($method === 'delivery') {
             if ($addr['address_line1'] === '' || mb_strlen($addr['address_line1']) > 255) $errors[] = 'Enter a delivery address.';
@@ -45,81 +76,132 @@ final class OrderController extends Controller
             if ($addr['postal_code'] === '' || mb_strlen($addr['postal_code']) > 20) $errors[] = 'Enter a postal code.';
             if (mb_strlen($addr['address_line2']) > 255 || mb_strlen($addr['province']) > 100) $errors[] = 'An address field is too long.';
         }
-        $notes = $this->post('notes');
-        if (mb_strlen($notes) > 1000) $errors[] = 'Notes are too long.';
+        if (mb_strlen($notes) > 1000) {
+            $errors[] = 'Notes are too long.';
+        }
+        if ($checkoutToken === '' || mb_strlen($checkoutToken) > 128) {
+            $errors[] = 'Missing checkout submission token. Please try submitting again.';
+        }
 
-        $orderId = 0;
+        $httpErrorCode = 422;
         if (!$errors) {
             try {
-                $this->db->beginTransaction();
-                $cartId = Cart::id($cid, $bu);
-                // Prices and stock are read from the DB inside the transaction; nothing comes from the browser.
-                $s = $this->db->prepare('SELECT ci.cart_item_id, ci.quantity, bp.business_product_id, bp.business_unit_id, bp.selling_price, bp.product_status,
-                        p.product_name, i.inventory_id, COALESCE(i.on_hand,0) AS on_hand, COALESCE(i.committed,0) AS committed, COALESCE(i.in_transit,0) AS in_transit
-                    FROM cart_item ci
-                    JOIN business_product bp ON bp.business_product_id=ci.business_product_id
-                    JOIN product p ON p.product_id=bp.product_id
-                    LEFT JOIN inventory i ON i.business_product_id=bp.business_product_id
-                    WHERE ci.cart_id=? FOR UPDATE');
-                $s->execute([$cartId]);
-                $lines = $s->fetchAll();
-                if (!$lines) {
-                    $errors[] = 'Your cart is empty.';
+                if ($paymentMethod === 'cod') {
+                    $result = $checkoutService->placeCodOrder(
+                        $cid,
+                        $bu,
+                        $uid,
+                        $method,
+                        $addr,
+                        $notes,
+                        $checkoutToken
+                    );
+                    $orderId = (int)$result['order_id'];
+                    Session::flash('success', "Order #{$orderId} confirmed (Cash on Delivery). Stock has been reserved.");
+                    $this->redirect("/orders/{$orderId}");
                 }
-                $total = 0.0;
-                foreach ($lines as $l) {
-                    $available = ((int)$l['on_hand'] + (int)$l['in_transit']) - (int)$l['committed'];
-                    if ((int)$l['business_unit_id'] !== $bu) {
-                        $errors[] = $l['product_name'] . ' does not belong to this shop and cannot be ordered here.';
-                    } elseif ($l['product_status'] !== 'active') {
-                        $errors[] = $l['product_name'] . ' is no longer available.';
-                    } elseif ((int)$l['quantity'] < 1 || (int)$l['quantity'] > Cart::MAX_QTY) {
-                        $errors[] = 'Invalid quantity for ' . $l['product_name'] . '.';
-                    } elseif ($l['inventory_id'] === null || $available < (int)$l['quantity']) {
-                        $errors[] = 'Not enough stock for ' . $l['product_name'] . ' (' . $available . ' available).';
-                    }
-                    $total += (float)$l['selling_price'] * (int)$l['quantity'];
+
+                $result = $checkoutService->initiateOnlineCheckoutHold(
+                    $cid,
+                    $bu,
+                    $uid,
+                    $method,
+                    $addr,
+                    $notes,
+                    $checkoutToken
+                );
+                if (empty($result['idempotent_replay'])) {
+                    Session::flash('info', 'Temporary 3-minute stock hold created while awaiting online payment verification.');
                 }
-                if ($errors) {
-                    $this->db->rollBack();
-                } else {
-                    $delivery = $method === 'delivery';
-                    $n = fn($v) => $v === '' ? null : $v;
-                    $this->db->prepare('INSERT INTO customer_order (customer_id, business_unit_id, branch_id, fulfillment_method, order_status, total_amount,
-                            delivery_address_line1, delivery_address_line2, delivery_city, delivery_province, delivery_postal_code, notes)
-                        VALUES (?,?,?,?,"pending",?,?,?,?,?,?,?)')
-                        ->execute([$cid, $bu, Units::mainBranchId($bu), $method, round($total, 2),
-                            $delivery ? $addr['address_line1'] : null, $delivery ? $n($addr['address_line2']) : null, $delivery ? $addr['city'] : null,
-                            $delivery ? $n($addr['province']) : null, $delivery ? $addr['postal_code'] : null, $n($notes)]);
-                    $orderId = (int)$this->db->lastInsertId();
-                    $ins = $this->db->prepare('INSERT INTO order_item (order_id, business_product_id, quantity, unit_price) VALUES (?,?,?,?)');
-                    foreach ($lines as $l) {
-                        $ins->execute([$orderId, $l['business_product_id'], $l['quantity'], $l['selling_price']]);
-                    }
-                    $this->db->prepare('DELETE FROM cart_item WHERE cart_id=?')->execute([$cartId]);
-                    $this->db->commit();
+                $this->redirect((string)$result['redirect_url']);
+            } catch (RuntimeException $e) {
+                $errors[] = $e->getMessage();
+                $code = $e->getCode();
+                if ($code === CheckoutHoldService::ERR_CONFLICT) {
+                    $httpErrorCode = 409;
                 }
-            } catch (\Throwable $e) {
-                if ($this->db->inTransaction()) $this->db->rollBack();
-                throw $e; // handled globally: generic error, no success message, nothing saved
             }
         }
 
-        if ($errors) {
-            http_response_code(422);
-            $items = Cart::items(Cart::id($cid, $bu));
-            $this->render('shop/checkout', ['title' => 'Checkout', 'unit' => $unit, 'items' => $items, 'total' => Cart::total($items), 'addr' => $addr, 'errors' => $errors]);
-            return;
+        http_response_code($httpErrorCode);
+        $items = Cart::items(Cart::id($cid, $bu));
+        $this->render('shop/checkout', [
+            'title' => 'Checkout',
+            'unit' => $unit,
+            'items' => $items,
+            'total' => Cart::total($items),
+            'addr' => $addr,
+            'errors' => $errors,
+            'paymentSettings' => $paymentSettings,
+            'activeHold' => $checkoutService->getActiveHoldForCustomerUnit($cid, $bu),
+            'checkoutToken' => $checkoutToken !== '' ? $checkoutToken : bin2hex(random_bytes(16)),
+            'minStockThreshold' => CheckoutHoldService::MIN_ONLINE_STOCK_THRESHOLD,
+            'holdMinutes' => (int)(CheckoutHoldService::HOLD_DURATION_SECONDS / 60),
+            'old' => [
+                'fulfillment_method' => $method,
+                'payment_method' => $paymentMethod,
+                'notes' => $notes,
+            ],
+        ]);
+    }
+
+    public function checkoutSession(int $attemptId): void
+    {
+        [, $cid] = $this->requireCustomer();
+        $checkoutService = new CheckoutHoldService($this->db);
+        $attempt = $checkoutService->getAttemptDetailsForCustomer($attemptId, $cid);
+        if (!$attempt) {
+            $this->notFound();
         }
-        Session::flash('success', 'Order #' . $orderId . ' submitted. Status: pending. Stock has not been reserved yet.');
-        $this->redirect("/orders/$orderId");
+
+        if ($attempt['attempt_status'] === 'completed' && $attempt['order_id'] !== null) {
+            $this->redirect('/orders/' . (int)$attempt['order_id']);
+        }
+
+        $this->render('shop/checkout_session', [
+            'title' => 'Online Checkout Hold #' . $attemptId,
+            'attempt' => $attempt,
+            'items' => $attempt['items'],
+        ]);
+    }
+
+    public function cancelCheckoutHold(int $attemptId): void
+    {
+        [$uid, $cid] = $this->requireCustomer();
+        CSRF::check();
+        $checkoutService = new CheckoutHoldService($this->db);
+
+        try {
+            $res = $checkoutService->cancelActiveHoldByCustomer($attemptId, $cid, $uid);
+            if ($res['released']) {
+                Session::flash('info', 'Your online checkout hold has been cancelled and the held stock was released.');
+            } else {
+                Session::flash('info', 'This checkout hold is no longer active.');
+            }
+            $this->redirect('/checkout/' . (int)$res['business_unit_id']);
+        } catch (RuntimeException $e) {
+            if ($e->getCode() === CheckoutHoldService::ERR_NOT_FOUND) {
+                $this->notFound();
+            }
+            Session::flash('error', $e->getMessage());
+            $this->redirect('/shop');
+        }
     }
 
     public function index(): void
     {
         [, $cid] = $this->requireCustomer();
-        $s = $this->db->prepare('SELECT o.order_id, o.order_date, o.fulfillment_method, o.order_status, o.total_amount, bu.business_unit_name
-            FROM customer_order o JOIN business_unit bu ON bu.business_unit_id=o.business_unit_id WHERE o.customer_id=? ORDER BY o.order_date DESC, o.order_id DESC');
+        $s = $this->db->prepare(
+            "SELECT o.order_id, o.order_date, o.fulfillment_method, o.order_status, o.total_amount,
+                    bu.business_unit_name,
+                    p.payment_method,
+                    CASE WHEN COALESCE(ps.has_refunded, 0) = 1 THEN 'refunded' ELSE p.payment_status END AS payment_status
+             FROM customer_order o
+             JOIN business_unit bu ON bu.business_unit_id=o.business_unit_id
+             {$this->paymentSummaryJoinSql()}
+             WHERE o.customer_id=?
+             ORDER BY o.order_date DESC, o.order_id DESC"
+        );
         $s->execute([$cid]);
         $this->render('orders/index', ['title' => 'My orders', 'orders' => $s->fetchAll()]);
     }
@@ -127,12 +209,33 @@ final class OrderController extends Controller
     public function show(int $id): void
     {
         [, $cid] = $this->requireCustomer();
-        $s = $this->db->prepare('SELECT o.*, bu.business_unit_name FROM customer_order o JOIN business_unit bu ON bu.business_unit_id=o.business_unit_id WHERE o.order_id=? AND o.customer_id=?');
+        $s = $this->db->prepare(
+            "SELECT o.*, bu.business_unit_name,
+                    p.payment_method,
+                    CASE WHEN COALESCE(ps.has_refunded, 0) = 1 THEN 'refunded' ELSE p.payment_status END AS payment_status
+             FROM customer_order o
+             JOIN business_unit bu ON bu.business_unit_id=o.business_unit_id
+             {$this->paymentSummaryJoinSql()}
+             WHERE o.order_id=? AND o.customer_id=?"
+        );
         $s->execute([$id, $cid]);
         $o = $s->fetch() ?: $this->notFound();
         $i = $this->db->prepare('SELECT oi.quantity, oi.unit_price, p.product_name FROM order_item oi JOIN business_product bp ON bp.business_product_id=oi.business_product_id JOIN product p ON p.product_id=bp.product_id WHERE oi.order_id=? ORDER BY oi.order_item_id');
         $i->execute([$id]);
         $this->render('orders/show', ['title' => 'Order #' . $id, 'o' => $o, 'lines' => $i->fetchAll()]);
     }
-}
 
+    private function paymentSummaryJoinSql(): string
+    {
+        return "LEFT JOIN (
+                    SELECT p_sub.order_id,
+                           MAX(CASE WHEN (p_sub.payment_type = 'refund' AND p_sub.payment_status = 'completed') OR p_sub.payment_status = 'refunded' THEN 1 ELSE 0 END) AS has_refunded,
+                           MAX(CASE WHEN p_sub.payment_type = 'payment' AND p_sub.payment_status = 'completed' THEN p_sub.payment_id END) AS latest_completed_payment_id,
+                           MAX(CASE WHEN p_sub.payment_type = 'payment' THEN p_sub.payment_id END) AS latest_payment_id
+                    FROM payment p_sub
+                    WHERE p_sub.order_id IS NOT NULL
+                    GROUP BY p_sub.order_id
+                ) ps ON ps.order_id = o.order_id
+                LEFT JOIN payment p ON p.payment_id = COALESCE(ps.latest_completed_payment_id, ps.latest_payment_id)";
+    }
+}

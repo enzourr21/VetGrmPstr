@@ -7,6 +7,7 @@ use App\Core\Controller;
 use App\Core\CSRF;
 use App\Core\Session;
 use App\Models\Units;
+use App\Services\CheckoutHoldService;
 
 final class HomeController extends Controller
 {
@@ -32,10 +33,11 @@ final class HomeController extends Controller
         if ($q !== '') {
             $like = '%' . $q . '%';
 
+            $availSql = CheckoutHoldService::availableStockSql('i', 'bp');
             $pStmt = $this->db->prepare(
                 "SELECT bp.business_product_id, bp.business_unit_id, bp.selling_price,
                         bu.business_unit_name, p.product_name, p.description, p.product_category,
-                        (COALESCE(i.on_hand,0) + COALESCE(i.in_transit,0) - COALESCE(i.committed,0)) AS available
+                        {$availSql} AS available
                  FROM business_product bp
                  JOIN product p ON p.product_id = bp.product_id
                  JOIN business_unit bu ON bu.business_unit_id = bp.business_unit_id
