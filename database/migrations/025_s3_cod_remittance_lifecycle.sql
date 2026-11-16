@@ -448,6 +448,30 @@ SET @sql_025_chk_existing_lc = IF(
                          AND a6.allocation_status = 'active'
                          AND (a6.verified_by_employee_id IS NULL OR a6.verified_by_employee_id <> r2.verified_by_employee_id)
                    ))
+                   OR (
+                       r2.verified_by_employee_id IS NULL
+                       AND EXISTS (
+                           SELECT 1 FROM courier_cod_remittance_allocation a7
+                           WHERE a7.remittance_id = r2.remittance_id
+                             AND a7.allocation_status = 'active'
+                       )
+                       AND NOT EXISTS (
+                           SELECT 1 FROM courier_cod_remittance_allocation a8
+                           WHERE a8.remittance_id = r2.remittance_id
+                             AND a8.allocation_status = 'active'
+                             AND a8.verified_by_employee_id IS NULL
+                       )
+                       AND NOT EXISTS (
+                           SELECT 1
+                           FROM courier_cod_remittance_allocation a9
+                           JOIN courier_cod_remittance_allocation a10
+                             ON a10.remittance_id = a9.remittance_id
+                            AND a10.allocation_status = 'active'
+                           WHERE a9.remittance_id = r2.remittance_id
+                             AND a9.allocation_status = 'active'
+                             AND a9.verified_by_employee_id <> a10.verified_by_employee_id
+                       )
+                   )
                ))
            )
      ) lc_violations",
