@@ -400,7 +400,8 @@ final class OrderReservationService
         int $orderId,
         int $businessUnitId,
         int $courierEmployeeId,
-        int $actorUserId
+        int $actorUserId,
+        ?callable $onCompleted = null
     ): array {
         $this->assertTopLevelTransaction('Delivery order completion');
 
@@ -546,6 +547,10 @@ final class OrderReservationService
                 'customer_order',
                 $orderId
             );
+
+            if ($onCompleted !== null) {
+                $onCompleted();
+            }
 
             $this->db->commit();
 
@@ -774,7 +779,8 @@ final class OrderReservationService
         int $orderId,
         int $businessUnitId,
         int $actorUserId,
-        ?array $handoverQuantitiesByOrderItemId = null
+        ?array $handoverQuantitiesByOrderItemId = null,
+        ?callable $onCompleted = null
     ): array {
         $this->assertTopLevelTransaction('Pickup handover fulfillment');
 
@@ -1060,6 +1066,10 @@ final class OrderReservationService
                     'customer_order',
                     $orderId
                 );
+
+                if ($onCompleted !== null) {
+                    $onCompleted();
+                }
             } else {
                 Audit::record(
                     $this->db,

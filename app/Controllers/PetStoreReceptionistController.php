@@ -8,6 +8,7 @@ use App\Core\CSRF;
 use App\Core\Session;
 use App\Models\Audit;
 use App\Models\Units;
+use App\Services\OrderPaymentService;
 use App\Services\OrderReservationService;
 use App\Services\PosSaleService;
 use DateTime;
@@ -496,7 +497,7 @@ final class PetStoreReceptionistController extends Controller
 
         $sql = "SELECT co.*, CONCAT(c.first_name, ' ', c.last_name) AS customer_name,
                        c.phone AS customer_phone, ua.email AS customer_email,
-                       p.payment_method,
+                       p.payment_id, p.payment_method, p.collection_channel, p.collected_at,
                        CASE WHEN COALESCE(ps.has_refunded, 0) = 1 THEN 'refunded' ELSE p.payment_status END AS payment_status,
                        CONCAT(deliv_emp.first_name, ' ', deliv_emp.last_name) AS delivery_employee_name
                 FROM customer_order co
@@ -566,7 +567,7 @@ final class PetStoreReceptionistController extends Controller
                 $sOrd = $this->db->prepare(
                     "SELECT co.*, CONCAT(c.first_name, ' ', c.last_name) AS customer_name,
                             c.phone AS customer_phone, ua.email AS customer_email,
-                            p.payment_method,
+                            p.payment_id, p.payment_method, p.collection_channel, p.collected_at,
                             CASE WHEN COALESCE(ps.has_refunded, 0) = 1 THEN 'refunded' ELSE p.payment_status END AS payment_status,
                             CONCAT(deliv_emp.first_name, ' ', deliv_emp.last_name) AS delivery_employee_name
                      FROM customer_order co
@@ -618,7 +619,7 @@ final class PetStoreReceptionistController extends Controller
         $stmt = $this->db->prepare(
             "SELECT co.*, CONCAT(c.first_name, ' ', c.last_name) AS customer_name,
                     c.phone AS customer_phone, ua.email AS customer_email,
-                    p.payment_method,
+                    p.payment_id, p.payment_method, p.collection_channel, p.collected_at,
                     CASE WHEN COALESCE(ps.has_refunded, 0) = 1 THEN 'refunded' ELSE p.payment_status END AS payment_status,
                     CONCAT(deliv_emp.first_name, ' ', deliv_emp.last_name) AS delivery_employee_name
              FROM customer_order co
@@ -671,13 +672,14 @@ final class PetStoreReceptionistController extends Controller
      */
     public function updatePickupStatus(int $orderId): void
     {
-        [$uid, , $unitId] = $this->checkPetStoreReceptionist();
+        [$uid, $empId, $unitId, , $isSuper] = $this->checkPetStoreReceptionist();
         CSRF::check();
 
         $targetStatus = strtolower(trim((string)($_POST['status'] ?? '')));
 
         if (in_array($targetStatus, ['confirmed', 'ready_for_pickup', 'completed'], true)) {
-            $this->runOrderTransitionAction(function () use ($orderId, $unitId, $uid, $targetStatus): string {
+            $confirmCodCollected = $targetStatus === 'completed' && !empty($_POST['confirm_cod_collected']);
+            $this->runOrderTransitionAction(function () use ($orderId, $unitId, $uid, $empId, $isSuper, $targetStatus, $confirmCodCollected): string {
                 $service = new OrderReservationService($this->db);
                 if ($targetStatus === 'confirmed') {
                     $result = $service->confirmPickupOrderAndReserve($orderId, $unitId, $uid);
@@ -687,8 +689,18 @@ final class PetStoreReceptionistController extends Controller
                     $service->markPickupOrderReady($orderId, $unitId, $uid);
                     return "Order #{$orderId} status updated to Ready For Pickup.";
                 }
-                $result = $service->fulfillPickupOrder($orderId, $unitId, $uid);
-                return "Order #{$orderId} status updated to Completed ({$result['fulfilled_quantity']} unit(s) handed over).";
+
+                $onCompleted = null;
+                if ($confirmCodCollected) {
+                    $staffEmpId = $this->resolveCollectorEmployeeId($uid, $empId, $isSuper);
+                    $paymentService = new OrderPaymentService($this->db);
+                    $onCompleted = static function () use ($paymentService, $orderId, $unitId, $staffEmpId, $uid): void {
+                        $paymentService->collectPickupCodInTransaction($orderId, $unitId, $staffEmpId, $uid);
+                    };
+                }
+                $result = $service->fulfillPickupOrder($orderId, $unitId, $uid, null, $onCompleted);
+                $suffix = ($confirmCodCollected && empty($result['partial'])) ? ' COD payment confirmed as collected.' : '';
+                return "Order #{$orderId} status updated to Completed ({$result['fulfilled_quantity']} unit(s) handed over).{$suffix}";
             }, 'pickup', $orderId);
             return;
         }
@@ -702,6 +714,39 @@ final class PetStoreReceptionistController extends Controller
             'Only pickup orders may be updated by the receptionist. Delivery workflows belong to delivery personnel.',
             'Pending → Confirmed → Ready for Pickup → Completed'
         );
+    }
+
+    /**
+     * Confirm COD cash collection on a completed in-store pickup order.
+     */
+    public function collectPickupCod(int $orderId): void
+    {
+        [$uid, $empId, $unitId, , $isSuper] = $this->checkPetStoreReceptionist();
+        CSRF::check();
+
+        $this->runOrderTransitionAction(function () use ($orderId, $unitId, $uid, $empId, $isSuper): string {
+            $staffEmpId = $this->resolveCollectorEmployeeId($uid, $empId, $isSuper);
+            $paymentService = new OrderPaymentService($this->db);
+            $result = $paymentService->confirmPickupCodCollection($orderId, $unitId, $staffEmpId, $uid);
+            return "Confirmed in-store pickup COD collection (₱" . number_format((float)$result['amount'], 2) . ") for Order #{$orderId}.";
+        }, 'pickup', $orderId);
+    }
+
+    private function resolveCollectorEmployeeId(int $uid, int $empId, bool $isSuper): int
+    {
+        if (!$isSuper) {
+            return $empId;
+        }
+        $stmt = $this->db->prepare("SELECT employee_id FROM employee WHERE user_account_id = ? AND employee_status = 'active' LIMIT 1");
+        $stmt->execute([$uid]);
+        $realEmpId = (int)($stmt->fetchColumn() ?: 0);
+        if ($realEmpId <= 0) {
+            throw new RuntimeException(
+                'An active staff employee record is required to record payment collection.',
+                OrderPaymentService::ERR_FORBIDDEN
+            );
+        }
+        return $realEmpId;
     }
 
     /**

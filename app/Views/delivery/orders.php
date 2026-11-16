@@ -149,6 +149,83 @@ $buildTabUrl = function (string $t) use ($q): string {
       </table>
     </div>
   <?php endif; ?>
+
+  <?php if (!empty($isCourier) && ($activeTab ?? '') === 'history'): ?>
+    <div style="margin-top: 1.5rem; display: grid; gap: 1.25rem;">
+      <div class="card" style="padding: 1.25rem;">
+        <h3 style="margin: 0 0 0.5rem 0; font-size: 1.05rem;">Unremitted Courier COD Collections</h3>
+        <?php if (empty($unremittedCodPayments)): ?>
+          <p class="caption muted" style="margin: 0;">All confirmed courier COD collections have been submitted for remittance.</p>
+        <?php else: ?>
+          <form method="post" action="/delivery/remittances" style="margin: 0;">
+            <?= \App\Core\CSRF::field() ?>
+            <div style="overflow-x: auto; margin-bottom: 0.75rem;">
+              <table style="width: 100%; border-collapse: collapse;">
+                <thead>
+                  <tr style="border-bottom: 1px solid var(--color-border, #e5e7eb); text-align: left;">
+                    <th style="padding: 0.5rem;">Include</th>
+                    <th style="padding: 0.5rem;">Order</th>
+                    <th style="padding: 0.5rem;">Customer</th>
+                    <th style="padding: 0.5rem;">Collected At (UTC)</th>
+                    <th style="padding: 0.5rem; text-align: right;">COD Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <?php foreach ($unremittedCodPayments as $up): ?>
+                    <tr style="border-bottom: 1px solid var(--color-border, #f3f4f6);">
+                      <td style="padding: 0.5rem;">
+                        <input type="checkbox" name="payment_ids[]" value="<?= (int)$up['payment_id'] ?>" checked>
+                      </td>
+                      <td style="padding: 0.5rem; font-family: var(--font-mono, monospace);">#ORD-<?= (int)$up['order_id'] ?></td>
+                      <td style="padding: 0.5rem;"><?= e((string)$up['customer_name']) ?></td>
+                      <td style="padding: 0.5rem;" class="caption muted"><?= e((string)$up['collected_at']) ?></td>
+                      <td style="padding: 0.5rem; text-align: right; font-weight: 600;">₱<?= number_format((float)$up['amount'], 2) ?></td>
+                    </tr>
+                  <?php endforeach; ?>
+                </tbody>
+              </table>
+            </div>
+            <div style="display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center;">
+              <input type="text" name="notes" maxlength="500" placeholder="Optional remittance batch notes" style="flex: 1; min-width: 220px; padding: 0.45rem 0.65rem; border: 1px solid var(--color-border, #cbd5e1); border-radius: 6px;">
+              <button type="submit" class="btn primary btn-sm">Submit Exact COD Remittance Batch</button>
+            </div>
+          </form>
+        <?php endif; ?>
+      </div>
+
+      <?php if (!empty($courierRemittances)): ?>
+        <div class="card" style="padding: 1.25rem;">
+          <h3 style="margin: 0 0 0.5rem 0; font-size: 1.05rem;">Submitted COD Remittance Batches</h3>
+          <div style="overflow-x: auto;">
+            <table style="width: 100%; border-collapse: collapse;">
+              <thead>
+                <tr style="border-bottom: 1px solid var(--color-border, #e5e7eb); text-align: left;">
+                  <th style="padding: 0.5rem;">Reference</th>
+                  <th style="padding: 0.5rem;">Submitted At (UTC)</th>
+                  <th style="padding: 0.5rem; text-align: center;">Orders</th>
+                  <th style="padding: 0.5rem; text-align: right;">Total Remitted</th>
+                  <th style="padding: 0.5rem; text-align: center;">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                <?php foreach ($courierRemittances as $rmt): ?>
+                  <tr style="border-bottom: 1px solid var(--color-border, #f3f4f6);">
+                    <td style="padding: 0.5rem; font-family: var(--font-mono, monospace); font-weight: 600;"><?= e((string)$rmt['remittance_reference']) ?></td>
+                    <td style="padding: 0.5rem;" class="caption muted"><?= e((string)$rmt['submitted_at']) ?></td>
+                    <td style="padding: 0.5rem; text-align: center;"><?= (int)$rmt['payment_count'] ?></td>
+                    <td style="padding: 0.5rem; text-align: right; font-weight: 600;">₱<?= number_format((float)$rmt['remitted_total'], 2) ?></td>
+                    <td style="padding: 0.5rem; text-align: center;">
+                      <span class="badge badge-info"><?= e(ucfirst((string)$rmt['remittance_status'])) ?></span>
+                    </td>
+                  </tr>
+                <?php endforeach; ?>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      <?php endif; ?>
+    </div>
+  <?php endif; ?>
 </section>
 
 <?php
@@ -216,6 +293,20 @@ if (!empty($selectedOrder)) {
                 <?= e(ucfirst((string)$orderModal['payment_status'])) ?>
               </span>
             </div>
+            <?php if (!empty($orderModal['collection_channel'])): ?>
+              <div class="caption muted" style="margin-top: 0.25rem;">
+                Collected: <strong><?= e((string)$orderModal['collection_channel']) ?></strong>
+                <?php if (!empty($orderModal['collected_at'])): ?>
+                  (<?= e((string)$orderModal['collected_at']) ?> UTC)
+                <?php endif; ?>
+              </div>
+            <?php endif; ?>
+            <?php if (!empty($orderModal['active_remittance_reference'])): ?>
+              <div class="caption muted" style="margin-top: 0.25rem;">
+                Remittance: <strong><?= e((string)$orderModal['active_remittance_reference']) ?></strong>
+                (<?= e(ucfirst((string)($orderModal['active_remittance_status'] ?? 'submitted'))) ?>)
+              </div>
+            <?php endif; ?>
           <?php else: ?>
             <div style="margin-top: 0.35rem;"><span class="badge badge-warning">No Payment Record</span></div>
             <div class="caption muted" style="margin-top: 0.25rem;">Blocked until payment or COD is verified.</div>
@@ -325,6 +416,11 @@ if (!empty($selectedOrder)) {
       </div>
 
       <?php if ($isCourier): ?>
+        <?php
+        $isPendingCod = empty($orderModal['is_refunded'])
+            && in_array(strtolower(trim((string)($orderModal['payment_method'] ?? ''))), ['cod', 'cash'], true)
+            && (string)($orderModal['payment_status'] ?? '') === 'pending';
+        ?>
         <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 1rem 1.25rem;">
           <h4 style="margin: 0 0 0.75rem 0; font-size: 0.95rem; color: #1e293b;">Courier Actions</h4>
 
@@ -353,8 +449,14 @@ if (!empty($selectedOrder)) {
 
           <?php elseif ($canCompleteOrFail): ?>
             <div style="display: flex; flex-direction: column; gap: 1rem;">
-              <form method="post" action="/delivery/orders/<?= $ordId ?>/complete" style="margin: 0;">
+              <form method="post" action="/delivery/orders/<?= $ordId ?>/complete" style="margin: 0; display: flex; flex-direction: column; gap: 0.6rem; align-items: flex-start;">
                 <?= \App\Core\CSRF::field() ?>
+                <?php if ($isPendingCod): ?>
+                  <label class="caption" style="display: flex; align-items: center; gap: 0.45rem; cursor: pointer; font-weight: 600;">
+                    <input type="checkbox" name="confirm_cod_collected" value="1">
+                    Confirm COD cash collected from customer (₱<?= number_format((float)$orderModal['total_amount'], 2) ?>)
+                  </label>
+                <?php endif; ?>
                 <button type="submit" class="btn primary btn-sm">✓ Mark Delivered (Completed)</button>
               </form>
 
@@ -377,7 +479,15 @@ if (!empty($selectedOrder)) {
             </div>
 
           <?php elseif ($st === 'completed'): ?>
-            <span class="badge badge-success">✓ Delivery completed.</span>
+            <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
+              <span class="badge badge-success">✓ Delivery completed.</span>
+              <?php if ($isPendingCod): ?>
+                <form method="post" action="/delivery/orders/<?= $ordId ?>/collect-cod" style="margin: 0;">
+                  <?= \App\Core\CSRF::field() ?>
+                  <button type="submit" class="btn primary btn-sm">💵 Confirm COD Cash Collected (₱<?= number_format((float)$orderModal['total_amount'], 2) ?>)</button>
+                </form>
+              <?php endif; ?>
+            </div>
           <?php else: ?>
             <span class="caption muted">No courier actions available for this order.</span>
           <?php endif; ?>

@@ -249,6 +249,14 @@ if (!empty($selectedOrder)) {
               <?= e(ucfirst($orderModal['payment_status'] ?? 'pending')) ?>
             </span>
           </div>
+          <?php if (!empty($orderModal['collection_channel'])): ?>
+            <div class="caption muted" style="margin-top: 0.25rem;">
+              Collected via <strong><?= e((string)$orderModal['collection_channel']) ?></strong>
+              <?php if (!empty($orderModal['collected_at'])): ?>
+                (<?= e((string)$orderModal['collected_at']) ?> UTC)
+              <?php endif; ?>
+            </div>
+          <?php endif; ?>
         </div>
 
         <!-- Status Card -->
@@ -419,6 +427,10 @@ if (!empty($selectedOrder)) {
           </p>
 
           <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
+            <?php
+            $isPickupPendingCod = in_array(strtolower(trim((string)($orderModal['payment_method'] ?? ''))), ['cod', 'cash'], true)
+                && (string)($orderModal['payment_status'] ?? '') === 'pending';
+            ?>
             <?php if ($st === 'pending'): ?>
               <form method="post" action="/petstore/receptionist/orders/<?= $ordId ?>/status" style="margin: 0;">
                 <?= \App\Core\CSRF::field() ?>
@@ -436,9 +448,15 @@ if (!empty($selectedOrder)) {
                 </button>
               </form>
             <?php elseif ($st === 'ready_for_pickup'): ?>
-              <form method="post" action="/petstore/receptionist/orders/<?= $ordId ?>/status" style="margin: 0;">
+              <form method="post" action="/petstore/receptionist/orders/<?= $ordId ?>/status" style="margin: 0; display: flex; flex-direction: column; gap: 0.55rem; align-items: flex-start;">
                 <?= \App\Core\CSRF::field() ?>
                 <input type="hidden" name="status" value="completed">
+                <?php if ($isPickupPendingCod): ?>
+                  <label class="caption" style="display: flex; align-items: center; gap: 0.45rem; cursor: pointer; font-weight: 600;">
+                    <input type="checkbox" name="confirm_cod_collected" value="1">
+                    Confirm COD cash collected in-store at handover (₱<?= number_format((float)$orderModal['total_amount'], 2) ?>)
+                  </label>
+                <?php endif; ?>
                 <button type="submit" class="btn primary btn-sm">
                   🎉 Complete In-Store Pickup
                 </button>
@@ -447,6 +465,12 @@ if (!empty($selectedOrder)) {
               <span class="badge badge-success" style="padding: 0.4rem 0.75rem;">
                 ✓ Order has been completed and released to customer.
               </span>
+              <?php if ($isPickupPendingCod): ?>
+                <form method="post" action="/petstore/receptionist/orders/<?= $ordId ?>/collect-cod" style="margin: 0;">
+                  <?= \App\Core\CSRF::field() ?>
+                  <button type="submit" class="btn primary btn-sm">💵 Confirm In-Store COD Collected (₱<?= number_format((float)$orderModal['total_amount'], 2) ?>)</button>
+                </form>
+              <?php endif; ?>
             <?php else: ?>
               <span class="caption muted">No further pickup transitions available for status: <?= e($st) ?></span>
             <?php endif; ?>

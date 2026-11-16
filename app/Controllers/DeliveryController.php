@@ -8,6 +8,7 @@ use App\Core\CSRF;
 use App\Core\Session;
 use App\Models\Audit;
 use App\Models\Units;
+use App\Services\OrderPaymentService;
 use App\Services\OrderReservationService;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -215,8 +216,16 @@ final class DeliveryController extends Controller
                        CONCAT(c.first_name, ' ', c.last_name) AS customer_name,
                        c.phone AS customer_phone,
                        ua.email AS customer_email,
+                       p.payment_id,
+                       p.amount AS payment_amount,
                        p.payment_method,
                        p.payment_status,
+                       p.collection_channel,
+                       p.collected_by_employee_id,
+                       p.collected_at,
+                       active_alloc.remittance_id AS active_remittance_id,
+                       active_rmt.remittance_reference AS active_remittance_reference,
+                       active_rmt.remittance_status AS active_remittance_status,
                        EXISTS(
                            SELECT 1 FROM payment pr
                            WHERE pr.order_id = co.order_id
@@ -233,6 +242,8 @@ final class DeliveryController extends Controller
                     ORDER BY (p2.payment_status = 'completed') DESC, p2.payment_id DESC
                     LIMIT 1
                 )
+                LEFT JOIN courier_cod_remittance_allocation active_alloc ON active_alloc.active_payment_id = p.payment_id
+                LEFT JOIN courier_cod_remittance active_rmt ON active_rmt.remittance_id = active_alloc.remittance_id
                 LEFT JOIN employee deliv_emp ON deliv_emp.employee_id = co.delivery_employee_id
                 WHERE co.business_unit_id = ?
                   AND co.fulfillment_method = 'delivery'";
@@ -323,8 +334,16 @@ final class DeliveryController extends Controller
                             CONCAT(c.first_name, ' ', c.last_name) AS customer_name,
                             c.phone AS customer_phone,
                             ua.email AS customer_email,
+                            p.payment_id,
+                            p.amount AS payment_amount,
                             p.payment_method,
                             p.payment_status,
+                            p.collection_channel,
+                            p.collected_by_employee_id,
+                            p.collected_at,
+                            active_alloc.remittance_id AS active_remittance_id,
+                            active_rmt.remittance_reference AS active_remittance_reference,
+                            active_rmt.remittance_status AS active_remittance_status,
                             EXISTS(
                                 SELECT 1 FROM payment pr
                                 WHERE pr.order_id = co.order_id
@@ -341,6 +360,8 @@ final class DeliveryController extends Controller
                          ORDER BY (p2.payment_status = 'completed') DESC, p2.payment_id DESC
                          LIMIT 1
                      )
+                     LEFT JOIN courier_cod_remittance_allocation active_alloc ON active_alloc.active_payment_id = p.payment_id
+                     LEFT JOIN courier_cod_remittance active_rmt ON active_rmt.remittance_id = active_alloc.remittance_id
                      LEFT JOIN employee deliv_emp ON deliv_emp.employee_id = co.delivery_employee_id
                      WHERE co.order_id = ? AND co.business_unit_id = ? AND co.fulfillment_method = 'delivery'
                      LIMIT 1"
@@ -360,6 +381,10 @@ final class DeliveryController extends Controller
             }
         }
 
+        $remittanceState = ($isCourier && $empId > 0)
+            ? $this->loadCourierCodRemittanceState($empId)
+            : ['unremitted' => [], 'batches' => []];
+
         $this->render('delivery/orders', [
             'title' => 'Delivery Orders · Pet Store',
             'unitId' => self::PET_STORE_UNIT_ID,
@@ -372,6 +397,8 @@ final class DeliveryController extends Controller
             'searchQuery' => $q,
             'selectedOrder' => $selectedOrder,
             'todayDate' => $todayDate,
+            'unremittedCodPayments' => $remittanceState['unremitted'],
+            'courierRemittances' => $remittanceState['batches'],
         ]);
     }
 
@@ -422,24 +449,141 @@ final class DeliveryController extends Controller
         $auth = $this->requireCourierOperator();
         $uid = $auth['uid'];
         $empId = $auth['emp_id'];
+        $confirmCodCollected = !empty($_POST['confirm_cod_collected']);
 
         try {
             $reservationService = new OrderReservationService($this->db);
-            $reservationService->completeDeliveryOrder($orderId, self::PET_STORE_UNIT_ID, $empId, $uid);
+            $onCompleted = null;
+            if ($confirmCodCollected) {
+                $paymentService = new OrderPaymentService($this->db);
+                $onCompleted = static function () use ($paymentService, $orderId, $empId, $uid): void {
+                    $paymentService->collectDeliveryCodInTransaction($orderId, self::PET_STORE_UNIT_ID, $empId, $uid);
+                };
+            }
+            $reservationService->completeDeliveryOrder($orderId, self::PET_STORE_UNIT_ID, $empId, $uid, $onCompleted);
 
-            $this->flash('success', "Order #ORD-{$orderId} marked as Completed.");
+            $msg = $confirmCodCollected
+                ? "Order #ORD-{$orderId} marked as Completed and COD cash collection confirmed."
+                : "Order #ORD-{$orderId} marked as Completed.";
+            $this->flash('success', $msg);
             $this->redirect('/delivery/orders?tab=history&view=' . $orderId);
         } catch (RuntimeException $e) {
-            $code = $e->getCode();
-            if ($code === OrderReservationService::ERR_NOT_FOUND) {
-                $this->notFound();
-            }
-            if ($code === OrderReservationService::ERR_FORBIDDEN) {
-                $this->forbidden($e->getMessage());
-            }
-            $this->flash('error', $e->getMessage());
-            $this->redirect('/delivery/orders?tab=active&view=' . $orderId);
+            $this->handleServiceException($e, '/delivery/orders?tab=active&view=' . $orderId);
         }
+    }
+
+    public function collectCod(int $orderId): void
+    {
+        CSRF::check();
+        $auth = $this->requireCourierOperator();
+        $uid = $auth['uid'];
+        $empId = $auth['emp_id'];
+
+        try {
+            $paymentService = new OrderPaymentService($this->db);
+            $result = $paymentService->confirmDeliveryCodCollection($orderId, self::PET_STORE_UNIT_ID, $empId, $uid);
+            $this->flash(
+                'success',
+                "Confirmed COD cash collection (₱" . number_format((float)$result['amount'], 2) . ") for Order #ORD-{$orderId}."
+            );
+            $this->redirect('/delivery/orders?tab=history&view=' . $orderId);
+        } catch (RuntimeException $e) {
+            $this->handleServiceException($e, '/delivery/orders?tab=history&view=' . $orderId);
+        }
+    }
+
+    public function submitRemittance(): void
+    {
+        CSRF::check();
+        $auth = $this->requireCourierOperator();
+        $uid = $auth['uid'];
+        $empId = $auth['emp_id'];
+
+        $rawIds = $_POST['payment_ids'] ?? [];
+        $paymentIds = is_array($rawIds) ? array_map('intval', $rawIds) : [];
+        $rawTotal = trim((string)($_POST['remitted_total'] ?? ''));
+        $declaredTotal = ($rawTotal !== '' && is_numeric($rawTotal)) ? (float)$rawTotal : null;
+        $notes = trim((string)($_POST['notes'] ?? ''));
+
+        try {
+            $paymentService = new OrderPaymentService($this->db);
+            $result = $paymentService->submitCourierCodRemittance(
+                self::PET_STORE_UNIT_ID,
+                $empId,
+                $uid,
+                $paymentIds,
+                $declaredTotal,
+                $notes !== '' ? $notes : null
+            );
+            $this->flash(
+                'success',
+                "Submitted COD remittance {$result['remittance_reference']} ({$result['allocations_created']} payment(s), ₱"
+                . number_format((float)$result['remitted_total'], 2) . "). Pending staff remittance verification."
+            );
+        } catch (RuntimeException $e) {
+            $this->handleServiceException($e, '/delivery/orders?tab=history');
+            return;
+        }
+        $this->redirect('/delivery/orders?tab=history');
+    }
+
+    private function handleServiceException(RuntimeException $e, string $fallbackRedirect): void
+    {
+        $code = $e->getCode();
+        if ($code === OrderReservationService::ERR_NOT_FOUND) {
+            $this->notFound();
+        }
+        if ($code === OrderReservationService::ERR_FORBIDDEN) {
+            $this->forbidden($e->getMessage());
+        }
+        $this->flash('error', $e->getMessage());
+        $this->redirect($fallbackRedirect);
+    }
+
+    /**
+     * @return array{unremitted:array<int,array<string,mixed>>, batches:array<int,array<string,mixed>>}
+     */
+    private function loadCourierCodRemittanceState(int $empId): array
+    {
+        $unremStmt = $this->db->prepare(
+            "SELECT p.payment_id, p.order_id, p.amount, p.collected_at, co.order_date,
+                    CONCAT(c.first_name, ' ', c.last_name) AS customer_name
+             FROM payment p
+             JOIN customer_order co ON co.order_id = p.order_id
+             JOIN customer c ON c.customer_id = co.customer_id
+             LEFT JOIN courier_cod_remittance_allocation a ON a.active_payment_id = p.payment_id
+             WHERE co.business_unit_id = ?
+               AND co.fulfillment_method = 'delivery'
+               AND co.order_status = 'completed'
+               AND p.payment_type = 'payment'
+               AND p.payment_status = 'completed'
+               AND p.collection_channel = 'courier_cod'
+               AND p.collected_by_employee_id = ?
+               AND a.allocation_id IS NULL
+               AND NOT EXISTS (
+                   SELECT 1 FROM payment pr
+                   WHERE pr.original_payment_id = p.payment_id AND pr.payment_type = 'refund' AND pr.payment_status = 'completed'
+               )
+             ORDER BY p.collected_at DESC, p.payment_id DESC"
+        );
+        $unremStmt->execute([self::PET_STORE_UNIT_ID, $empId]);
+        $unremitted = $unremStmt->fetchAll() ?: [];
+
+        $batchStmt = $this->db->prepare(
+            "SELECT r.remittance_id, r.remittance_reference, r.expected_total, r.remitted_total,
+                    r.remittance_status, r.submitted_at, r.notes,
+                    COUNT(a.allocation_id) AS payment_count
+             FROM courier_cod_remittance r
+             LEFT JOIN courier_cod_remittance_allocation a ON a.remittance_id = r.remittance_id AND a.allocation_status = 'active'
+             WHERE r.business_unit_id = ? AND r.courier_employee_id = ?
+             GROUP BY r.remittance_id
+             ORDER BY r.submitted_at DESC, r.remittance_id DESC
+             LIMIT 20"
+        );
+        $batchStmt->execute([self::PET_STORE_UNIT_ID, $empId]);
+        $batches = $batchStmt->fetchAll() ?: [];
+
+        return ['unremitted' => $unremitted, 'batches' => $batches];
     }
 
     public function fail(int $orderId): void

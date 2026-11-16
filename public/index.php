@@ -171,6 +171,7 @@ $r->get('/petstore/receptionist/products/search', 'PetStoreReceptionistControlle
 $r->get('/petstore/receptionist/orders', 'PetStoreReceptionistController', 'orders');
 $r->get('/petstore/receptionist/orders/{id}', 'PetStoreReceptionistController', 'showOrder');
 $r->post('/petstore/receptionist/orders/{id}/status', 'PetStoreReceptionistController', 'updatePickupStatus');
+$r->post('/petstore/receptionist/orders/{id}/collect-cod', 'PetStoreReceptionistController', 'collectPickupCod');
 $r->post('/petstore/receptionist/orders/{id}/delivery-status', 'PetStoreReceptionistController', 'updateDeliveryStatus');
 $r->post('/petstore/receptionist/orders/{id}/reschedule', 'PetStoreReceptionistController', 'rescheduleDelivery');
 $r->get('/petstore/receptionist/employees', 'PetStoreReceptionistController', 'employees');
@@ -179,7 +180,9 @@ $r->get('/petstore/receptionist/employees', 'PetStoreReceptionistController', 'e
 $r->get('/delivery/orders', 'DeliveryController', 'orders');
 $r->post('/delivery/orders/{id}/dispatch', 'DeliveryController', 'dispatch');
 $r->post('/delivery/orders/{id}/complete', 'DeliveryController', 'complete');
+$r->post('/delivery/orders/{id}/collect-cod', 'DeliveryController', 'collectCod');
 $r->post('/delivery/orders/{id}/fail', 'DeliveryController', 'fail');
+$r->post('/delivery/remittances', 'DeliveryController', 'submitRemittance');
 
 // Grooming Services Receptionist Interface
 $r->get('/grooming/receptionist', 'GroomingReceptionistController', 'overview');
