@@ -2,8 +2,9 @@
 -- Reversible: see database/migrations/down/025_s3_cod_remittance_lifecycle.down.sql
 --
 -- Scope (schema & invariants only):
---   1. Non-destructive preflight checks detecting incompatible legacy remittance/allocation/order rows
---      and reporting affected remittance_id values before any DDL executes.
+--   1. Non-destructive preflight checks (prerequisite tables & employee.employee_id type compatibility,
+--      partial-execution column detection, legacy verified/discrepancy batch detection, empty-batch detection,
+--      subtotal/allocation parity, and header-to-allocation lifecycle consistency) before any DDL executes.
 --   2. business_settings: add `auto_verify_cod_remittance TINYINT(1) NOT NULL DEFAULT 0`.
 --   3. courier_cod_remittance: extend `remittance_status` ENUM to include `'completed'` (preserving
 --      existing values and columns; no batch-level `verification_mode`), plus header verification checks.
@@ -13,9 +14,9 @@
 --      `active_payment_id`, and `uk_cod_alloc_active_payment` unchanged.
 --
 -- Diagnostic queries for manual inspection if preflight aborts:
---   a) Legacy verified/discrepancy batches (cannot fabricate per-order handover actor/timestamp):
---      SELECT remittance_id, remittance_reference, remittance_status, verified_by_employee_id, verified_at
---      FROM courier_cod_remittance WHERE remittance_status IN ('verified','discrepancy');
+--   a) Legacy or inconsistent batch status vs. allocation lifecycle state:
+--      SELECT r.remittance_id, r.remittance_reference, r.remittance_status, r.verified_by_employee_id, r.verified_at
+--      FROM courier_cod_remittance r WHERE r.remittance_status IN ('completed','verified','discrepancy');
 --   b) Non-cancelled batches with zero active allocations:
 --      SELECT r.remittance_id, r.remittance_reference, r.remittance_status
 --      FROM courier_cod_remittance r
@@ -51,11 +52,19 @@ CREATE PROCEDURE _p_mig_025_preflight(IN p_msg VARCHAR(128))
 SIGNAL SQLSTATE '45000'
     SET MESSAGE_TEXT = p_msg;
 
+-- 0.1 Prerequisite tables, customer_order.subtotal_amount, and employee.employee_id INT UNSIGNED PK compatibility
 SET @prereq_025_tables = (
     SELECT COUNT(*)
     FROM information_schema.TABLES
     WHERE TABLE_SCHEMA = DATABASE()
-      AND TABLE_NAME IN ('business_settings', 'courier_cod_remittance', 'courier_cod_remittance_allocation')
+      AND TABLE_NAME IN (
+          'business_settings',
+          'customer_order',
+          'payment',
+          'employee',
+          'courier_cod_remittance',
+          'courier_cod_remittance_allocation'
+      )
 );
 SET @prereq_025_subtotal_col = (
     SELECT COUNT(*)
@@ -64,35 +73,162 @@ SET @prereq_025_subtotal_col = (
       AND TABLE_NAME = 'customer_order'
       AND COLUMN_NAME = 'subtotal_amount'
 );
+SET @prereq_025_emp_pk_compatible = (
+    SELECT COUNT(*)
+    FROM information_schema.COLUMNS c
+    JOIN information_schema.KEY_COLUMN_USAGE kcu
+      ON kcu.TABLE_SCHEMA = c.TABLE_SCHEMA
+     AND kcu.TABLE_NAME = c.TABLE_NAME
+     AND kcu.COLUMN_NAME = c.COLUMN_NAME
+     AND kcu.CONSTRAINT_NAME = 'PRIMARY'
+    WHERE c.TABLE_SCHEMA = DATABASE()
+      AND c.TABLE_NAME = 'employee'
+      AND c.COLUMN_NAME = 'employee_id'
+      AND LOWER(c.DATA_TYPE) = 'int'
+      AND LOWER(c.COLUMN_TYPE) LIKE '%unsigned%'
+);
 SET @sql_025_prereq_abort = IF(
-    @prereq_025_tables < 3 OR @prereq_025_subtotal_col = 0,
-    "CALL _p_mig_025_preflight('Migration 025 preflight failed: prerequisite migrations 011, 022, 023, and 024 must be applied first.')",
+    @prereq_025_tables < 6 OR @prereq_025_subtotal_col = 0 OR @prereq_025_emp_pk_compatible = 0,
+    "CALL _p_mig_025_preflight('Mig 025 preflight failed: prerequisite tables, subtotal_amount, or employee.employee_id INT UNSIGNED PK missing.')",
     'DO 0'
 );
 PREPARE stmt_025_prereq_abort FROM @sql_025_prereq_abort;
 EXECUTE stmt_025_prereq_abort;
 DEALLOCATE PREPARE stmt_025_prereq_abort;
 
-SET @col_alloc_hs_pre = (
-    SELECT COUNT(*)
-    FROM information_schema.COLUMNS
-    WHERE TABLE_SCHEMA = DATABASE()
-      AND TABLE_NAME = 'courier_cod_remittance_allocation'
-      AND COLUMN_NAME = 'handover_status'
+-- 0.2 Inspect each of the 7 allocation lifecycle columns individually (detect none=0, partial=1..6, or all=7)
+SET @c025_hs = (
+    SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'courier_cod_remittance_allocation' AND COLUMN_NAME = 'handover_status'
 );
+SET @c025_cbe = (
+    SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'courier_cod_remittance_allocation' AND COLUMN_NAME = 'completed_by_employee_id'
+);
+SET @c025_ca = (
+    SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'courier_cod_remittance_allocation' AND COLUMN_NAME = 'completed_at'
+);
+SET @c025_vs = (
+    SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'courier_cod_remittance_allocation' AND COLUMN_NAME = 'verification_status'
+);
+SET @c025_vbe = (
+    SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'courier_cod_remittance_allocation' AND COLUMN_NAME = 'verified_by_employee_id'
+);
+SET @c025_va = (
+    SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'courier_cod_remittance_allocation' AND COLUMN_NAME = 'verified_at'
+);
+SET @c025_vm = (
+    SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'courier_cod_remittance_allocation' AND COLUMN_NAME = 'verification_mode'
+);
+SET @alloc_025_col_cnt = (@c025_hs + @c025_cbe + @c025_ca + @c025_vs + @c025_vbe + @c025_va + @c025_vm);
 
--- 0a. Legacy verified/discrepancy batches (refuse to fabricate individual handover actors/timestamps)
+-- If partial columns exist (1..6), verify existing partial columns contain only initial default values so recovery is safe;
+-- if non-default data was written into a half-migrated table, abort before further DDL and report affected batch IDs.
+SET @bad_025_partial_dirty_cnt = 0;
+SET @bad_025_partial_dirty_ids = '';
+
+SET @sql_025_chk_part_hs = IF(
+    @alloc_025_col_cnt BETWEEN 1 AND 6 AND @c025_hs > 0,
+    "SELECT @bad_025_partial_dirty_cnt + COUNT(*),
+            TRIM(BOTH ',' FROM CONCAT_WS(',', NULLIF(@bad_025_partial_dirty_ids, ''), COALESCE(GROUP_CONCAT(DISTINCT remittance_id ORDER BY remittance_id ASC SEPARATOR ','), '')))
+     INTO @bad_025_partial_dirty_cnt, @bad_025_partial_dirty_ids
+     FROM courier_cod_remittance_allocation WHERE handover_status <> 'submitted'",
+    'DO 0'
+);
+PREPARE stmt_025_chk_part_hs FROM @sql_025_chk_part_hs;
+EXECUTE stmt_025_chk_part_hs;
+DEALLOCATE PREPARE stmt_025_chk_part_hs;
+
+SET @sql_025_chk_part_cbe = IF(
+    @alloc_025_col_cnt BETWEEN 1 AND 6 AND @c025_cbe > 0,
+    "SELECT @bad_025_partial_dirty_cnt + COUNT(*),
+            TRIM(BOTH ',' FROM CONCAT_WS(',', NULLIF(@bad_025_partial_dirty_ids, ''), COALESCE(GROUP_CONCAT(DISTINCT remittance_id ORDER BY remittance_id ASC SEPARATOR ','), '')))
+     INTO @bad_025_partial_dirty_cnt, @bad_025_partial_dirty_ids
+     FROM courier_cod_remittance_allocation WHERE completed_by_employee_id IS NOT NULL",
+    'DO 0'
+);
+PREPARE stmt_025_chk_part_cbe FROM @sql_025_chk_part_cbe;
+EXECUTE stmt_025_chk_part_cbe;
+DEALLOCATE PREPARE stmt_025_chk_part_cbe;
+
+SET @sql_025_chk_part_ca = IF(
+    @alloc_025_col_cnt BETWEEN 1 AND 6 AND @c025_ca > 0,
+    "SELECT @bad_025_partial_dirty_cnt + COUNT(*),
+            TRIM(BOTH ',' FROM CONCAT_WS(',', NULLIF(@bad_025_partial_dirty_ids, ''), COALESCE(GROUP_CONCAT(DISTINCT remittance_id ORDER BY remittance_id ASC SEPARATOR ','), '')))
+     INTO @bad_025_partial_dirty_cnt, @bad_025_partial_dirty_ids
+     FROM courier_cod_remittance_allocation WHERE completed_at IS NOT NULL",
+    'DO 0'
+);
+PREPARE stmt_025_chk_part_ca FROM @sql_025_chk_part_ca;
+EXECUTE stmt_025_chk_part_ca;
+DEALLOCATE PREPARE stmt_025_chk_part_ca;
+
+SET @sql_025_chk_part_vs = IF(
+    @alloc_025_col_cnt BETWEEN 1 AND 6 AND @c025_vs > 0,
+    "SELECT @bad_025_partial_dirty_cnt + COUNT(*),
+            TRIM(BOTH ',' FROM CONCAT_WS(',', NULLIF(@bad_025_partial_dirty_ids, ''), COALESCE(GROUP_CONCAT(DISTINCT remittance_id ORDER BY remittance_id ASC SEPARATOR ','), '')))
+     INTO @bad_025_partial_dirty_cnt, @bad_025_partial_dirty_ids
+     FROM courier_cod_remittance_allocation WHERE verification_status <> 'pending'",
+    'DO 0'
+);
+PREPARE stmt_025_chk_part_vs FROM @sql_025_chk_part_vs;
+EXECUTE stmt_025_chk_part_vs;
+DEALLOCATE PREPARE stmt_025_chk_part_vs;
+
+SET @sql_025_chk_part_vbe = IF(
+    @alloc_025_col_cnt BETWEEN 1 AND 6 AND @c025_vbe > 0,
+    "SELECT @bad_025_partial_dirty_cnt + COUNT(*),
+            TRIM(BOTH ',' FROM CONCAT_WS(',', NULLIF(@bad_025_partial_dirty_ids, ''), COALESCE(GROUP_CONCAT(DISTINCT remittance_id ORDER BY remittance_id ASC SEPARATOR ','), '')))
+     INTO @bad_025_partial_dirty_cnt, @bad_025_partial_dirty_ids
+     FROM courier_cod_remittance_allocation WHERE verified_by_employee_id IS NOT NULL",
+    'DO 0'
+);
+PREPARE stmt_025_chk_part_vbe FROM @sql_025_chk_part_vbe;
+EXECUTE stmt_025_chk_part_vbe;
+DEALLOCATE PREPARE stmt_025_chk_part_vbe;
+
+SET @sql_025_chk_part_va = IF(
+    @alloc_025_col_cnt BETWEEN 1 AND 6 AND @c025_va > 0,
+    "SELECT @bad_025_partial_dirty_cnt + COUNT(*),
+            TRIM(BOTH ',' FROM CONCAT_WS(',', NULLIF(@bad_025_partial_dirty_ids, ''), COALESCE(GROUP_CONCAT(DISTINCT remittance_id ORDER BY remittance_id ASC SEPARATOR ','), '')))
+     INTO @bad_025_partial_dirty_cnt, @bad_025_partial_dirty_ids
+     FROM courier_cod_remittance_allocation WHERE verified_at IS NOT NULL",
+    'DO 0'
+);
+PREPARE stmt_025_chk_part_va FROM @sql_025_chk_part_va;
+EXECUTE stmt_025_chk_part_va;
+DEALLOCATE PREPARE stmt_025_chk_part_va;
+
+SET @sql_025_chk_part_vm = IF(
+    @alloc_025_col_cnt BETWEEN 1 AND 6 AND @c025_vm > 0,
+    "SELECT @bad_025_partial_dirty_cnt + COUNT(*),
+            TRIM(BOTH ',' FROM CONCAT_WS(',', NULLIF(@bad_025_partial_dirty_ids, ''), COALESCE(GROUP_CONCAT(DISTINCT remittance_id ORDER BY remittance_id ASC SEPARATOR ','), '')))
+     INTO @bad_025_partial_dirty_cnt, @bad_025_partial_dirty_ids
+     FROM courier_cod_remittance_allocation WHERE verification_mode IS NOT NULL",
+    'DO 0'
+);
+PREPARE stmt_025_chk_part_vm FROM @sql_025_chk_part_vm;
+EXECUTE stmt_025_chk_part_vm;
+DEALLOCATE PREPARE stmt_025_chk_part_vm;
+
+-- 0a. Legacy verified/completed/discrepancy batches when < 7 lifecycle columns exist, or any discrepancy batch anytime
+--     (Refuses to fabricate individual handover actors/timestamps from batch-level metadata)
 SET @bad_025_legacy_cnt = (
     SELECT COUNT(*)
     FROM courier_cod_remittance
     WHERE remittance_status = 'discrepancy'
-       OR (@col_alloc_hs_pre = 0 AND remittance_status = 'verified')
+       OR (@alloc_025_col_cnt < 7 AND remittance_status IN ('completed', 'verified'))
 );
 SET @bad_025_legacy_ids = (
     SELECT COALESCE(GROUP_CONCAT(remittance_id ORDER BY remittance_id ASC SEPARATOR ','), '')
     FROM courier_cod_remittance
     WHERE remittance_status = 'discrepancy'
-       OR (@col_alloc_hs_pre = 0 AND remittance_status = 'verified')
+       OR (@alloc_025_col_cnt < 7 AND remittance_status IN ('completed', 'verified'))
 );
 
 -- 0b. Active non-cancelled batches with zero active allocations
@@ -225,42 +361,96 @@ SET @bad_025_hdr_ids = (
       )
 );
 
--- 0e. If 025 lifecycle columns already exist (idempotent re-run), ensure existing rows satisfy all 025 constraints
+-- 0e. When all 7 allocation lifecycle columns exist (retry or idempotent re-run), validate:
+--     (1) per-allocation tuple invariants, employee FK existence, and non-self courier actor rules;
+--     (2) batch header-to-allocation state consistency (preventing a legacy 'verified' batch with
+--         default 'submitted'/'pending' allocations from ever passing preflight on retry).
 SET @bad_025_existing_lifecycle_cnt = 0;
+SET @bad_025_existing_lifecycle_ids = '';
 SET @sql_025_chk_existing_lc = IF(
-    @col_alloc_hs_pre > 0,
-    "SELECT COUNT(*) INTO @bad_025_existing_lifecycle_cnt
-     FROM courier_cod_remittance_allocation
-     WHERE NOT (
-         (handover_status = 'submitted'
-          AND completed_by_employee_id IS NULL
-          AND completed_at IS NULL
-          AND verification_status = 'pending'
-          AND verified_by_employee_id IS NULL
-          AND verified_at IS NULL
-          AND verification_mode IS NULL)
-         OR
-         (handover_status = 'completed'
-          AND completed_by_employee_id IS NOT NULL
-          AND completed_at IS NOT NULL)
-     )
-     OR NOT (
-         (verification_status = 'pending'
-          AND verified_by_employee_id IS NULL
-          AND verified_at IS NULL
-          AND verification_mode IS NULL)
-         OR
-         (verification_status = 'verified'
-          AND handover_status = 'completed'
-          AND verified_at IS NOT NULL
-          AND verification_mode IS NOT NULL)
-     )
-     OR NOT (
-         verification_mode IS NULL
-         OR (verification_mode = 'auto_setting' AND verified_by_employee_id IS NULL)
-         OR (verification_mode = 'manual' AND verified_by_employee_id IS NOT NULL)
-         OR (verification_mode = 'manager_collection' AND verified_by_employee_id IS NOT NULL AND verified_by_employee_id = completed_by_employee_id)
-     )",
+    @alloc_025_col_cnt = 7,
+    "SELECT COUNT(DISTINCT bad_remit_id),
+            COALESCE(GROUP_CONCAT(DISTINCT bad_remit_id ORDER BY bad_remit_id ASC SEPARATOR ','), '')
+     INTO @bad_025_existing_lifecycle_cnt, @bad_025_existing_lifecycle_ids
+     FROM (
+         SELECT a.remittance_id AS bad_remit_id
+         FROM courier_cod_remittance_allocation a
+         JOIN courier_cod_remittance r ON r.remittance_id = a.remittance_id
+         LEFT JOIN employee ec ON ec.employee_id = a.completed_by_employee_id
+         LEFT JOIN employee ev ON ev.employee_id = a.verified_by_employee_id
+         WHERE NOT (
+             (a.handover_status = 'submitted'
+              AND a.completed_by_employee_id IS NULL
+              AND a.completed_at IS NULL
+              AND a.verification_status = 'pending'
+              AND a.verified_by_employee_id IS NULL
+              AND a.verified_at IS NULL
+              AND a.verification_mode IS NULL)
+             OR
+             (a.handover_status = 'completed'
+              AND a.completed_by_employee_id IS NOT NULL
+              AND a.completed_at IS NOT NULL)
+         )
+         OR NOT (
+             (a.verification_status = 'pending'
+              AND a.verified_by_employee_id IS NULL
+              AND a.verified_at IS NULL
+              AND a.verification_mode IS NULL)
+             OR
+             (a.verification_status = 'verified'
+              AND a.handover_status = 'completed'
+              AND a.verified_at IS NOT NULL
+              AND a.verification_mode IS NOT NULL)
+         )
+         OR NOT (
+             a.verification_mode IS NULL
+             OR (a.verification_mode = 'auto_setting' AND a.verified_by_employee_id IS NULL)
+             OR (a.verification_mode = 'manual' AND a.verified_by_employee_id IS NOT NULL)
+             OR (a.verification_mode = 'manager_collection' AND a.verified_by_employee_id IS NOT NULL AND a.verified_by_employee_id = a.completed_by_employee_id)
+         )
+         OR (a.completed_by_employee_id IS NOT NULL AND (ec.employee_id IS NULL OR a.completed_by_employee_id = r.courier_employee_id))
+         OR (a.verified_by_employee_id IS NOT NULL AND (ev.employee_id IS NULL OR a.verified_by_employee_id = r.courier_employee_id))
+         UNION
+         SELECT r2.remittance_id AS bad_remit_id
+         FROM courier_cod_remittance r2
+         WHERE r2.remittance_status <> 'cancelled'
+           AND (
+               (r2.remittance_status = 'submitted' AND NOT EXISTS (
+                   SELECT 1 FROM courier_cod_remittance_allocation a2
+                   WHERE a2.remittance_id = r2.remittance_id
+                     AND a2.allocation_status = 'active'
+                     AND a2.handover_status = 'submitted'
+               ))
+               OR (r2.remittance_status = 'completed' AND (
+                   EXISTS (
+                       SELECT 1 FROM courier_cod_remittance_allocation a3
+                       WHERE a3.remittance_id = r2.remittance_id
+                         AND a3.allocation_status = 'active'
+                         AND a3.handover_status <> 'completed'
+                   )
+                   OR NOT EXISTS (
+                       SELECT 1 FROM courier_cod_remittance_allocation a4
+                       WHERE a4.remittance_id = r2.remittance_id
+                         AND a4.allocation_status = 'active'
+                         AND a4.verification_status = 'pending'
+                   )
+               ))
+               OR (r2.remittance_status = 'verified' AND (
+                   EXISTS (
+                       SELECT 1 FROM courier_cod_remittance_allocation a5
+                       WHERE a5.remittance_id = r2.remittance_id
+                         AND a5.allocation_status = 'active'
+                         AND (a5.handover_status <> 'completed' OR a5.verification_status <> 'verified')
+                   )
+                   OR (r2.verified_by_employee_id IS NOT NULL AND EXISTS (
+                       SELECT 1 FROM courier_cod_remittance_allocation a6
+                       WHERE a6.remittance_id = r2.remittance_id
+                         AND a6.allocation_status = 'active'
+                         AND (a6.verified_by_employee_id IS NULL OR a6.verified_by_employee_id <> r2.verified_by_employee_id)
+                   ))
+               ))
+           )
+     ) lc_violations",
     'DO 0'
 );
 PREPARE stmt_025_chk_existing_lc FROM @sql_025_chk_existing_lc;
@@ -268,23 +458,31 @@ EXECUTE stmt_025_chk_existing_lc;
 DEALLOCATE PREPARE stmt_025_chk_existing_lc;
 
 SET @bad_025_total = (
-    @bad_025_legacy_cnt + @bad_025_empty_cnt + @bad_025_alloc_cnt + @bad_025_hdr_cnt + @bad_025_existing_lifecycle_cnt
+    @bad_025_partial_dirty_cnt
+    + @bad_025_legacy_cnt
+    + @bad_025_empty_cnt
+    + @bad_025_alloc_cnt
+    + @bad_025_hdr_cnt
+    + @bad_025_existing_lifecycle_cnt
 );
 SET @bad_025_all_ids = TRIM(BOTH ',' FROM CONCAT_WS(
     ',',
+    IF(@bad_025_partial_dirty_ids <> '', @bad_025_partial_dirty_ids, NULL),
     IF(@bad_025_legacy_ids <> '', @bad_025_legacy_ids, NULL),
     IF(@bad_025_empty_ids <> '', @bad_025_empty_ids, NULL),
     IF(@bad_025_alloc_ids <> '', @bad_025_alloc_ids, NULL),
-    IF(@bad_025_hdr_ids <> '', @bad_025_hdr_ids, NULL)
+    IF(@bad_025_hdr_ids <> '', @bad_025_hdr_ids, NULL),
+    IF(@bad_025_existing_lifecycle_ids <> '', @bad_025_existing_lifecycle_ids, NULL)
 ));
 SET @msg_025_abort = LEFT(
     CONCAT(
-        'Mig 025 preflight failed (leg=', @bad_025_legacy_cnt,
+        'Mig 025 preflight failed (cols=', @alloc_025_col_cnt, '/7,pdirty=', @bad_025_partial_dirty_cnt,
+        ',leg=', @bad_025_legacy_cnt,
         ',emp=', @bad_025_empty_cnt,
         ',sub=', @bad_025_alloc_cnt,
         ',hdr=', @bad_025_hdr_cnt,
         ',lc=', @bad_025_existing_lifecycle_cnt,
-        ') batches:', IF(@bad_025_all_ids = '', 'none', @bad_025_all_ids)
+        ') ids:', IF(@bad_025_all_ids = '', 'none', @bad_025_all_ids)
     ),
     128
 );

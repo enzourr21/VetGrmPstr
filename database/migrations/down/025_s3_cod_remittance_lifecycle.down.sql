@@ -42,30 +42,125 @@ PREPARE stmt_chk_down_025_remit FROM @sql_chk_down_025_remit;
 EXECUTE stmt_chk_down_025_remit;
 DEALLOCATE PREPARE stmt_chk_down_025_remit;
 
--- 0c. Check courier_cod_remittance_allocation rows with non-default lifecycle state or metadata
-SET @cnt_down_025_alloc_lc = 0;
-SET @ids_down_025_alloc_lc = '';
-SET @has_down_025_alloc_hs = (
+-- 0c. Detect complete lifecycle-column set on courier_cod_remittance_allocation (none=0, partial=1..6, all=7)
+--     and inspect each currently existing column individually so partially rolled-back schemas can safely
+--     verify zero data loss and resume rollback without failing on already-dropped columns.
+SET @d025_hs = (
     SELECT COUNT(*) FROM information_schema.COLUMNS
     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'courier_cod_remittance_allocation' AND COLUMN_NAME = 'handover_status'
 );
-SET @sql_chk_down_025_alloc = IF(
-    @has_down_025_alloc_hs > 0,
-    "SELECT COUNT(*), COALESCE(GROUP_CONCAT(DISTINCT remittance_id ORDER BY remittance_id ASC SEPARATOR ','), '')
+SET @d025_cbe = (
+    SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'courier_cod_remittance_allocation' AND COLUMN_NAME = 'completed_by_employee_id'
+);
+SET @d025_ca = (
+    SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'courier_cod_remittance_allocation' AND COLUMN_NAME = 'completed_at'
+);
+SET @d025_vs = (
+    SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'courier_cod_remittance_allocation' AND COLUMN_NAME = 'verification_status'
+);
+SET @d025_vbe = (
+    SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'courier_cod_remittance_allocation' AND COLUMN_NAME = 'verified_by_employee_id'
+);
+SET @d025_va = (
+    SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'courier_cod_remittance_allocation' AND COLUMN_NAME = 'verified_at'
+);
+SET @d025_vm = (
+    SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'courier_cod_remittance_allocation' AND COLUMN_NAME = 'verification_mode'
+);
+SET @d025_col_cnt = (@d025_hs + @d025_cbe + @d025_ca + @d025_vs + @d025_vbe + @d025_va + @d025_vm);
+
+SET @cnt_down_025_alloc_lc = 0;
+SET @ids_down_025_alloc_lc = '';
+
+SET @sql_chk_down_025_hs = IF(
+    @d025_hs > 0,
+    "SELECT @cnt_down_025_alloc_lc + COUNT(*),
+            TRIM(BOTH ',' FROM CONCAT_WS(',', NULLIF(@ids_down_025_alloc_lc, ''), COALESCE(GROUP_CONCAT(DISTINCT remittance_id ORDER BY remittance_id ASC SEPARATOR ','), '')))
      INTO @cnt_down_025_alloc_lc, @ids_down_025_alloc_lc
-     FROM courier_cod_remittance_allocation
-     WHERE handover_status <> 'submitted'
-        OR completed_by_employee_id IS NOT NULL
-        OR completed_at IS NOT NULL
-        OR verification_status <> 'pending'
-        OR verified_by_employee_id IS NOT NULL
-        OR verified_at IS NOT NULL
-        OR verification_mode IS NOT NULL",
+     FROM courier_cod_remittance_allocation WHERE handover_status <> 'submitted'",
     'DO 0'
 );
-PREPARE stmt_chk_down_025_alloc FROM @sql_chk_down_025_alloc;
-EXECUTE stmt_chk_down_025_alloc;
-DEALLOCATE PREPARE stmt_chk_down_025_alloc;
+PREPARE stmt_chk_down_025_hs FROM @sql_chk_down_025_hs;
+EXECUTE stmt_chk_down_025_hs;
+DEALLOCATE PREPARE stmt_chk_down_025_hs;
+
+SET @sql_chk_down_025_cbe = IF(
+    @d025_cbe > 0,
+    "SELECT @cnt_down_025_alloc_lc + COUNT(*),
+            TRIM(BOTH ',' FROM CONCAT_WS(',', NULLIF(@ids_down_025_alloc_lc, ''), COALESCE(GROUP_CONCAT(DISTINCT remittance_id ORDER BY remittance_id ASC SEPARATOR ','), '')))
+     INTO @cnt_down_025_alloc_lc, @ids_down_025_alloc_lc
+     FROM courier_cod_remittance_allocation WHERE completed_by_employee_id IS NOT NULL",
+    'DO 0'
+);
+PREPARE stmt_chk_down_025_cbe FROM @sql_chk_down_025_cbe;
+EXECUTE stmt_chk_down_025_cbe;
+DEALLOCATE PREPARE stmt_chk_down_025_cbe;
+
+SET @sql_chk_down_025_ca = IF(
+    @d025_ca > 0,
+    "SELECT @cnt_down_025_alloc_lc + COUNT(*),
+            TRIM(BOTH ',' FROM CONCAT_WS(',', NULLIF(@ids_down_025_alloc_lc, ''), COALESCE(GROUP_CONCAT(DISTINCT remittance_id ORDER BY remittance_id ASC SEPARATOR ','), '')))
+     INTO @cnt_down_025_alloc_lc, @ids_down_025_alloc_lc
+     FROM courier_cod_remittance_allocation WHERE completed_at IS NOT NULL",
+    'DO 0'
+);
+PREPARE stmt_chk_down_025_ca FROM @sql_chk_down_025_ca;
+EXECUTE stmt_chk_down_025_ca;
+DEALLOCATE PREPARE stmt_chk_down_025_ca;
+
+SET @sql_chk_down_025_vs = IF(
+    @d025_vs > 0,
+    "SELECT @cnt_down_025_alloc_lc + COUNT(*),
+            TRIM(BOTH ',' FROM CONCAT_WS(',', NULLIF(@ids_down_025_alloc_lc, ''), COALESCE(GROUP_CONCAT(DISTINCT remittance_id ORDER BY remittance_id ASC SEPARATOR ','), '')))
+     INTO @cnt_down_025_alloc_lc, @ids_down_025_alloc_lc
+     FROM courier_cod_remittance_allocation WHERE verification_status <> 'pending'",
+    'DO 0'
+);
+PREPARE stmt_chk_down_025_vs FROM @sql_chk_down_025_vs;
+EXECUTE stmt_chk_down_025_vs;
+DEALLOCATE PREPARE stmt_chk_down_025_vs;
+
+SET @sql_chk_down_025_vbe = IF(
+    @d025_vbe > 0,
+    "SELECT @cnt_down_025_alloc_lc + COUNT(*),
+            TRIM(BOTH ',' FROM CONCAT_WS(',', NULLIF(@ids_down_025_alloc_lc, ''), COALESCE(GROUP_CONCAT(DISTINCT remittance_id ORDER BY remittance_id ASC SEPARATOR ','), '')))
+     INTO @cnt_down_025_alloc_lc, @ids_down_025_alloc_lc
+     FROM courier_cod_remittance_allocation WHERE verified_by_employee_id IS NOT NULL",
+    'DO 0'
+);
+PREPARE stmt_chk_down_025_vbe FROM @sql_chk_down_025_vbe;
+EXECUTE stmt_chk_down_025_vbe;
+DEALLOCATE PREPARE stmt_chk_down_025_vbe;
+
+SET @sql_chk_down_025_va = IF(
+    @d025_va > 0,
+    "SELECT @cnt_down_025_alloc_lc + COUNT(*),
+            TRIM(BOTH ',' FROM CONCAT_WS(',', NULLIF(@ids_down_025_alloc_lc, ''), COALESCE(GROUP_CONCAT(DISTINCT remittance_id ORDER BY remittance_id ASC SEPARATOR ','), '')))
+     INTO @cnt_down_025_alloc_lc, @ids_down_025_alloc_lc
+     FROM courier_cod_remittance_allocation WHERE verified_at IS NOT NULL",
+    'DO 0'
+);
+PREPARE stmt_chk_down_025_va FROM @sql_chk_down_025_va;
+EXECUTE stmt_chk_down_025_va;
+DEALLOCATE PREPARE stmt_chk_down_025_va;
+
+SET @sql_chk_down_025_vm = IF(
+    @d025_vm > 0,
+    "SELECT @cnt_down_025_alloc_lc + COUNT(*),
+            TRIM(BOTH ',' FROM CONCAT_WS(',', NULLIF(@ids_down_025_alloc_lc, ''), COALESCE(GROUP_CONCAT(DISTINCT remittance_id ORDER BY remittance_id ASC SEPARATOR ','), '')))
+     INTO @cnt_down_025_alloc_lc, @ids_down_025_alloc_lc
+     FROM courier_cod_remittance_allocation WHERE verification_mode IS NOT NULL",
+    'DO 0'
+);
+PREPARE stmt_chk_down_025_vm FROM @sql_chk_down_025_vm;
+EXECUTE stmt_chk_down_025_vm;
+DEALLOCATE PREPARE stmt_chk_down_025_vm;
 
 SET @cnt_down_025_total = (@cnt_down_025_av + @cnt_down_025_remit_comp + @cnt_down_025_alloc_lc);
 SET @ids_down_025_all = TRIM(BOTH ',' FROM CONCAT_WS(
@@ -75,7 +170,7 @@ SET @ids_down_025_all = TRIM(BOTH ',' FROM CONCAT_WS(
 ));
 SET @msg_down_025 = LEFT(
     CONCAT(
-        'Rollback 025 aborted (av=', @cnt_down_025_av,
+        'Rollback 025 aborted (cols=', @d025_col_cnt, '/7,av=', @cnt_down_025_av,
         ',comp=', @cnt_down_025_remit_comp,
         ',alloc=', @cnt_down_025_alloc_lc,
         ') batches:', IF(@ids_down_025_all = '', 'none', @ids_down_025_all)
