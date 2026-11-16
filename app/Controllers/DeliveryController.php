@@ -499,13 +499,12 @@ final class DeliveryController extends Controller
         $uid = $auth['uid'];
         $empId = $auth['emp_id'];
 
-        $rawIds = $_POST['payment_ids'] ?? [];
-        $paymentIds = is_array($rawIds) ? array_map('intval', $rawIds) : [];
         $rawTotal = trim((string)($_POST['remitted_total'] ?? ''));
         $declaredTotal = $rawTotal !== '' ? $rawTotal : null;
         $notes = trim((string)($_POST['notes'] ?? ''));
 
         try {
+            $paymentIds = $this->extractSubmittedRemittancePaymentIds();
             $paymentService = new OrderPaymentService($this->db);
             $result = $paymentService->submitCourierCodRemittance(
                 self::PET_STORE_UNIT_ID,
@@ -525,6 +524,17 @@ final class DeliveryController extends Controller
             return;
         }
         $this->redirect('/delivery/orders?tab=history');
+    }
+
+    /**
+     * Validate and normalize submitted remittance payment_ids from POST payload without silent coercion.
+     *
+     * @return list<int>
+     */
+    private function extractSubmittedRemittancePaymentIds(): array
+    {
+        $rawIds = array_key_exists('payment_ids', $_POST) ? $_POST['payment_ids'] : [];
+        return OrderPaymentService::validatePositivePaymentIds($rawIds);
     }
 
     private function handleServiceException(RuntimeException $e, string $fallbackRedirect): void

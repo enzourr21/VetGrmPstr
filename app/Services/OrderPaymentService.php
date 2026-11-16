@@ -129,19 +129,7 @@ final class OrderPaymentService
         ?string $declaredRemittedTotal = null,
         ?string $notes = null
     ): array {
-        $normalizedIds = [];
-        foreach ($paymentIds as $rawId) {
-            $id = (int)$rawId;
-            if ($id > 0) {
-                $normalizedIds[$id] = $id;
-            }
-        }
-        $sortedPaymentIds = array_values($normalizedIds);
-        sort($sortedPaymentIds, SORT_NUMERIC);
-
-        if (!$sortedPaymentIds) {
-            throw new RuntimeException('Select at least one collected COD payment to remit.', self::ERR_UNPROCESSABLE);
-        }
+        $sortedPaymentIds = self::validatePositivePaymentIds($paymentIds);
 
         $declaredCents = null;
         if ($declaredRemittedTotal !== null) {
@@ -193,8 +181,8 @@ final class OrderPaymentService
                 }
             }
 
-            // Step 2: Lock active employee strictly belonging to this business unit.
-            $this->lockAuthorizedRemittanceEmployee($courierEmployeeId, $businessUnitId);
+            // Step 2: Lock active employee strictly belonging to this business unit and actor user.
+            $this->lockAuthorizedRemittanceEmployee($courierEmployeeId, $businessUnitId, $actorUserId);
 
             // Step 3: Lock payments (ASC), then any active allocations (ASC).
             $lockPayStmt = $this->db->prepare(
@@ -602,16 +590,61 @@ final class OrderPaymentService
     }
 
     /**
-     * Strict unit-scoped active employee lock for remittance submission (no cross-unit Super Admin bypass).
+     * Validate, normalize, deduplicate, and sort positive integer payment IDs without silent coercion.
+     *
+     * @param mixed $paymentIds
+     * @return list<int>
      */
-    private function lockAuthorizedRemittanceEmployee(int $employeeId, int $businessUnitId): void
+    public static function validatePositivePaymentIds(mixed $paymentIds): array
+    {
+        if (!is_array($paymentIds)) {
+            throw new RuntimeException('Selected payment IDs must be provided as a list.', self::ERR_UNPROCESSABLE);
+        }
+
+        $normalizedIds = [];
+        foreach ($paymentIds as $rawId) {
+            if (is_int($rawId)) {
+                $id = $rawId;
+            } elseif (is_string($rawId) && preg_match('/^[1-9]\d*$/', $rawId) === 1 && (string)(int)$rawId === $rawId) {
+                $id = (int)$rawId;
+            } else {
+                throw new RuntimeException('Every selected payment ID must be a valid positive integer.', self::ERR_UNPROCESSABLE);
+            }
+
+            if ($id <= 0) {
+                throw new RuntimeException('Every selected payment ID must be a positive integer.', self::ERR_UNPROCESSABLE);
+            }
+
+            $normalizedIds[$id] = $id;
+        }
+
+        $sortedPaymentIds = array_values($normalizedIds);
+        sort($sortedPaymentIds, SORT_NUMERIC);
+
+        if (!$sortedPaymentIds) {
+            throw new RuntimeException('Select at least one collected COD payment to remit.', self::ERR_UNPROCESSABLE);
+        }
+
+        return $sortedPaymentIds;
+    }
+
+    /**
+     * Strict unit-scoped active employee ownership lock for remittance submission (no cross-unit Super Admin bypass).
+     */
+    private function lockAuthorizedRemittanceEmployee(int $employeeId, int $businessUnitId, int $actorUserId): void
     {
         if ($employeeId <= 0) {
             throw new RuntimeException('A valid active employee record is required for COD remittance submission.', self::ERR_FORBIDDEN);
         }
+        if ($actorUserId <= 0) {
+            throw new RuntimeException('A valid authenticated user account is required for COD remittance submission.', self::ERR_FORBIDDEN);
+        }
+        if ($businessUnitId <= 0) {
+            throw new RuntimeException('A valid business unit is required for COD remittance submission.', self::ERR_FORBIDDEN);
+        }
 
         $empStmt = $this->db->prepare(
-            "SELECT employee_id, business_unit_id, employee_status
+            "SELECT employee_id, user_account_id, business_unit_id, employee_status
              FROM employee
              WHERE employee_id = ?
              FOR UPDATE"
@@ -621,6 +654,14 @@ final class OrderPaymentService
 
         if (!$emp || (string)$emp['employee_status'] !== 'active') {
             throw new RuntimeException("Employee #{$employeeId} is missing or inactive.", self::ERR_FORBIDDEN);
+        }
+
+        $empUserId = $emp['user_account_id'] !== null ? (int)$emp['user_account_id'] : 0;
+        if ($empUserId <= 0 || $empUserId !== $actorUserId) {
+            throw new RuntimeException(
+                "Employee #{$employeeId} does not belong to authenticated user #{$actorUserId}.",
+                self::ERR_FORBIDDEN
+            );
         }
 
         $empBuId = $emp['business_unit_id'] !== null ? (int)$emp['business_unit_id'] : 0;

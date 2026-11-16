@@ -19,6 +19,7 @@ declare(strict_types=1);
 
 require_once dirname(__DIR__) . '/app/bootstrap.php';
 
+use App\Controllers\DeliveryController;
 use App\Core\Database;
 use App\Services\OrderPaymentService;
 use App\Services\OrderReservationService;
@@ -593,6 +594,159 @@ try {
         $decimalChecksOk && $allBadInputsRejected && $negParseRejected
     );
 
+    // 7j. Service-level employee ownership & invalid actor/employee ID checks
+    $empMismatchBlocked = false;
+    try {
+        $paymentService->submitCourierCodRemittance($unitId, $courier1EmpId, $courier2Uid, [$pay1]);
+    } catch (RuntimeException $e) {
+        $empMismatchBlocked = $e->getCode() === OrderPaymentService::ERR_FORBIDDEN;
+    }
+
+    $zeroActorBlocked = false;
+    try {
+        $paymentService->submitCourierCodRemittance($unitId, $courier1EmpId, 0, [$pay1]);
+    } catch (RuntimeException $e) {
+        $zeroActorBlocked = $e->getCode() === OrderPaymentService::ERR_FORBIDDEN;
+    }
+
+    $negActorBlocked = false;
+    try {
+        $paymentService->submitCourierCodRemittance($unitId, $courier1EmpId, -1, [$pay1]);
+    } catch (RuntimeException $e) {
+        $negActorBlocked = $e->getCode() === OrderPaymentService::ERR_FORBIDDEN;
+    }
+
+    $zeroEmpBlocked = false;
+    try {
+        $paymentService->submitCourierCodRemittance($unitId, 0, $courier1Uid, [$pay1]);
+    } catch (RuntimeException $e) {
+        $zeroEmpBlocked = $e->getCode() === OrderPaymentService::ERR_FORBIDDEN;
+    }
+
+    $negEmpBlocked = false;
+    try {
+        $paymentService->submitCourierCodRemittance($unitId, -5, $courier1Uid, [$pay1]);
+    } catch (RuntimeException $e) {
+        $negEmpBlocked = $e->getCode() === OrderPaymentService::ERR_FORBIDDEN;
+    }
+
+    check(
+        'Remittance authorization rejects mismatched employee user_account_id and invalid actor/employee IDs',
+        $empMismatchBlocked
+            && $zeroActorBlocked
+            && $negActorBlocked
+            && $zeroEmpBlocked
+            && $negEmpBlocked
+            && (int)$pdo->query('SELECT COUNT(*) FROM courier_cod_remittance')->fetchColumn() === 0
+    );
+
+    // 7k. Strict payment ID validation across service and DeliveryController boundaries
+    $badPaymentIdLists = [
+        'empty' => [],
+        'alnum_str' => ['12abc'],
+        'decimal_str' => ['3.9'],
+        'float_val' => [3.9],
+        'float_whole' => [3.0],
+        'zero_str' => ['0'],
+        'zero_int' => [0],
+        'neg_str' => ['-5'],
+        'neg_int' => [-5],
+        'plus_str' => ['+12'],
+        'leading_zero' => ['012'],
+        'padded_spaces' => [' 12 '],
+        'empty_str' => [''],
+        'bool_true' => [true],
+        'bool_false' => [false],
+        'null_elem' => [null],
+        'nested_array' => [[$pay1]],
+        'object_elem' => [new stdClass()],
+        'overflow_int64' => ['9223372036854775808'],
+        'mixed_valid_and_zero' => [$pay1, '0'],
+        'mixed_valid_and_alnum' => [$pay1, '12abc'],
+    ];
+    $allBadServiceIdsRejected = true;
+    foreach ($badPaymentIdLists as $caseLabel => $badList) {
+        $caught = false;
+        try {
+            $paymentService->submitCourierCodRemittance($unitId, $courier1EmpId, $courier1Uid, $badList);
+        } catch (RuntimeException $e) {
+            $caught = $e->getCode() === OrderPaymentService::ERR_UNPROCESSABLE;
+        }
+        if (!$caught) {
+            $allBadServiceIdsRejected = false;
+            echo "  DETAIL: service accepted badPaymentIdList case {$caseLabel}\n";
+        }
+    }
+
+    $ctrlRef = new ReflectionClass(DeliveryController::class);
+    $ctrlInstance = $ctrlRef->newInstanceWithoutConstructor();
+    $ctrlExtract = new ReflectionMethod(DeliveryController::class, 'extractSubmittedRemittancePaymentIds');
+    $prevPost = $_POST;
+    $allControllerChecksOk = true;
+    try {
+        // Missing payment_ids key -> empty list rejection
+        $_POST = [];
+        $missingCaught = false;
+        try {
+            $ctrlExtract->invoke($ctrlInstance);
+        } catch (RuntimeException $e) {
+            $missingCaught = $e->getCode() === OrderPaymentService::ERR_UNPROCESSABLE;
+        }
+        if (!$missingCaught) {
+            $allControllerChecksOk = false;
+            echo "  DETAIL: controller accepted missing payment_ids\n";
+        }
+
+        // Non-array payment_ids POST payloads
+        foreach (['scalar_str' => '12', 'scalar_malformed' => '12abc', 'scalar_null' => null] as $k => $scalarPayload) {
+            $_POST = ['payment_ids' => $scalarPayload];
+            $caught = false;
+            try {
+                $ctrlExtract->invoke($ctrlInstance);
+            } catch (RuntimeException $e) {
+                $caught = $e->getCode() === OrderPaymentService::ERR_UNPROCESSABLE;
+            }
+            if (!$caught) {
+                $allControllerChecksOk = false;
+                echo "  DETAIL: controller accepted non-array case {$k}\n";
+            }
+        }
+
+        // Invalid element lists on controller boundary
+        foreach ($badPaymentIdLists as $caseLabel => $badList) {
+            $_POST = ['payment_ids' => $badList];
+            $caught = false;
+            try {
+                $ctrlExtract->invoke($ctrlInstance);
+            } catch (RuntimeException $e) {
+                $caught = $e->getCode() === OrderPaymentService::ERR_UNPROCESSABLE;
+            }
+            if (!$caught) {
+                $allControllerChecksOk = false;
+                echo "  DETAIL: controller accepted badPaymentIdList case {$caseLabel}\n";
+            }
+        }
+
+        // Valid unsorted + duplicate numeric-string/int IDs preserve deduplication and ascending order
+        $_POST = ['payment_ids' => [(string)$pay2, $pay1, (string)$pay2]];
+        $normalizedFromCtrl = $ctrlExtract->invoke($ctrlInstance);
+        $expectedSorted = [$pay1, $pay2];
+        sort($expectedSorted, SORT_NUMERIC);
+        if ($normalizedFromCtrl !== $expectedSorted) {
+            $allControllerChecksOk = false;
+            echo "  DETAIL: controller normalization mismatch\n";
+        }
+    } finally {
+        $_POST = $prevPost;
+    }
+
+    check(
+        'Strict payment ID validation rejects malformed, zero, negative, non-integer, and non-scalar inputs at both controller and service boundaries without silent coercion',
+        $allBadServiceIdsRejected
+            && $allControllerChecksOk
+            && (int)$pdo->query('SELECT COUNT(*) FROM courier_cod_remittance')->fetchColumn() === 0
+    );
+
     // 8. Mid-transaction rollback test on remittance submission before valid submission
     $injector = new S3c1FaultInjector();
     $faultyPdo = $openIsolatedPdo();
@@ -621,12 +775,12 @@ try {
             && (int)$pdo->query('SELECT COUNT(*) FROM courier_cod_remittance_allocation')->fetchColumn() === 0
     );
 
-    // 9. Valid exact-subtotal multi-payment courier remittance submission & duplicate allocation guard
+    // 9. Valid exact-subtotal multi-payment courier remittance submission (with deduplication & ascending sort) & duplicate allocation guard
     $remitRes = $paymentService->submitCourierCodRemittance(
         $unitId,
         $courier1EmpId,
         $courier1Uid,
-        [$pay1, $pay2],
+        [(string)$pay2, $pay1, (string)$pay2],
         '250.00',
         'End-of-route cash batch'
     );
