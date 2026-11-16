@@ -382,6 +382,20 @@ if (!empty($selectedOrder)) {
             <?php endforeach; ?>
           </tbody>
           <tfoot>
+            <?php
+            $rFee = (float)($orderModal['delivery_fee'] ?? 0.0);
+            $rSub = isset($orderModal['subtotal_amount']) && $orderModal['subtotal_amount'] !== null
+                ? (float)$orderModal['subtotal_amount']
+                : max(0.0, (float)$orderModal['total_amount'] - $rFee);
+            ?>
+            <tr style="background: var(--color-bg-subtle, #f9fafb); border-top: 1px solid var(--color-border, #e5e7eb);">
+              <th colspan="4" style="padding: 0.5rem 1rem; text-align: right; font-weight: 500;">Product Subtotal:</th>
+              <th style="padding: 0.5rem 1rem; text-align: right; font-weight: 500;">₱<?= number_format($rSub, 2) ?></th>
+            </tr>
+            <tr style="background: var(--color-bg-subtle, #f9fafb);">
+              <th colspan="4" style="padding: 0.5rem 1rem; text-align: right; font-weight: 500;">Delivery Fee<?= $isPickup ? ' (Pickup)' : '' ?>:</th>
+              <th style="padding: 0.5rem 1rem; text-align: right; font-weight: 500;">₱<?= number_format($rFee, 2) ?></th>
+            </tr>
             <tr style="background: var(--color-bg-subtle, #f9fafb); border-top: 2px solid var(--color-border, #e5e7eb);">
               <th colspan="4" style="padding: 0.75rem 1rem; text-align: right; font-weight: 700; font-size: 0.95rem;">
                 Total Cost:

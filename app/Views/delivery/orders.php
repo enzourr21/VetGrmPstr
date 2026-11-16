@@ -302,6 +302,20 @@ if (!empty($selectedOrder)) {
             <?php endforeach; ?>
           </tbody>
           <tfoot>
+            <?php
+            $dFee = (float)($orderModal['delivery_fee'] ?? 0.0);
+            $dSub = isset($orderModal['subtotal_amount']) && $orderModal['subtotal_amount'] !== null
+                ? (float)$orderModal['subtotal_amount']
+                : max(0.0, (float)$orderModal['total_amount'] - $dFee);
+            ?>
+            <tr style="background: var(--color-bg-subtle, #f9fafb); border-top: 1px solid var(--color-border, #e5e7eb);">
+              <th colspan="4" style="padding: 0.5rem 1rem; text-align: right; font-weight: 500;">Product Subtotal:</th>
+              <th style="padding: 0.5rem 1rem; text-align: right; font-weight: 500;">₱<?= number_format($dSub, 2) ?></th>
+            </tr>
+            <tr style="background: var(--color-bg-subtle, #f9fafb);">
+              <th colspan="4" style="padding: 0.5rem 1rem; text-align: right; font-weight: 500;">Delivery Fee:</th>
+              <th style="padding: 0.5rem 1rem; text-align: right; font-weight: 500;">₱<?= number_format($dFee, 2) ?></th>
+            </tr>
             <tr style="background: var(--color-bg-subtle, #f9fafb); border-top: 2px solid var(--color-border, #e5e7eb);">
               <th colspan="4" style="padding: 0.75rem 1rem; text-align: right;">Total:</th>
               <th style="padding: 0.75rem 1rem; text-align: right; color: var(--color-primary, #047857);">₱<?= number_format((float)$orderModal['total_amount'], 2) ?></th>

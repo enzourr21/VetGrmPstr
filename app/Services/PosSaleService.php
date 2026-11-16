@@ -157,10 +157,18 @@ final class PosSaleService
                 $itemsByInventory[$invId][] = $lineData;
             }
 
-            // 3. Lock distinct inventory rows in deterministic inventory_id ASC order.
+            // 3. Lock distinct inventory rows in deterministic inventory_id ASC order,
+            //    then lock eligible non-expired batches across all batch-tracked inventories in batch_id ASC order.
             $sortedInvIds = array_values($inventoryIds);
             sort($sortedInvIds, SORT_NUMERIC);
             $lockedInventory = $this->lockInventories($sortedInvIds);
+            $batchInvIds = [];
+            foreach ($sortedInvIds as $invId) {
+                if (!empty($itemsByInventory[$invId][0]['requires_batch_tracking'])) {
+                    $batchInvIds[] = $invId;
+                }
+            }
+            $batchPoolsByInv = $batchInvIds ? $this->lockEligibleFefoBatchesForInventories($batchInvIds) : [];
             $activeHeldByInventory = OrderReservationService::activeHeldQuantitiesByInventory($this->db, $sortedInvIds);
 
             // 4. Revalidate physically sellable on-hand stock (excluding shelf commitments and active online holds) and distribute FEFO batches.
@@ -208,7 +216,7 @@ final class PosSaleService
                 }
 
                 if ($requiresBatch) {
-                    $batchPool = $this->lockEligibleFefoBatchesForSale($invId);
+                    $batchPool = $batchPoolsByInv[$invId] ?? [];
                     $totalUnreserved = 0;
                     foreach ($batchPool as $batch) {
                         $totalUnreserved += $batch['unreserved_quantity'];
@@ -483,26 +491,32 @@ final class PosSaleService
     }
 
     /**
-     * Lock eligible non-expired batches in FEFO order and subtract remaining unfulfilled active reservation
-     * holds (accounting for any prior partial order_fulfillment outbound movements).
+     * Lock eligible non-expired batches across multiple inventories in strict ascending batch_id order,
+     * subtract remaining unfulfilled active reservation holds (via non-locking READ COMMITTED reads),
+     * and return per-inventory pools sorted in FEFO order.
      *
-     * @return array<int,array{batch_id:int, batch_number:string, expiration_date:?string, physical_quantity:int, unreserved_quantity:int}>
+     * @param array<int,int> $batchInvIds
+     * @return array<int,array<int,array{batch_id:int, batch_number:string, expiration_date:?string, physical_quantity:int, unreserved_quantity:int}>>
      */
-    private function lockEligibleFefoBatchesForSale(int $inventoryId): array
+    private function lockEligibleFefoBatchesForInventories(array $batchInvIds): array
     {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $batchInvIds), static fn(int $id): bool => $id > 0)));
+        if (!$ids) {
+            return [];
+        }
+        sort($ids, SORT_NUMERIC);
+        $invPlaceholders = implode(',', array_fill(0, count($ids), '?'));
+
         $batchStmt = $this->db->prepare(
-            "SELECT batch_id, batch_number, expiration_date, quantity
+            "SELECT batch_id, inventory_id, batch_number, expiration_date, quantity
              FROM inventory_batch
-             WHERE inventory_id = ?
+             WHERE inventory_id IN ({$invPlaceholders})
                AND quantity > 0
                AND (expiration_date IS NULL OR expiration_date >= CURDATE())
-             ORDER BY
-               (CASE WHEN expiration_date IS NULL THEN 1 ELSE 0 END) ASC,
-               expiration_date ASC,
-               batch_id ASC
+             ORDER BY batch_id ASC
              FOR UPDATE"
         );
-        $batchStmt->execute([$inventoryId]);
+        $batchStmt->execute($ids);
         $batches = $batchStmt->fetchAll(PDO::FETCH_ASSOC);
 
         if (!$batches) {
@@ -510,19 +524,18 @@ final class PosSaleService
         }
 
         // Non-locking reads under READ COMMITTED: never acquire locks on inventory_reservation or
-        // inventory_movement (avoiding lock inversion against fulfillPickupOrder's reservation->inventory
-        // order). Because inventory FOR UPDATE is already held for $inventoryId and all reservation and
-        // fulfillment writers must hold inventory FOR UPDATE before mutating or committing rows for this
-        // inventory, the committed state observed here is stable and quiescent until commit/rollback.
+        // inventory_movement. Because inventory FOR UPDATE is already held for all $ids and all
+        // reservation/fulfillment writers lock inventory FOR UPDATE before mutating or committing rows
+        // for those inventories, the committed state observed here is quiescent until commit/rollback.
         $resStmt = $this->db->prepare(
             "SELECT reservation_id, batch_id, reserved_quantity
              FROM inventory_reservation
-             WHERE inventory_id = ?
+             WHERE inventory_id IN ({$invPlaceholders})
                AND reservation_status = 'active'
                AND batch_id IS NOT NULL
              ORDER BY reservation_id ASC"
         );
-        $resStmt->execute([$inventoryId]);
+        $resStmt->execute($ids);
         $activeReservations = $resStmt->fetchAll(PDO::FETCH_ASSOC);
 
         $fulfilledByResId = [];
@@ -560,14 +573,15 @@ final class PosSaleService
             $activeHoldByBatch[$bId] = ($activeHoldByBatch[$bId] ?? 0) + $remainingHold;
         }
 
-        $pool = [];
+        $byInv = [];
         foreach ($batches as $b) {
+            $invId = (int)$b['inventory_id'];
             $bId = (int)$b['batch_id'];
             $physicalQty = (int)$b['quantity'];
             $heldQty = $activeHoldByBatch[$bId] ?? 0;
             $unreservedQty = max(0, $physicalQty - $heldQty);
 
-            $pool[] = [
+            $byInv[$invId][] = [
                 'batch_id' => $bId,
                 'batch_number' => (string)$b['batch_number'],
                 'expiration_date' => $b['expiration_date'] !== null ? (string)$b['expiration_date'] : null,
@@ -576,6 +590,21 @@ final class PosSaleService
             ];
         }
 
-        return $pool;
+        foreach ($byInv as &$invBatches) {
+            usort($invBatches, static function (array $a, array $b): int {
+                $aNull = $a['expiration_date'] === null ? 1 : 0;
+                $bNull = $b['expiration_date'] === null ? 1 : 0;
+                if ($aNull !== $bNull) {
+                    return $aNull <=> $bNull;
+                }
+                if ($a['expiration_date'] !== $b['expiration_date']) {
+                    return strcmp((string)$a['expiration_date'], (string)$b['expiration_date']);
+                }
+                return $a['batch_id'] <=> $b['batch_id'];
+            });
+        }
+        unset($invBatches);
+
+        return $byInv;
     }
 }

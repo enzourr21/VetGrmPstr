@@ -26,15 +26,19 @@ final class OrderController extends Controller
         $c = $this->db->prepare('SELECT address_line1, address_line2, city, province, postal_code FROM customer WHERE customer_id=?');
         $c->execute([$cid]);
         $checkoutService = new CheckoutHoldService($this->db);
+        $paymentSettings = $checkoutService->getUnitPaymentSettings($bu);
+        $subtotal = Cart::total($items);
 
         $this->render('shop/checkout', [
             'title' => 'Checkout',
             'unit' => $unit,
             'items' => $items,
-            'total' => Cart::total($items),
+            'subtotal' => $subtotal,
+            'total' => $subtotal,
+            'amounts' => $checkoutService->calculateOrderAmounts($subtotal, 'pickup', $bu),
             'addr' => $c->fetch() ?: [],
             'errors' => [],
-            'paymentSettings' => $checkoutService->getUnitPaymentSettings($bu),
+            'paymentSettings' => $paymentSettings,
             'activeHold' => $checkoutService->getActiveHoldForCustomerUnit($cid, $bu),
             'checkoutToken' => bin2hex(random_bytes(16)),
             'minStockThreshold' => CheckoutHoldService::MIN_ONLINE_STOCK_THRESHOLD,
@@ -69,6 +73,8 @@ final class OrderController extends Controller
             $errors[] = 'Choose a valid payment method.';
         } elseif ($paymentMethod === 'cod' && !$paymentSettings['cod_enabled']) {
             $errors[] = 'Cash on Delivery is not enabled for this shop.';
+        } elseif ($paymentMethod === 'online' && !$paymentSettings['online_enabled']) {
+            $errors[] = 'Online payment is currently unavailable because no payment provider is configured.';
         }
         if ($method === 'delivery') {
             if ($addr['address_line1'] === '' || mb_strlen($addr['address_line1']) > 255) $errors[] = 'Enter a delivery address.';
@@ -125,11 +131,17 @@ final class OrderController extends Controller
 
         http_response_code($httpErrorCode);
         $items = Cart::items(Cart::id($cid, $bu));
+        $subtotal = Cart::total($items);
+        $previewMethod = in_array($method, ['pickup', 'delivery'], true) ? $method : 'pickup';
+        $amounts = $checkoutService->calculateOrderAmounts($subtotal, $previewMethod, $bu);
+
         $this->render('shop/checkout', [
             'title' => 'Checkout',
             'unit' => $unit,
             'items' => $items,
-            'total' => Cart::total($items),
+            'subtotal' => $subtotal,
+            'total' => $amounts['total_amount'],
+            'amounts' => $amounts,
             'addr' => $addr,
             'errors' => $errors,
             'paymentSettings' => $paymentSettings,
@@ -192,7 +204,8 @@ final class OrderController extends Controller
     {
         [, $cid] = $this->requireCustomer();
         $s = $this->db->prepare(
-            "SELECT o.order_id, o.order_date, o.fulfillment_method, o.order_status, o.total_amount,
+            "SELECT o.order_id, o.order_date, o.fulfillment_method, o.order_status,
+                    o.subtotal_amount, o.delivery_fee, o.total_amount,
                     bu.business_unit_name,
                     p.payment_method,
                     CASE WHEN COALESCE(ps.has_refunded, 0) = 1 THEN 'refunded' ELSE p.payment_status END AS payment_status

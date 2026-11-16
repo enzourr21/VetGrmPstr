@@ -227,11 +227,108 @@ class InventoryBatch
     }
 
     /**
-     * Lock eligible non-expired batches in deterministic FEFO order and compute each
-     * batch's unreserved reservation capacity by subtracting active reservations read with FOR UPDATE.
-     * Does not deduct inventory.on_hand or inventory_batch.quantity.
+     * Lock eligible non-expired batches across multiple inventories in strict ascending batch_id order,
+     * subtract active reservations, and return per-inventory batch pools sorted in FEFO order.
      *
-     * Caller must hold an active transaction (and lock the parent inventory row FOR UPDATE first).
+     * Caller must hold an active transaction and all parent inventory FOR UPDATE locks in ascending
+     * inventory_id order before invoking this method.
+     *
+     * @param array<int,int> $sortedInvIds
+     * @return array<int, array<int, array{
+     *   batch_id:int,
+     *   batch_number:string,
+     *   expiration_date:?string,
+     *   physical_quantity:int,
+     *   active_reserved:int,
+     *   unreserved_quantity:int
+     * }>> Map of inventory_id => FEFO-ordered batch list
+     */
+    public static function lockEligibleFefoBatchesForInventories(
+        PDO $db,
+        array $sortedInvIds,
+        bool $lockReservations = true
+    ): array {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $sortedInvIds), static fn(int $id): bool => $id > 0)));
+        if (!$ids) {
+            return [];
+        }
+        sort($ids, SORT_NUMERIC);
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+
+        // Lock eligible batches strictly in ascending batch_id order, then sort in FEFO order in PHP.
+        $batchStmt = $db->prepare(
+            "SELECT batch_id, inventory_id, batch_number, expiration_date, quantity
+             FROM inventory_batch
+             WHERE inventory_id IN ({$placeholders})
+               AND quantity > 0
+               AND (expiration_date IS NULL OR expiration_date >= CURDATE())
+             ORDER BY batch_id ASC
+             FOR UPDATE"
+        );
+        $batchStmt->execute($ids);
+        $batches = $batchStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        if (!$batches) {
+            return [];
+        }
+
+        $resLock = $lockReservations ? ' FOR UPDATE' : '';
+        $resStmt = $db->prepare(
+            "SELECT reservation_id, batch_id, reserved_quantity
+             FROM inventory_reservation
+             WHERE inventory_id IN ({$placeholders})
+               AND reservation_status = 'active'
+               AND batch_id IS NOT NULL
+             ORDER BY reservation_id ASC{$resLock}"
+        );
+        $resStmt->execute($ids);
+
+        $activeByBatch = [];
+        foreach ($resStmt->fetchAll(PDO::FETCH_ASSOC) as $res) {
+            $bId = (int)$res['batch_id'];
+            $activeByBatch[$bId] = ($activeByBatch[$bId] ?? 0) + (int)$res['reserved_quantity'];
+        }
+
+        $byInv = [];
+        foreach ($batches as $b) {
+            $invId = (int)$b['inventory_id'];
+            $bId = (int)$b['batch_id'];
+            $physicalQty = (int)$b['quantity'];
+            $activeReserved = $activeByBatch[$bId] ?? 0;
+            $unreservedQty = max(0, $physicalQty - $activeReserved);
+
+            $byInv[$invId][] = [
+                'batch_id' => $bId,
+                'batch_number' => (string)$b['batch_number'],
+                'expiration_date' => $b['expiration_date'] !== null ? (string)$b['expiration_date'] : null,
+                'physical_quantity' => $physicalQty,
+                'active_reserved' => $activeReserved,
+                'unreserved_quantity' => $unreservedQty,
+            ];
+        }
+
+        // Preserve FEFO allocation order: non-null earliest expiration first, NULL expiration last, tie-break batch_id ASC.
+        foreach ($byInv as &$invBatches) {
+            usort($invBatches, static function (array $a, array $b): int {
+                $aNull = $a['expiration_date'] === null ? 1 : 0;
+                $bNull = $b['expiration_date'] === null ? 1 : 0;
+                if ($aNull !== $bNull) {
+                    return $aNull <=> $bNull;
+                }
+                if ($a['expiration_date'] !== $b['expiration_date']) {
+                    return strcmp((string)$a['expiration_date'], (string)$b['expiration_date']);
+                }
+                return $a['batch_id'] <=> $b['batch_id'];
+            });
+        }
+        unset($invBatches);
+
+        return $byInv;
+    }
+
+    /**
+     * Lock eligible non-expired batches for a single inventory (locking in batch_id ASC order,
+     * returned in FEFO order) and subtract active reservations read with FOR UPDATE.
      *
      * @return array<int, array{
      *   batch_id:int,
@@ -244,61 +341,8 @@ class InventoryBatch
      */
     public static function lockEligibleFefoBatchesForReservation(PDO $db, int $inventoryId): array
     {
-        $batchStmt = $db->prepare(
-            "SELECT batch_id, batch_number, expiration_date, quantity
-             FROM inventory_batch
-             WHERE inventory_id = ?
-               AND quantity > 0
-               AND (expiration_date IS NULL OR expiration_date >= CURDATE())
-             ORDER BY
-               (CASE WHEN expiration_date IS NULL THEN 1 ELSE 0 END) ASC,
-               expiration_date ASC,
-               batch_id ASC
-             FOR UPDATE"
-        );
-        $batchStmt->execute([$inventoryId]);
-        $batches = $batchStmt->fetchAll(PDO::FETCH_ASSOC);
-
-        if (!$batches) {
-            return [];
-        }
-
-        // Locking read of active shelf reservations (cannot combine GROUP BY with FOR UPDATE in MySQL).
-        $resStmt = $db->prepare(
-            "SELECT reservation_id, batch_id, reserved_quantity
-             FROM inventory_reservation
-             WHERE inventory_id = ?
-               AND reservation_status = 'active'
-               AND batch_id IS NOT NULL
-             ORDER BY reservation_id ASC
-             FOR UPDATE"
-        );
-        $resStmt->execute([$inventoryId]);
-
-        $activeByBatch = [];
-        foreach ($resStmt->fetchAll(PDO::FETCH_ASSOC) as $res) {
-            $bId = (int)$res['batch_id'];
-            $activeByBatch[$bId] = ($activeByBatch[$bId] ?? 0) + (int)$res['reserved_quantity'];
-        }
-
-        $result = [];
-        foreach ($batches as $b) {
-            $bId = (int)$b['batch_id'];
-            $physicalQty = (int)$b['quantity'];
-            $activeReserved = $activeByBatch[$bId] ?? 0;
-            $unreservedQty = max(0, $physicalQty - $activeReserved);
-
-            $result[] = [
-                'batch_id' => $bId,
-                'batch_number' => (string)$b['batch_number'],
-                'expiration_date' => $b['expiration_date'] !== null ? (string)$b['expiration_date'] : null,
-                'physical_quantity' => $physicalQty,
-                'active_reserved' => $activeReserved,
-                'unreserved_quantity' => $unreservedQty,
-            ];
-        }
-
-        return $result;
+        $byInv = self::lockEligibleFefoBatchesForInventories($db, [$inventoryId], true);
+        return $byInv[$inventoryId] ?? [];
     }
 
     /**

@@ -80,7 +80,9 @@ final class OrderReservationService
             }
 
             $orderItems = $this->lockOrderItems($orderId);
-            $this->lockCompleteActiveReservations($orderId, $businessUnitId, $orderItems, 'preparation');
+            $metaByBpId = $this->resolveUnitProductMetadata($orderId, $businessUnitId, $orderItems);
+            $this->lockOrderItemInventories($orderItems, $metaByBpId);
+            $this->lockCompleteActiveReservations($orderId, $businessUnitId, $orderItems, 'preparation', $metaByBpId);
 
             $updOrdStmt = $this->db->prepare(
                 "UPDATE customer_order
@@ -146,7 +148,9 @@ final class OrderReservationService
         }
 
         $orderItems = $this->lockOrderItems($orderId);
-        $this->lockCompleteActiveReservations($orderId, $businessUnitId, $orderItems, 'dispatch');
+        $metaByBpId = $this->resolveUnitProductMetadata($orderId, $businessUnitId, $orderItems);
+        $this->lockOrderItemInventories($orderItems, $metaByBpId);
+        $this->lockCompleteActiveReservations($orderId, $businessUnitId, $orderItems, 'dispatch', $metaByBpId);
     }
 
     /**
@@ -185,40 +189,23 @@ final class OrderReservationService
             // 2. Lock the order's line items in deterministic order.
             $orderItems = $this->lockOrderItems($orderId);
 
-            // 3. Reject any order that already has non-cancelled reservations (locking read).
-            $oiIds = array_map(static fn(array $r): int => (int)$r['order_item_id'], $orderItems);
-            $oiPlaceholders = implode(',', array_fill(0, count($oiIds), '?'));
-            $dupResStmt = $this->db->prepare(
-                "SELECT reservation_id
-                 FROM inventory_reservation
-                 WHERE order_item_id IN ({$oiPlaceholders})
-                   AND reservation_status <> 'cancelled'
-                 ORDER BY reservation_id ASC
-                 LIMIT 1
-                 FOR UPDATE"
-            );
-            $dupResStmt->execute($oiIds);
-            if ($dupResStmt->fetchColumn() !== false) {
-                throw new RuntimeException(
-                    "Order #{$orderId} already has active or prior inventory reservations and cannot be confirmed again.",
-                    self::ERR_CONFLICT
-                );
-            }
-
-            // 4. Resolve unit-scoped product metadata without acquiring out-of-order inventory locks.
+            // 3. Resolve unit-scoped product metadata without acquiring out-of-order inventory locks.
             $metaByBpId = $this->resolveUnitProductMetadata($orderId, $businessUnitId, $orderItems);
 
             $itemsByInventory = [];
             $inventoryIds = [];
+            $oiIds = [];
             foreach ($orderItems as $item) {
                 $bpId = (int)$item['business_product_id'];
                 $qty = (int)$item['quantity'];
                 $meta = $metaByBpId[$bpId];
                 $invId = (int)$meta['inventory_id'];
+                $oiId = (int)$item['order_item_id'];
 
+                $oiIds[] = $oiId;
                 $inventoryIds[$invId] = $invId;
                 $itemsByInventory[$invId][] = [
-                    'order_item_id' => (int)$item['order_item_id'],
+                    'order_item_id' => $oiId,
                     'business_product_id' => $bpId,
                     'quantity' => $qty,
                     'requires_batch_tracking' => !empty($meta['requires_batch_tracking']),
@@ -226,20 +213,22 @@ final class OrderReservationService
                 ];
             }
 
-            // 5. Lock distinct inventory rows in deterministic inventory_id ASC order.
+            // 4. Lock distinct inventory rows in deterministic inventory_id ASC order.
             $sortedInvIds = array_values($inventoryIds);
             sort($sortedInvIds, SORT_NUMERIC);
             $lockedInventory = $this->lockInventories($sortedInvIds);
 
-            // 6. Read active unexpired online-checkout holds (non-locking under READ COMMITTED after inventory FOR UPDATE),
-            //    revalidate availability, allocate FEFO batches, and persist reservations + inventory.committed.
+            // 5. Read active unexpired online-checkout holds (non-locking under READ COMMITTED after inventory FOR UPDATE),
+            //    lock batches (batch_id ASC) then reservations (reservation_id ASC), check duplicate order reservations,
+            //    and persist FEFO reservations + inventory.committed.
             $activeHeldByInventory = self::activeHeldQuantitiesByInventory($this->db, $sortedInvIds);
             $resSummary = $this->reserveLockedOrderItems(
                 $orderId,
                 $sortedInvIds,
                 $itemsByInventory,
                 $lockedInventory,
-                $activeHeldByInventory
+                $activeHeldByInventory,
+                $oiIds
             );
             $reservationsCreated = $resSummary['reservations_created'];
             $totalReservedQty = $resSummary['total_reserved_quantity'];
@@ -313,6 +302,8 @@ final class OrderReservationService
             }
 
             $orderItems = $this->lockOrderItems($orderId);
+            $metaByBpId = $this->resolveUnitProductMetadata($orderId, $businessUnitId, $orderItems);
+            $this->lockOrderItemInventories($orderItems, $metaByBpId);
             $this->lockActivePickupReservations($orderId, $orderItems);
 
             $updOrdStmt = $this->db->prepare(
@@ -388,26 +379,35 @@ final class OrderReservationService
                 );
             }
 
-            // 2. Lock order items and reservations in canonical order and verify full coverage & movement integrity.
+            // 2. Lock order items, resolve metadata, and acquire inventory (ASC) -> inventory_batch (ASC) locks
+            //    BEFORE locking inventory_reservation -> inventory_movement (strict global lock hierarchy).
             $orderItems = $this->lockOrderItems($orderId);
-            $reservationState = $this->lockActivePickupReservations($orderId, $orderItems);
-            $activeReservations = $reservationState['active'];
-            $priorFulfilledByResId = $reservationState['prior_fulfilled'];
-
-            // 3. Verify unit-scoped metadata matches each active reservation's inventory and batch requirement.
             $metaByBpId = $this->resolveUnitProductMetadata($orderId, $businessUnitId, $orderItems);
+            $lockedInventory = $this->lockOrderItemInventories($orderItems, $metaByBpId);
+
+            $batchInvIds = [];
             $itemsById = [];
             foreach ($orderItems as $item) {
                 $itemId = (int)$item['order_item_id'];
                 $bpId = (int)$item['business_product_id'];
+                $invId = (int)$metaByBpId[$bpId]['inventory_id'];
+                $reqBatch = !empty($metaByBpId[$bpId]['requires_batch_tracking']);
+                if ($reqBatch) {
+                    $batchInvIds[$invId] = $invId;
+                }
                 $itemsById[$itemId] = [
                     'order_item_id' => $itemId,
                     'business_product_id' => $bpId,
-                    'inventory_id' => (int)$metaByBpId[$bpId]['inventory_id'],
-                    'requires_batch_tracking' => !empty($metaByBpId[$bpId]['requires_batch_tracking']),
+                    'inventory_id' => $invId,
+                    'requires_batch_tracking' => $reqBatch,
                     'product_name' => (string)$metaByBpId[$bpId]['product_name'],
                 ];
             }
+            $lockedBatches = $batchInvIds ? $this->lockInventoryBatchesByInventories(array_values($batchInvIds)) : [];
+
+            $reservationState = $this->lockActivePickupReservations($orderId, $orderItems);
+            $activeReservations = $reservationState['active'];
+            $priorFulfilledByResId = $reservationState['prior_fulfilled'];
 
             foreach ($activeReservations as $res) {
                 $resId = (int)$res['reservation_id'];
@@ -524,11 +524,7 @@ final class OrderReservationService
                 }
             }
 
-            // 7. Lock distinct inventory rows and pinned inventory_batch rows in ascending ID order.
-            $invIdsToLock = array_keys($invDeductions);
-            sort($invIdsToLock, SORT_NUMERIC);
-            $lockedInventory = $this->lockInventories($invIdsToLock);
-
+            // 7. Revalidate already-locked inventory and pinned inventory_batch balances (no post-reservation locks).
             foreach ($invDeductions as $invId => $deductQty) {
                 if (!isset($lockedInventory[$invId])) {
                     throw new RuntimeException("Inventory record #{$invId} could not be locked.", self::ERR_UNPROCESSABLE);
@@ -554,10 +550,6 @@ final class OrderReservationService
 
             $batchNumbersById = [];
             if ($batchDeductions) {
-                $batchIdsToLock = array_keys($batchDeductions);
-                sort($batchIdsToLock, SORT_NUMERIC);
-                $lockedBatches = $this->lockInventoryBatches($batchIdsToLock);
-
                 foreach ($batchDeductions as $batchId => $deductQty) {
                     $batch = $lockedBatches[$batchId] ?? null;
                     if (!$batch || (int)$batch['inventory_id'] !== $expectedBatchInventory[$batchId]) {
@@ -1087,9 +1079,10 @@ final class OrderReservationService
         int $orderId,
         int $businessUnitId,
         array $orderItems,
-        string $stage
+        string $stage,
+        ?array $metaByBpId = null
     ): void {
-        $metaByBpId = $this->resolveUnitProductMetadata($orderId, $businessUnitId, $orderItems);
+        $metaByBpId ??= $this->resolveUnitProductMetadata($orderId, $businessUnitId, $orderItems);
 
         $orderedQtyByItemId = [];
         $expectedMetaByItemId = [];
@@ -1250,10 +1243,16 @@ final class OrderReservationService
      * Shared FEFO reservation allocator and inventory.committed updater for an order whose
      * inventory rows are already locked FOR UPDATE in ascending inventory_id order inside an active transaction.
      *
+     * Lock order maintained here:
+     *   inventory (already locked in inventory_id ASC)
+     *   -> inventory_batch (locked across all batch-tracked inventories in batch_id ASC)
+     *   -> inventory_reservation (locked in reservation_id ASC)
+     *
      * @param array<int,int> $sortedInvIds
      * @param array<int,array<int,array{order_item_id:int,business_product_id:int,quantity:int,requires_batch_tracking:bool,product_name:string}>> $itemsByInventory
      * @param array<int,array<string,mixed>> $lockedInventory
      * @param array<int,int> $activeHeldByInventory
+     * @param array<int,int> $rejectExistingForOrderItemIds Optional order_item_id list to guard against duplicate non-cancelled reservations after batch locks
      * @return array{reservations_created:int, total_reserved_quantity:int}
      */
     public function reserveLockedOrderItems(
@@ -1261,10 +1260,46 @@ final class OrderReservationService
         array $sortedInvIds,
         array $itemsByInventory,
         array $lockedInventory,
-        array $activeHeldByInventory = []
+        array $activeHeldByInventory = [],
+        array $rejectExistingForOrderItemIds = []
     ): array {
         if (!$this->db->inTransaction()) {
             throw new RuntimeException('Reservation allocation must run inside an active transaction.', self::ERR_CONFLICT);
+        }
+
+        // Lock all eligible batches across all batch-tracked inventories in strict batch_id ASC order
+        // before locking/reading any inventory_reservation rows.
+        $batchInvIds = [];
+        foreach ($sortedInvIds as $invId) {
+            $invItems = $itemsByInventory[$invId] ?? [];
+            if ($invItems && !empty($invItems[0]['requires_batch_tracking'])) {
+                $batchInvIds[] = $invId;
+            }
+        }
+        $batchPoolsByInv = $batchInvIds
+            ? InventoryBatch::lockEligibleFefoBatchesForInventories($this->db, $batchInvIds, true)
+            : [];
+
+        if ($rejectExistingForOrderItemIds) {
+            $oiIds = array_values(array_unique(array_map('intval', $rejectExistingForOrderItemIds)));
+            sort($oiIds, SORT_NUMERIC);
+            $oiPlaceholders = implode(',', array_fill(0, count($oiIds), '?'));
+            $dupResStmt = $this->db->prepare(
+                "SELECT reservation_id
+                 FROM inventory_reservation
+                 WHERE order_item_id IN ({$oiPlaceholders})
+                   AND reservation_status <> 'cancelled'
+                 ORDER BY reservation_id ASC
+                 LIMIT 1
+                 FOR UPDATE"
+            );
+            $dupResStmt->execute($oiIds);
+            if ($dupResStmt->fetchColumn() !== false) {
+                throw new RuntimeException(
+                    "Order #{$orderId} already has active or prior inventory reservations and cannot be confirmed again.",
+                    self::ERR_CONFLICT
+                );
+            }
         }
 
         $plannedReservations = [];
@@ -1301,7 +1336,7 @@ final class OrderReservationService
             }
 
             if ($requiresBatch) {
-                $batchPool = InventoryBatch::lockEligibleFefoBatchesForReservation($this->db, $invId);
+                $batchPool = $batchPoolsByInv[$invId] ?? [];
                 $totalUnreservedBatchQty = 0;
                 foreach ($batchPool as $batch) {
                     $totalUnreservedBatchQty += $batch['unreserved_quantity'];
@@ -1386,6 +1421,56 @@ final class OrderReservationService
             'reservations_created' => count($plannedReservations),
             'total_reserved_quantity' => $totalReservedQty,
         ];
+    }
+
+    /**
+     * Lock all distinct inventory rows referenced by $orderItems in ascending inventory_id order.
+     *
+     * @param array<int,array<string,mixed>> $orderItems
+     * @param array<int,array<string,mixed>> $metaByBpId
+     * @return array<int,array<string,mixed>>
+     */
+    private function lockOrderItemInventories(array $orderItems, array $metaByBpId): array
+    {
+        $invIds = [];
+        foreach ($orderItems as $item) {
+            $bpId = (int)$item['business_product_id'];
+            $invId = (int)$metaByBpId[$bpId]['inventory_id'];
+            $invIds[$invId] = $invId;
+        }
+        $sortedInvIds = array_values($invIds);
+        sort($sortedInvIds, SORT_NUMERIC);
+        return $sortedInvIds ? $this->lockInventories($sortedInvIds) : [];
+    }
+
+    /**
+     * Lock all inventory_batch rows belonging to $inventoryIds in ascending batch_id order.
+     *
+     * @param array<int,int> $inventoryIds
+     * @return array<int,array<string,mixed>> Map of batch_id => row
+     */
+    private function lockInventoryBatchesByInventories(array $inventoryIds): array
+    {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $inventoryIds), static fn(int $id): bool => $id > 0)));
+        if (!$ids) {
+            return [];
+        }
+        sort($ids, SORT_NUMERIC);
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $stmt = $this->db->prepare(
+            "SELECT batch_id, inventory_id, batch_number, quantity
+             FROM inventory_batch
+             WHERE inventory_id IN ({$placeholders})
+             ORDER BY batch_id ASC
+             FOR UPDATE"
+        );
+        $stmt->execute($ids);
+
+        $locked = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $locked[(int)$row['batch_id']] = $row;
+        }
+        return $locked;
     }
 
     /**

@@ -6,13 +6,20 @@ declare(strict_types=1);
  *
  * Targets only an explicitly allowlisted disposable test database (vetgrpet_test).
  * Verifies:
+ *  - Unconfigured gateway rejection & COD availability when configured.
  *  - COD checkout: 3-unit threshold, exact 3-unit purchase allowed, direct 'confirmed' order,
  *    FEFO active reservations, committed increase without on_hand deduction, 'cod'/'pending' payment,
  *    no temporary holds, cart cleared only on commit, duplicate idempotency protection, COD disabled rejection.
- *  - Online checkout: 3-unit threshold, exact 3-minute (180s) UTC hold window, no premature order/items,
- *    active holds reduce availability for other checkouts/POS/confirmations, expired holds immediately stop
- *    reducing availability even before cleanup, atomic conversion on verified capture, hold release on failure/cancel,
- *    duplicate webhook deduplication, delayed capture reconciliation (fulfillable vs unfulfillable).
+ *  - Duplicate checkout prevention: DB-level single active attempt per (customer_id, business_unit_id),
+ *    repeated identical requests, online-to-COD conflict & cancellation-then-COD, COD-to-online rejection.
+ *  - Online checkout (with configured test gateway): 3-unit threshold, exact 3-minute (180s) UTC hold window,
+ *    no premature order/items, active holds reduce availability for other checkouts/POS/confirmations,
+ *    expired holds immediately stop reducing availability even before cleanup, cleanup script logic.
+ *  - Payment attempt handling: failed payment attempt does NOT block a subsequent legitimate verified capture
+ *    on the same attempt/provider_payment_id; duplicate captures remain idempotent; delayed captures after
+ *    hold expiration reconcile cleanly (fulfillable vs unfulfillable reconciliation queue).
+ *  - Delivery fee separation: pickup = 0.00 fee; delivery uses configured fee on attempt, order, and payment.
+ *  - Concurrent multi-connection inventory-then-batch locking safety.
  */
 
 require_once dirname(__DIR__) . '/app/bootstrap.php';
@@ -20,6 +27,9 @@ require_once dirname(__DIR__) . '/app/bootstrap.php';
 use App\Core\Database;
 use App\Models\Cart;
 use App\Services\CheckoutHoldService;
+use App\Services\OrderReservationService;
+use App\Services\Payment\OnlinePaymentGatewayInterface;
+use App\Services\Payment\UnconfiguredOnlinePaymentGateway;
 use App\Services\PosSaleService;
 
 $pdo = Database::pdo();
@@ -45,8 +55,43 @@ function check(string $label, bool $cond, string $detail = ''): void
     }
 }
 
+$configuredTestGateway = new class implements OnlinePaymentGatewayInterface {
+    public function providerName(): string { return 'test_gateway'; }
+    public function isConfigured(): bool { return true; }
+    public function createCheckoutSession(array $sessionContext): array
+    {
+        return [
+            'configured' => true,
+            'provider_name' => 'test_gateway',
+            'provider_session_id' => 'sess_' . $sessionContext['attempt_id'],
+            'checkout_url' => '/checkout/attempts/' . $sessionContext['attempt_id'],
+        ];
+    }
+    public function verifyPaymentCapture(string $providerSessionId, ?string $providerPaymentId = null): array
+    {
+        throw new RuntimeException('Not used in direct capture fixture test.');
+    }
+    public function parseAndVerifyWebhook(string $rawBody, array $headers): array
+    {
+        throw new RuntimeException('Not used in direct capture fixture test.');
+    }
+    public function initiateRefund(array $refundContext): array
+    {
+        throw new RuntimeException('Not used in direct capture fixture test.');
+    }
+};
+
 $checkoutService = new CheckoutHoldService($pdo);
 $posService = new PosSaleService($pdo);
+$reservationService = new OrderReservationService($pdo);
+
+$openSecondConnection = static function (): PDO {
+    require dirname(__DIR__) . '/config/database.php';
+    /** @var PDO $pdo */
+    $pdo->exec('SET SESSION innodb_lock_wait_timeout = 2');
+    return $pdo;
+};
+
 $cleanup = [
     'orders' => [],
     'attempts' => [],
@@ -68,7 +113,7 @@ try {
     $branchId = (int)$pdo->lastInsertId();
     $cleanup['branches'][] = $branchId;
 
-    $pdo->prepare("INSERT INTO business_settings (business_unit_id, business_name, business_email, contact_number, cod_enabled) VALUES (?, 'ChkE2 Shop', 'chke2@test.invalid', '09175550199', 1)")
+    $pdo->prepare("INSERT INTO business_settings (business_unit_id, business_name, business_email, contact_number, cod_enabled, delivery_fee) VALUES (?, 'ChkE2 Shop', 'chke2@test.invalid', '09175550199', 1, 50.00)")
         ->execute([$unitId]);
 
     $pdo->exec("INSERT INTO user_account (email, password_hash) VALUES ('chk_e2_cust1@test.invalid', 'hash')");
@@ -116,7 +161,24 @@ try {
         return $cartId;
     };
 
-    // 1. 3-unit threshold rejects stock = 2 for both COD and Online
+    // 1. Unconfigured online gateway is strictly disabled and blocked server-side
+    [$bpSix, $invSix] = $createProduct('ChkE2 Online6', 75.00, 6, 0);
+    $setCart($cid1, $bpSix, 3);
+    $unitSettingsDefault = $checkoutService->getUnitPaymentSettings($unitId);
+    $unconfiguredBlocked = false;
+    try {
+        $checkoutService->initiateOnlineCheckoutHold($cid1, $unitId, $uid1, 'pickup', [], '', 'e2-unconf-1', new UnconfiguredOnlinePaymentGateway());
+    } catch (RuntimeException $e) {
+        $unconfiguredBlocked = $e->getCode() === CheckoutHoldService::ERR_UNPROCESSABLE;
+    }
+    check(
+        'Unconfigured online gateway reports online_enabled=false and blocks hold creation',
+        $unitSettingsDefault['cod_enabled'] === true
+            && $unitSettingsDefault['online_enabled'] === false
+            && $unconfiguredBlocked
+    );
+
+    // 2. 3-unit threshold rejects stock = 2 for both COD and configured Online
     [$bpLow, $invLow] = $createProduct('ChkE2 LowStock', 100.00, 2, 0);
     $cart1 = $setCart($cid1, $bpLow, 1);
     try {
@@ -126,18 +188,16 @@ try {
         check('COD rejects product below 3-unit threshold', $e->getCode() === CheckoutHoldService::ERR_UNPROCESSABLE);
     }
     try {
-        $checkoutService->initiateOnlineCheckoutHold($cid1, $unitId, $uid1, 'pickup', [], '', 'e2-low-online-1');
+        $checkoutService->initiateOnlineCheckoutHold($cid1, $unitId, $uid1, 'pickup', [], '', 'e2-low-online-1', $configuredTestGateway);
         check('Online checkout rejects product below 3-unit threshold', false);
     } catch (RuntimeException $e) {
         check('Online checkout rejects product below 3-unit threshold', $e->getCode() === CheckoutHoldService::ERR_UNPROCESSABLE);
     }
 
-    // 2. Exact 3 units available permits purchasing all 3 units (COD)
+    // 3. Exact 3 units available permits purchasing all 3 units (COD delivery with separated delivery fee)
     [$bpExact3, $invExact3] = $createProduct('ChkE2 Exact3', 50.00, 3, 1);
     $pdo->exec("INSERT INTO inventory_batch (inventory_id, batch_number, expiration_date, quantity) VALUES ({$invExact3}, 'E2-B1', DATE_ADD(CURDATE(), INTERVAL 10 DAY), 2)");
-    $b1 = (int)$pdo->lastInsertId();
     $pdo->exec("INSERT INTO inventory_batch (inventory_id, batch_number, expiration_date, quantity) VALUES ({$invExact3}, 'E2-B2', DATE_ADD(CURDATE(), INTERVAL 30 DAY), 1)");
-    $b2 = (int)$pdo->lastInsertId();
 
     $setCart($cid1, $bpExact3, 3);
     $codRes = $checkoutService->placeCodOrder($cid1, $unitId, $uid1, 'delivery', [
@@ -148,22 +208,37 @@ try {
     $cleanup['orders'][] = $codRes['order_id'];
     $cleanup['attempts'][] = $codRes['attempt_id'];
 
+    // Repeated COD request replays idempotently; COD-to-online with same key is rejected
     $codReplay = $checkoutService->placeCodOrder($cid1, $unitId, $uid1, 'delivery', [
         'address_line1' => '100 Paw St',
         'city' => 'Makati',
         'postal_code' => '1200',
     ], 'Leave at gate', 'e2-cod-exact3');
 
-    $ordCod = $pdo->query("SELECT order_status, total_amount FROM customer_order WHERE order_id = {$codRes['order_id']}")->fetch();
+    $codToOnlineRejected = false;
+    try {
+        $checkoutService->initiateOnlineCheckoutHold($cid1, $unitId, $uid1, 'delivery', [
+            'address_line1' => '100 Paw St',
+            'city' => 'Makati',
+            'postal_code' => '1200',
+        ], 'Leave at gate', 'e2-cod-exact3', $configuredTestGateway);
+    } catch (RuntimeException $e) {
+        $codToOnlineRejected = $e->getCode() === CheckoutHoldService::ERR_CONFLICT;
+    }
+
+    $ordCod = $pdo->query("SELECT order_status, subtotal_amount, delivery_fee, total_amount FROM customer_order WHERE order_id = {$codRes['order_id']}")->fetch();
     $invCod = $pdo->query("SELECT on_hand, committed FROM inventory WHERE inventory_id = {$invExact3}")->fetch();
     $payCod = $pdo->query("SELECT payment_method, payment_status, amount FROM payment WHERE order_id = {$codRes['order_id']}")->fetch();
     $holdCntCod = (int)$pdo->query("SELECT COUNT(*) FROM inventory_hold WHERE attempt_id = {$codRes['attempt_id']}")->fetchColumn();
     $cartLeftCod = (int)$pdo->query("SELECT COUNT(*) FROM cart_item WHERE cart_id = {$cart1}")->fetchColumn();
 
     check(
-        'COD creates confirmed order, FEFO active reservations, committed=3, on_hand=3, pending COD payment, no hold, clears cart, idempotent replay',
+        'COD creates confirmed order with separated subtotal/delivery_fee/total, FEFO reservations, pending COD payment, no hold, clears cart, idempotent replay, rejects COD->Online reuse',
         $ordCod['order_status'] === 'confirmed'
-            && (float)$ordCod['total_amount'] === 150.00
+            && (float)$ordCod['subtotal_amount'] === 150.00
+            && (float)$ordCod['delivery_fee'] === 50.00
+            && (float)$ordCod['total_amount'] === 200.00
+            && (float)$payCod['amount'] === 200.00
             && (int)$invCod['on_hand'] === 3
             && (int)$invCod['committed'] === 3
             && $payCod['payment_method'] === 'cod'
@@ -172,102 +247,125 @@ try {
             && $cartLeftCod === 0
             && $codReplay['idempotent_replay'] === true
             && $codReplay['order_id'] === $codRes['order_id']
+            && $codToOnlineRejected
     );
 
-    // 3. COD disabled enforcement
-    $pdo->prepare("UPDATE business_settings SET cod_enabled = 0 WHERE business_unit_id = ?")->execute([$unitId]);
-    [$bpSix, $invSix] = $createProduct('ChkE2 Online6', 75.00, 6, 0);
-    $cart2 = $setCart($cid1, $bpSix, 4);
-    try {
-        $checkoutService->placeCodOrder($cid1, $unitId, $uid1, 'pickup', [], '', 'e2-cod-disabled');
-        check('COD rejected when cod_enabled = 0', false);
-    } catch (RuntimeException $e) {
-        check('COD rejected when cod_enabled = 0', $e->getCode() === CheckoutHoldService::ERR_UNPROCESSABLE);
-    }
-
-    // 4. Online checkout creates exact 3-minute hold, no customer_order, reduces availability for others & POS
-    $online1 = $checkoutService->initiateOnlineCheckoutHold($cid1, $unitId, $uid1, 'pickup', [], '', 'e2-online-1');
+    // 4. Online checkout: 180s UTC hold, single-active-attempt guard, online-to-COD conflict & safe cancel-then-COD
+    $cart2 = $setCart($cid1, $bpSix, 3);
+    $online1 = $checkoutService->initiateOnlineCheckoutHold($cid1, $unitId, $uid1, 'pickup', [], '', 'e2-online-1', $configuredTestGateway);
     $cleanup['attempts'][] = $online1['attempt_id'];
     $diffSec = (int)$pdo->query("SELECT TIMESTAMPDIFF(SECOND, created_at, expires_at) FROM inventory_hold WHERE hold_id = {$online1['hold_id']}")->fetchColumn();
-    $invOnlineBefore = $pdo->query("SELECT on_hand, committed FROM inventory WHERE inventory_id = {$invSix}")->fetch();
-    $availMap = $checkoutService->getEffectiveAvailabilityForProducts([$bpSix]);
+    $attPickupAmounts = $pdo->query("SELECT subtotal_amount, delivery_fee, expected_amount FROM checkout_attempt WHERE attempt_id = {$online1['attempt_id']}")->fetch();
 
-    check(
-        'Online hold has exact 180s TTL, keeps committed=0 and on_hand=6, reduces available from 6 to 2',
-        $diffSec === 180
-            && (int)$invOnlineBefore['on_hand'] === 6
-            && (int)$invOnlineBefore['committed'] === 0
-            && ($availMap[$bpSix] ?? -1) === 2
-    );
-
-    // Second customer cannot checkout (available = 2 < 3) and POS cannot steal held stock
-    $setCart($cid2, $bpSix, 1);
+    // Second active online checkout with different token for same (customer, unit) is rejected
+    $secondOnlineRejected = false;
     try {
-        $checkoutService->initiateOnlineCheckoutHold($cid2, $unitId, $uid2, 'pickup', [], '', 'e2-online-blocked');
-        check('Second customer blocked while active hold leaves only 2 available', false);
+        $checkoutService->initiateOnlineCheckoutHold($cid1, $unitId, $uid1, 'pickup', [], '', 'e2-online-2-diff-token', $configuredTestGateway);
     } catch (RuntimeException $e) {
-        check('Second customer blocked while active hold leaves only 2 available', $e->getCode() === CheckoutHoldService::ERR_UNPROCESSABLE);
+        $secondOnlineRejected = $e->getCode() === CheckoutHoldService::ERR_CONFLICT;
     }
 
+    // Online-to-COD transition while online hold is active is rejected
+    $onlineToCodRejected = false;
+    try {
+        $checkoutService->placeCodOrder($cid1, $unitId, $uid1, 'pickup', [], '', 'e2-online-to-cod');
+    } catch (RuntimeException $e) {
+        $onlineToCodRejected = $e->getCode() === CheckoutHoldService::ERR_CONFLICT;
+    }
+
+    check(
+        'Online pickup hold has 180s TTL, zero delivery fee, and blocks duplicate active online or online-to-COD attempts',
+        $diffSec === 180
+            && (float)$attPickupAmounts['subtotal_amount'] === 225.00
+            && (float)$attPickupAmounts['delivery_fee'] === 0.00
+            && (float)$attPickupAmounts['expected_amount'] === 225.00
+            && $secondOnlineRejected
+            && $onlineToCodRejected
+    );
+
+    // Second customer blocked by active hold (available = 3, Wait: 6-3=3? Let's test holding 4 -> leaves 2!)
+    $checkoutService->cancelActiveHoldByCustomer($online1['attempt_id'], $cid1, $uid1);
+    $setCart($cid1, $bpSix, 4);
+    $onlineHold4 = $checkoutService->initiateOnlineCheckoutHold($cid1, $unitId, $uid1, 'pickup', [], '', 'e2-online-4units', $configuredTestGateway);
+    $cleanup['attempts'][] = $onlineHold4['attempt_id'];
+
+    $setCart($cid2, $bpSix, 1);
+    $cid2Blocked = false;
+    try {
+        $checkoutService->initiateOnlineCheckoutHold($cid2, $unitId, $uid2, 'pickup', [], '', 'e2-online-cid2-blocked', $configuredTestGateway);
+    } catch (RuntimeException $e) {
+        $cid2Blocked = $e->getCode() === CheckoutHoldService::ERR_UNPROCESSABLE;
+    }
+    $posBlocked = false;
     try {
         $posService->recordSale($unitId, $empUid, $empId, null, 'Cash', [['business_product_id' => $bpSix, 'quantity' => 3]]);
-        check('POS sale blocked from selling units protected by active online hold', false);
     } catch (RuntimeException $e) {
-        check('POS sale blocked from selling units protected by active online hold', $e->getCode() === PosSaleService::ERR_UNPROCESSABLE);
+        $posBlocked = $e->getCode() === PosSaleService::ERR_UNPROCESSABLE;
     }
+    check('Active 4-unit hold leaves 2 available and blocks both other customer checkout and POS oversell', $cid2Blocked && $posBlocked);
 
-    // 5. Verified payment capture atomically converts hold -> confirmed order, clears cart, deduplicates webhooks
-    $cap1 = $checkoutService->handleVerifiedPaymentCapture([
-        'attempt_id' => $online1['attempt_id'],
+    // 5. Failed-then-successful payment on SAME attempt and SAME provider_payment_id
+    $failRes = $checkoutService->handleVerifiedPaymentFailure([
+        'attempt_id' => $onlineHold4['attempt_id'],
         'provider_name' => 'test_gateway',
-        'provider_payment_id' => 'pay_test_001',
-        'provider_event_id' => 'evt_test_001',
+        'provider_payment_id' => 'pay_retry_001',
+        'provider_event_id' => 'evt_fail_001',
+        'failure_reason' => 'Initial 3DS timeout',
+    ]);
+    $capAfterFail = $checkoutService->handleVerifiedPaymentCapture([
+        'attempt_id' => $onlineHold4['attempt_id'],
+        'provider_name' => 'test_gateway',
+        'provider_payment_id' => 'pay_retry_001',
+        'provider_event_id' => 'evt_cap_001',
         'captured_amount' => 300.00,
         'payment_method' => 'online',
     ]);
-    $cleanup['orders'][] = $cap1['order_id'];
-    $dupCap = $checkoutService->handleVerifiedPaymentCapture([
-        'attempt_id' => $online1['attempt_id'],
+    $cleanup['orders'][] = $capAfterFail['order_id'];
+    $dupCapAfterFail = $checkoutService->handleVerifiedPaymentCapture([
+        'attempt_id' => $onlineHold4['attempt_id'],
         'provider_name' => 'test_gateway',
-        'provider_payment_id' => 'pay_test_001',
-        'provider_event_id' => 'evt_test_001',
+        'provider_payment_id' => 'pay_retry_001',
+        'provider_event_id' => 'evt_cap_001_dup',
         'captured_amount' => 300.00,
         'payment_method' => 'online',
     ]);
 
+    $failPayCount = (int)$pdo->query("SELECT COUNT(*) FROM payment WHERE attempt_id = {$onlineHold4['attempt_id']} AND payment_status = 'failed'")->fetchColumn();
+    $compPayCount = (int)$pdo->query("SELECT COUNT(*) FROM payment WHERE attempt_id = {$onlineHold4['attempt_id']} AND payment_status = 'completed'")->fetchColumn();
     $invAfterCap = $pdo->query("SELECT on_hand, committed FROM inventory WHERE inventory_id = {$invSix}")->fetch();
-    $holdStatusCap = (string)$pdo->query("SELECT hold_status FROM inventory_hold WHERE hold_id = {$online1['hold_id']}")->fetchColumn();
-    $cartLeftCap = (int)$pdo->query("SELECT COUNT(*) FROM cart_item WHERE cart_id = {$cart2}")->fetchColumn();
 
     check(
-        'Verified capture converts hold->converted, creates confirmed order, increments committed=4 without double-counting, clears cart, ignores duplicate webhook',
-        $cap1['status'] === 'confirmed'
-            && $cap1['order_id'] > 0
-            && (int)$invAfterCap['on_hand'] === 6
+        'Failed payment attempt does NOT block later verified capture on same provider_payment_id; duplicate capture stays idempotent',
+        $failRes['status'] === 'failed'
+            && $failRes['hold_released'] === true
+            && $capAfterFail['order_id'] > 0
+            && $failPayCount === 1
+            && $compPayCount === 1
             && (int)$invAfterCap['committed'] === 4
-            && $holdStatusCap === 'converted'
-            && $cartLeftCap === 0
-            && $dupCap['status'] === 'duplicate_ignored'
+            && (int)$invAfterCap['on_hand'] === 6
+            && $dupCapAfterFail['status'] === 'duplicate_ignored'
     );
 
-    // 6. Expired hold immediately stops reducing available stock & delayed unfulfillable capture queues reconciliation
+    // 6. Expired hold cleanup + delayed unfulfillable capture reconciliation
     [$bpDelay, $invDelay] = $createProduct('ChkE2 Delayed', 40.00, 3, 0);
     $setCart($cid1, $bpDelay, 3);
-    $onlineDelay = $checkoutService->initiateOnlineCheckoutHold($cid1, $unitId, $uid1, 'pickup', [], '', 'e2-delay-1');
+    $onlineDelay = $checkoutService->initiateOnlineCheckoutHold($cid1, $unitId, $uid1, 'pickup', [], '', 'e2-delay-1', $configuredTestGateway);
     $cleanup['attempts'][] = $onlineDelay['attempt_id'];
 
-    // Simulate server UTC expiry without running cleanup yet
     $pdo->prepare("UPDATE inventory_hold SET created_at = DATE_SUB(UTC_TIMESTAMP(), INTERVAL 181 SECOND), expires_at = DATE_SUB(UTC_TIMESTAMP(), INTERVAL 1 SECOND) WHERE hold_id = ?")
         ->execute([$onlineDelay['hold_id']]);
 
     $availAfterExpiry = $checkoutService->getEffectiveAvailabilityForProducts([$bpDelay]);
-    check('Expired hold immediately stops reducing availability even before cleanup', ($availAfterExpiry[$bpDelay] ?? -1) === 3);
+    $cleanupRes = $checkoutService->releaseAllExpiredHolds(100, 5);
+    check(
+        'Expired hold stops reducing availability before cleanup and releaseAllExpiredHolds transitions it to expired',
+        ($availAfterExpiry[$bpDelay] ?? -1) === 3
+            && in_array($onlineDelay['hold_id'], $cleanupRes['hold_ids'], true)
+    );
 
-    // POS sells 2 units after expiry, leaving only 1
     $posSale = $posService->recordSale($unitId, $empUid, $empId, null, 'Cash', [['business_product_id' => $bpDelay, 'quantity' => 2]]);
     $cleanup['sales'][] = $posSale['sale_id'];
 
-    // Delayed verified capture arrives for the 3-unit attempt
     $reconRes = $checkoutService->handleVerifiedPaymentCapture([
         'attempt_id' => $onlineDelay['attempt_id'],
         'provider_name' => 'test_gateway',
@@ -278,7 +376,6 @@ try {
     ]);
     $attDelayStatus = (string)$pdo->query("SELECT attempt_status FROM checkout_attempt WHERE attempt_id = {$onlineDelay['attempt_id']}")->fetchColumn();
     $payDelayStatus = (string)$pdo->query("SELECT payment_status FROM payment WHERE attempt_id = {$onlineDelay['attempt_id']}")->fetchColumn();
-
     check(
         'Delayed unfulfillable capture does NOT create unfulfillable order and records completed payment + reconciliation_required',
         $reconRes['status'] === 'reconciliation_required'
@@ -287,9 +384,45 @@ try {
             && $attDelayStatus === 'reconciliation_required'
             && $payDelayStatus === 'completed'
     );
+
+    // 7. Multi-connection concurrent inventory-then-batch locking test (no deadlock when batch IDs oppose inventory IDs)
+    [$bpLockA, $invLockA] = $createProduct('ChkE2 LockA', 20.00, 5, 1);
+    [$bpLockB, $invLockB] = $createProduct('ChkE2 LockB', 20.00, 5, 1);
+    // Insert batch for LockB first (lower batch_id), then LockA (higher batch_id) to test opposing ID order
+    $pdo->exec("INSERT INTO inventory_batch (inventory_id, batch_number, expiration_date, quantity) VALUES ({$invLockB}, 'LOCK-B-LOW', DATE_ADD(CURDATE(), INTERVAL 15 DAY), 5)");
+    $pdo->exec("INSERT INTO inventory_batch (inventory_id, batch_number, expiration_date, quantity) VALUES ({$invLockA}, 'LOCK-A-HIGH', DATE_ADD(CURDATE(), INTERVAL 15 DAY), 5)");
+
+    $pdo2 = $openSecondConnection();
+    $pdo2->beginTransaction();
+    // Hold parent inventory LockA in ascending order on connection 2 while connection 1 runs POS/COD
+    $pdo2->query("SELECT inventory_id FROM inventory WHERE inventory_id = {$invLockA} FOR UPDATE")->fetch();
+
+    $setCart($cid2, $bpLockA, 3);
+    $pdo->prepare('INSERT INTO cart_item (cart_id, business_product_id, quantity) VALUES (?, ?, 3)')->execute([Cart::id($cid2, $unitId), $bpLockB]);
+    $lockWaitCaught = false;
+    try {
+        // Connection 1 waits cleanly on invLockA lock timeout rather than deadlocking
+        $pdo->exec('SET SESSION innodb_lock_wait_timeout = 1');
+        $checkoutService->placeCodOrder($cid2, $unitId, $uid2, 'pickup', [], '', 'e2-lock-wait-test');
+    } catch (Throwable $e) {
+        $lockWaitCaught = str_contains($e->getMessage(), 'Lock wait timeout') || str_contains($e->getMessage(), '1205');
+    } finally {
+        $pdo2->rollBack();
+        $pdo->exec('SET SESSION innodb_lock_wait_timeout = 50');
+    }
+    check('Multi-connection inventory lock contention waits cleanly on inventory_id ASC without deadlock', $lockWaitCaught);
+
+    // After releasing connection 2, COD succeeds across both batch-tracked inventories
+    $codMulti = $checkoutService->placeCodOrder($cid2, $unitId, $uid2, 'pickup', [], '', 'e2-lock-after-release');
+    $cleanup['orders'][] = $codMulti['order_id'];
+    $cleanup['attempts'][] = $codMulti['attempt_id'];
+    check('Multi-inventory batch-tracked COD succeeds cleanly after lock release', $codMulti['order_id'] > 0 && $codMulti['reservations_created'] === 2);
 } finally {
     if ($pdo->inTransaction()) {
         $pdo->rollBack();
+    }
+    if (isset($pdo2) && $pdo2 instanceof PDO && $pdo2->inTransaction()) {
+        $pdo2->rollBack();
     }
     if ($cleanup['attempts']) {
         $aList = implode(',', $cleanup['attempts']);

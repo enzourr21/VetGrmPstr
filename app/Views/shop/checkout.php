@@ -1,19 +1,23 @@
 <?php
 $codEnabled = !empty($paymentSettings['cod_enabled']);
+$onlineEnabled = !empty($paymentSettings['online_enabled']);
 $selectedFulfillment = $old['fulfillment_method'] ?? 'pickup';
-$defaultPayment = $codEnabled ? 'cod' : 'online';
+$defaultPayment = $codEnabled ? 'cod' : ($onlineEnabled ? 'online' : '');
 $selectedPayment = $old['payment_method'] ?? $defaultPayment;
 if ($selectedPayment === 'cod' && !$codEnabled) {
-    $selectedPayment = 'online';
+    $selectedPayment = $onlineEnabled ? 'online' : '';
+}
+if ($selectedPayment === 'online' && !$onlineEnabled) {
+    $selectedPayment = $codEnabled ? 'cod' : '';
 }
 $minThreshold = (int)($minStockThreshold ?? 3);
 $holdMins = (int)($holdMinutes ?? 3);
-$belowThresholdItems = [];
-foreach ($items as $it) {
-    if ((int)$it['available'] < $minThreshold || (int)$it['available'] < (int)$it['quantity']) {
-        $belowThresholdItems[] = $it;
-    }
-}
+$subtotalAmount = isset($amounts['subtotal_amount']) ? (float)$amounts['subtotal_amount'] : (float)($subtotal ?? $total);
+$deliveryFee = isset($amounts['delivery_fee']) ? (float)$amounts['delivery_fee'] : 0.0;
+$finalTotal = isset($amounts['total_amount']) ? (float)$amounts['total_amount'] : (float)$total;
+$deliveryFeeConfigured = !empty($paymentSettings['delivery_fee_configured']);
+$configuredDeliveryFee = $deliveryFeeConfigured ? (float)$paymentSettings['delivery_fee'] : 0.0;
+$noPaymentAvailable = !$codEnabled && !$onlineEnabled;
 ?>
 <a class="breadcrumb-link" href="/cart/<?= (int)$unit['business_unit_id'] ?>"><span class="arrow-back" aria-hidden="true">&larr;</span> Back to <?= e($unit['business_unit_name']) ?> cart</a>
 <div class="page-header">
@@ -57,13 +61,40 @@ foreach ($items as $it) {
     </tr>
   <?php endforeach; ?>
   </tbody>
-  <tfoot><tr><th colspan="4" class="right">Total (recalculated on the server when you submit)</th><th class="right price"><?= money($total) ?></th></tr></tfoot>
+  <tfoot>
+    <tr>
+      <th colspan="4" class="right">Product subtotal</th>
+      <th class="right tabular"><?= money($subtotalAmount) ?></th>
+    </tr>
+    <tr>
+      <th colspan="4" class="right">
+        Delivery fee
+        <?php if ($selectedFulfillment === 'pickup'): ?>
+          <span class="caption muted">(Pickup — no delivery fee)</span>
+        <?php elseif (!$deliveryFeeConfigured): ?>
+          <span class="caption muted">(Delivery fee schedule pending configuration)</span>
+        <?php endif; ?>
+      </th>
+      <th class="right tabular"><?= money($deliveryFee) ?></th>
+    </tr>
+    <tr>
+      <th colspan="4" class="right">Total (recalculated on the server when you submit)</th>
+      <th class="right price"><?= money($finalTotal) ?></th>
+    </tr>
+  </tfoot>
 </table>
 
 <p class="notice">
   Online purchases require at least <strong><?= $minThreshold ?> units</strong> in available stock before checkout is accepted.
-  <strong>Online Payment</strong> places a <strong><?= $holdMins ?>-minute temporary stock hold</strong> while awaiting server-side payment verification;
+  <?php if ($onlineEnabled): ?>
+    <strong>Online Payment</strong> places a <strong><?= $holdMins ?>-minute temporary stock hold</strong> while awaiting server-side payment verification;
+  <?php else: ?>
+    <strong>Online Payment</strong> is currently unavailable because no payment provider is configured;
+  <?php endif; ?>
   <strong>Cash on Delivery (COD)</strong> immediately confirms your order and reserves stock without a temporary hold.
+  <?php if ($selectedFulfillment === 'delivery' && !$deliveryFeeConfigured): ?>
+    Delivery fee calculation is currently set to <?= money($configuredDeliveryFee) ?> pending store delivery-fee configuration.
+  <?php endif; ?>
 </p>
 
 <form method="post" action="/checkout/<?= (int)$unit['business_unit_id'] ?>" class="card" data-checkout-form>
@@ -77,14 +108,14 @@ foreach ($items as $it) {
         <input type="radio" name="fulfillment_method" value="pickup" <?= $selectedFulfillment === 'pickup' ? 'checked' : '' ?>>
         <span>
           <strong>Pickup at the branch</strong><br>
-          <span class="caption">Collect your order directly at <?= e($unit['business_unit_name']) ?></span>
+          <span class="caption">Collect your order directly at <?= e($unit['business_unit_name']) ?> (no delivery fee)</span>
         </span>
       </label>
       <label class="check" style="margin: 0;">
         <input type="radio" name="fulfillment_method" value="delivery" <?= $selectedFulfillment === 'delivery' ? 'checked' : '' ?>>
         <span>
           <strong>Delivery</strong><br>
-          <span class="caption">Ship to your specified street address</span>
+          <span class="caption">Ship to your specified street address<?= $deliveryFeeConfigured ? ' (' . money($configuredDeliveryFee) . ' delivery fee)' : '' ?></span>
         </span>
       </label>
     </div>
@@ -102,16 +133,28 @@ foreach ($items as $it) {
           </span>
         </label>
       <?php endif; ?>
-      <label class="check" style="margin: 0;">
-        <input type="radio" name="payment_method" value="online" <?= $selectedPayment === 'online' ? 'checked' : '' ?>>
+      <label class="check" style="margin: 0;<?= !$onlineEnabled ? ' opacity: 0.6; cursor: not-allowed;' : '' ?>">
+        <input type="radio" name="payment_method" value="online" <?= $selectedPayment === 'online' ? 'checked' : '' ?> <?= !$onlineEnabled ? 'disabled' : '' ?>>
         <span>
-          <strong>Online Payment</strong><br>
-          <span class="caption">Hold stock for <?= $holdMins ?> minutes and proceed to online payment verification</span>
+          <strong>Online Payment</strong>
+          <?php if (!$onlineEnabled): ?>
+            <span class="badge secondary">Unavailable</span>
+          <?php endif; ?><br>
+          <span class="caption">
+            <?php if ($onlineEnabled): ?>
+              Hold stock for <?= $holdMins ?> minutes and proceed to online payment verification
+            <?php else: ?>
+              Currently unavailable (no online payment provider is configured yet)
+            <?php endif; ?>
+          </span>
         </span>
       </label>
     </div>
     <?php if (!$codEnabled): ?>
       <p class="caption muted" style="margin-top: 0.45rem;">Cash on Delivery is currently disabled for <?= e($unit['business_unit_name']) ?>.</p>
+    <?php endif; ?>
+    <?php if ($noPaymentAvailable): ?>
+      <p class="flash flash-error" role="alert" style="margin-top: 0.65rem;">No payment method is currently available for this shop. Please contact the store.</p>
     <?php endif; ?>
   </fieldset>
 
@@ -158,6 +201,6 @@ foreach ($items as $it) {
 
   <div class="row" style="margin-top: 1.25rem; justify-content: space-between;">
     <a class="btn secondary" href="/cart/<?= (int)$unit['business_unit_id'] ?>">Back to cart</a>
-    <button class="btn" type="submit">Place order</button>
+    <button class="btn" type="submit" <?= $noPaymentAvailable ? 'disabled' : '' ?>>Place order</button>
   </div>
 </form>

@@ -11,13 +11,14 @@ use App\Models\Units;
 use App\Services\Payment\OnlinePaymentGatewayInterface;
 use App\Services\Payment\UnconfiguredOnlinePaymentGateway;
 use PDO;
+use PDOException;
 use RuntimeException;
 use Throwable;
 
 /**
  * Coordinates E2 checkout inventory validation, 3-minute online temporary holds,
- * immediate COD confirmation/reservation, and provider-neutral verified capture
- * conversion / delayed-capture reconciliation.
+ * immediate COD confirmation/reservation, delivery fee breakdown, and provider-neutral
+ * verified capture conversion / delayed-capture reconciliation.
  */
 final class CheckoutHoldService
 {
@@ -31,11 +32,16 @@ final class CheckoutHoldService
 
     private PDO $db;
     private OrderReservationService $reservationService;
+    private OnlinePaymentGatewayInterface $defaultGateway;
 
-    public function __construct(?PDO $db = null, ?OrderReservationService $reservationService = null)
-    {
+    public function __construct(
+        ?PDO $db = null,
+        ?OrderReservationService $reservationService = null,
+        ?OnlinePaymentGatewayInterface $defaultGateway = null
+    ) {
         $this->db = $db ?? Database::pdo();
         $this->reservationService = $reservationService ?? new OrderReservationService($this->db);
+        $this->defaultGateway = $defaultGateway ?? new UnconfiguredOnlinePaymentGateway();
     }
 
     /**
@@ -65,22 +71,62 @@ final class CheckoutHoldService
     }
 
     /**
-     * Read business-unit checkout payment configuration from business_settings.
+     * Read business-unit checkout payment and delivery-fee configuration.
      * Defaults cod_enabled to true when no settings row exists yet (matching schema default 1).
+     * Online payment is enabled only when a live payment gateway adapter is configured.
      *
-     * @return array{cod_enabled:bool, online_enabled:bool}
+     * @return array{cod_enabled:bool, online_enabled:bool, delivery_fee:?float, delivery_fee_configured:bool}
      */
-    public function getUnitPaymentSettings(int $businessUnitId): array
+    public function getUnitPaymentSettings(int $businessUnitId, ?OnlinePaymentGatewayInterface $gateway = null): array
     {
+        $gw = $gateway ?? $this->defaultGateway;
         $stmt = $this->db->prepare(
-            'SELECT cod_enabled FROM business_settings WHERE business_unit_id = ? LIMIT 1'
+            'SELECT cod_enabled, delivery_fee FROM business_settings WHERE business_unit_id = ? LIMIT 1'
         );
         $stmt->execute([$businessUnitId]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
 
+        $feeRaw = ($row && array_key_exists('delivery_fee', $row) && $row['delivery_fee'] !== null)
+            ? round((float)$row['delivery_fee'], 2)
+            : null;
+
         return [
             'cod_enabled' => $row ? !empty($row['cod_enabled']) : true,
-            'online_enabled' => true,
+            'online_enabled' => $gw->isConfigured(),
+            'delivery_fee' => $feeRaw,
+            'delivery_fee_configured' => $feeRaw !== null,
+        ];
+    }
+
+    /**
+     * Calculate separated product subtotal, delivery fee, and final total.
+     * Pickup orders strictly have zero delivery fee. For delivery orders, uses the
+     * unit's configured business_settings.delivery_fee when set, or 0.00 with
+     * delivery_fee_configured=false until a delivery-fee business rule is approved.
+     *
+     * @return array{subtotal_amount:float, delivery_fee:float, total_amount:float, delivery_fee_configured:bool}
+     */
+    public function calculateOrderAmounts(float $productSubtotal, string $fulfillmentMethod, int $businessUnitId): array
+    {
+        $subtotal = round(max(0.0, $productSubtotal), 2);
+        if ($fulfillmentMethod === 'pickup') {
+            return [
+                'subtotal_amount' => $subtotal,
+                'delivery_fee' => 0.00,
+                'total_amount' => $subtotal,
+                'delivery_fee_configured' => true,
+            ];
+        }
+
+        $settings = $this->getUnitPaymentSettings($businessUnitId);
+        $configured = $settings['delivery_fee_configured'];
+        $fee = $configured ? round((float)$settings['delivery_fee'], 2) : 0.00;
+
+        return [
+            'subtotal_amount' => $subtotal,
+            'delivery_fee' => $fee,
+            'total_amount' => round($subtotal + $fee, 2),
+            'delivery_fee_configured' => $configured,
         ];
     }
 
@@ -176,7 +222,8 @@ final class CheckoutHoldService
     {
         $stmt = $this->db->prepare(
             "SELECT ih.hold_id, ih.attempt_id, ih.created_at, ih.expires_at,
-                    ca.attempt_token, ca.expected_amount, ca.fulfillment_method, ca.provider_checkout_url,
+                    ca.attempt_token, ca.subtotal_amount, ca.delivery_fee, ca.expected_amount,
+                    ca.fulfillment_method, ca.provider_checkout_url,
                     TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(), ih.expires_at) AS seconds_remaining
              FROM inventory_hold ih
              JOIN checkout_attempt ca ON ca.attempt_id = ih.attempt_id
@@ -256,15 +303,16 @@ final class CheckoutHoldService
     /**
      * Execute COD checkout:
      * - Verifies COD is enabled for the business unit.
-     * - Validates and locks inventory, enforcing the 3-unit minimum-stock threshold.
-     * - Creates checkout_attempt (cod/completed), confirmed customer_order, order_items,
-     *   active FEFO inventory_reservations, inventory.committed increase (no on_hand deduction),
-     *   and payment (method='cod', status='pending').
-     * - Clears cart only inside the atomic transaction before commit.
-     * - Never creates temporary inventory_hold rows.
+     * - Enforces DB-level single active checkout attempt guard per (customer_id, business_unit_id)
+     *   and handles repeated idempotent requests / active online-to-COD conflicts safely.
+     * - Validates and locks inventory (inventory_id ASC -> batch_id ASC), enforcing 3-unit threshold.
+     * - Creates checkout_attempt (cod/completed), confirmed customer_order (with separated subtotal,
+     *   delivery_fee, total_amount), order_items, active FEFO inventory_reservations,
+     *   inventory.committed increase (no on_hand deduction), and payment (method='cod', status='pending').
+     * - Clears cart only inside the atomic transaction before commit; never creates temporary holds.
      *
      * @param array{address_line1?:string,address_line2?:string,city?:string,province?:string,postal_code?:string} $deliveryAddress
-     * @return array{attempt_id:int,attempt_token:string,order_id:int,total_amount:float,reservations_created:int,idempotent_replay:bool}
+     * @return array{attempt_id:int,attempt_token:string,order_id:int,subtotal_amount:float,delivery_fee:float,total_amount:float,reservations_created:int,idempotent_replay:bool}
      */
     public function placeCodOrder(
         int $customerId,
@@ -305,7 +353,10 @@ final class CheckoutHoldService
                 }
 
                 $attemptToken = bin2hex(random_bytes(32));
-                $totalAmount = (float)$snapshot['total_amount'];
+                $amounts = $this->calculateOrderAmounts((float)$snapshot['subtotal_amount'], $fulfillmentMethod, $businessUnitId);
+                $subtotalAmount = $amounts['subtotal_amount'];
+                $deliveryFee = $amounts['delivery_fee'];
+                $totalAmount = $amounts['total_amount'];
                 $nowUtc = $this->dbUtcNow();
 
                 $attStmt = $this->db->prepare(
@@ -313,8 +364,8 @@ final class CheckoutHoldService
                         attempt_token, idempotency_key, customer_id, business_unit_id, branch_id, cart_id,
                         payment_channel, fulfillment_method,
                         delivery_address_line1, delivery_address_line2, delivery_city, delivery_province, delivery_postal_code,
-                        notes, expected_amount, attempt_status, created_at, updated_at, completed_at
-                     ) VALUES (?, ?, ?, ?, ?, ?, 'cod', ?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?)"
+                        notes, subtotal_amount, delivery_fee, expected_amount, attempt_status, created_at, updated_at, completed_at
+                     ) VALUES (?, ?, ?, ?, ?, ?, 'cod', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?)"
                 );
                 $isDelivery = $fulfillmentMethod === 'delivery';
                 $nullIfEmpty = static fn(string $v): ?string => $v === '' ? null : $v;
@@ -332,6 +383,8 @@ final class CheckoutHoldService
                     $isDelivery ? $nullIfEmpty((string)($deliveryAddress['province'] ?? '')) : null,
                     $isDelivery ? $deliveryAddress['postal_code'] : null,
                     $nullIfEmpty($notes),
+                    $subtotalAmount,
+                    $deliveryFee,
                     $totalAmount,
                     $nowUtc,
                     $nowUtc,
@@ -341,9 +394,10 @@ final class CheckoutHoldService
 
                 $ordStmt = $this->db->prepare(
                     "INSERT INTO customer_order (
-                        customer_id, business_unit_id, branch_id, fulfillment_method, order_status, total_amount,
+                        customer_id, business_unit_id, branch_id, fulfillment_method, order_status,
+                        total_amount, subtotal_amount, delivery_fee,
                         delivery_address_line1, delivery_address_line2, delivery_city, delivery_province, delivery_postal_code, notes
-                     ) VALUES (?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, ?, ?, ?)"
+                     ) VALUES (?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 );
                 $ordStmt->execute([
                     $customerId,
@@ -351,6 +405,8 @@ final class CheckoutHoldService
                     $branchId,
                     $fulfillmentMethod,
                     $totalAmount,
+                    $subtotalAmount,
+                    $deliveryFee,
                     $isDelivery ? $deliveryAddress['address_line1'] : null,
                     $isDelivery ? $nullIfEmpty((string)($deliveryAddress['address_line2'] ?? '')) : null,
                     $isDelivery ? $deliveryAddress['city'] : null,
@@ -413,6 +469,8 @@ final class CheckoutHoldService
                     'attempt_id' => $attemptId,
                     'attempt_token' => $attemptToken,
                     'order_id' => $orderId,
+                    'subtotal_amount' => $subtotalAmount,
+                    'delivery_fee' => $deliveryFee,
                     'total_amount' => $totalAmount,
                     'reservations_created' => $resResult['reservations_created'],
                     'idempotent_replay' => false,
@@ -423,10 +481,11 @@ final class CheckoutHoldService
 
     /**
      * Initiate Online Checkout:
-     * - Validates and locks latest inventory state, enforcing the 3-unit minimum-stock threshold.
-     * - Creates a checkout_attempt ('awaiting_payment') and a 3-minute (180s) inventory_hold + hold items.
+     * - Rejects immediately if no configured online payment provider is available.
+     * - Enforces DB-level single active checkout attempt guard per (customer_id, business_unit_id).
+     * - Validates and locks latest inventory state (inventory_id ASC -> batch_id ASC), enforcing 3-unit threshold.
+     * - Creates a checkout_attempt ('awaiting_payment', with separated subtotal & delivery_fee) and a 3-minute (180s) hold.
      * - Does NOT create customer_order, order_item, inventory_reservation, or clear the cart.
-     * - Invokes provider-neutral OnlinePaymentGatewayInterface::createCheckoutSession() after commit.
      *
      * @param array{address_line1?:string,address_line2?:string,city?:string,province?:string,postal_code?:string} $deliveryAddress
      * @return array{
@@ -435,6 +494,8 @@ final class CheckoutHoldService
      *   hold_id:int,
      *   created_at:string,
      *   expires_at:string,
+     *   subtotal_amount:float,
+     *   delivery_fee:float,
      *   total_amount:float,
      *   provider_configured:bool,
      *   redirect_url:string,
@@ -452,7 +513,14 @@ final class CheckoutHoldService
         ?OnlinePaymentGatewayInterface $gateway = null
     ): array {
         $this->assertTopLevelTransaction('Online checkout hold');
-        $gateway ??= new UnconfiguredOnlinePaymentGateway();
+        $gateway ??= $this->defaultGateway;
+
+        if (!$gateway->isConfigured()) {
+            throw new RuntimeException(
+                'Online payment is currently unavailable because no payment provider is configured.',
+                self::ERR_UNPROCESSABLE
+            );
+        }
 
         $cleanKey = $this->normalizeIdempotencyKey($idempotencyKey);
         $this->validateCheckoutInput($businessUnitId, $fulfillmentMethod, $deliveryAddress, $notes);
@@ -477,7 +545,10 @@ final class CheckoutHoldService
                 }
 
                 $attemptToken = bin2hex(random_bytes(32));
-                $totalAmount = (float)$snapshot['total_amount'];
+                $amounts = $this->calculateOrderAmounts((float)$snapshot['subtotal_amount'], $fulfillmentMethod, $businessUnitId);
+                $subtotalAmount = $amounts['subtotal_amount'];
+                $deliveryFee = $amounts['delivery_fee'];
+                $totalAmount = $amounts['total_amount'];
 
                 // Compute exact UTC creation & +180s expiration from a single DB UTC_TIMESTAMP() instant.
                 $tsRow = $this->db->query(
@@ -491,8 +562,8 @@ final class CheckoutHoldService
                         attempt_token, idempotency_key, customer_id, business_unit_id, branch_id, cart_id,
                         payment_channel, fulfillment_method,
                         delivery_address_line1, delivery_address_line2, delivery_city, delivery_province, delivery_postal_code,
-                        notes, expected_amount, attempt_status, provider_name, created_at, updated_at
-                     ) VALUES (?, ?, ?, ?, ?, ?, 'online', ?, ?, ?, ?, ?, ?, ?, ?, 'awaiting_payment', ?, ?, ?)"
+                        notes, subtotal_amount, delivery_fee, expected_amount, attempt_status, provider_name, created_at, updated_at
+                     ) VALUES (?, ?, ?, ?, ?, ?, 'online', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'awaiting_payment', ?, ?, ?)"
                 );
                 $isDelivery = $fulfillmentMethod === 'delivery';
                 $nullIfEmpty = static fn(string $v): ?string => $v === '' ? null : $v;
@@ -510,6 +581,8 @@ final class CheckoutHoldService
                     $isDelivery ? $nullIfEmpty((string)($deliveryAddress['province'] ?? '')) : null,
                     $isDelivery ? $deliveryAddress['postal_code'] : null,
                     $nullIfEmpty($notes),
+                    $subtotalAmount,
+                    $deliveryFee,
                     $totalAmount,
                     $gateway->providerName(),
                     $createdUtc,
@@ -567,6 +640,8 @@ final class CheckoutHoldService
                     'hold_id' => $holdId,
                     'created_at' => $createdUtc,
                     'expires_at' => $expiresUtc,
+                    'subtotal_amount' => $subtotalAmount,
+                    'delivery_fee' => $deliveryFee,
                     'total_amount' => $totalAmount,
                     'session_items' => $sessionItems,
                     'provider_configured' => false,
@@ -580,50 +655,47 @@ final class CheckoutHoldService
             return $holdResult;
         }
 
-        // Create external provider checkout session ONLY after the hold transaction is durably committed.
-        if ($gateway->isConfigured()) {
-            try {
-                $session = $gateway->createCheckoutSession([
-                    'attempt_id' => $holdResult['attempt_id'],
-                    'attempt_token' => $holdResult['attempt_token'],
-                    'business_unit_id' => $businessUnitId,
-                    'customer_id' => $customerId,
-                    'amount' => $holdResult['total_amount'],
-                    'currency' => 'PHP',
-                    'expires_at_utc' => $holdResult['expires_at'],
-                    'items' => $holdResult['session_items'],
-                    'success_return_url' => "/checkout/attempts/{$holdResult['attempt_id']}",
-                    'cancel_return_url' => "/checkout/attempts/{$holdResult['attempt_id']}",
-                ]);
+        try {
+            $session = $gateway->createCheckoutSession([
+                'attempt_id' => $holdResult['attempt_id'],
+                'attempt_token' => $holdResult['attempt_token'],
+                'business_unit_id' => $businessUnitId,
+                'customer_id' => $customerId,
+                'amount' => $holdResult['total_amount'],
+                'currency' => 'PHP',
+                'expires_at_utc' => $holdResult['expires_at'],
+                'items' => $holdResult['session_items'],
+                'success_return_url' => "/checkout/attempts/{$holdResult['attempt_id']}",
+                'cancel_return_url' => "/checkout/attempts/{$holdResult['attempt_id']}",
+            ]);
 
-                $upd = $this->db->prepare(
-                    "UPDATE checkout_attempt
-                     SET provider_name = ?, provider_session_id = ?, provider_checkout_url = ?, updated_at = UTC_TIMESTAMP()
-                     WHERE attempt_id = ?"
-                );
-                $upd->execute([
-                    $session['provider_name'],
-                    $session['provider_session_id'],
-                    $session['checkout_url'],
-                    $holdResult['attempt_id'],
-                ]);
+            $upd = $this->db->prepare(
+                "UPDATE checkout_attempt
+                 SET provider_name = ?, provider_session_id = ?, provider_checkout_url = ?, updated_at = UTC_TIMESTAMP()
+                 WHERE attempt_id = ?"
+            );
+            $upd->execute([
+                $session['provider_name'],
+                $session['provider_session_id'],
+                $session['checkout_url'],
+                $holdResult['attempt_id'],
+            ]);
 
-                if (!empty($session['checkout_url'])) {
-                    $holdResult['provider_configured'] = true;
-                    $holdResult['redirect_url'] = (string)$session['checkout_url'];
-                }
-            } catch (Throwable $e) {
-                // Provider session creation failed after hold commit: release the hold safely so stock is freed immediately.
-                $this->releaseHoldInternal(
-                    (int)$holdResult['hold_id'],
-                    'released',
-                    'failed',
-                    'provider_session_failed',
-                    'Payment session initialization failed: ' . $e->getMessage(),
-                    $actorUserId
-                );
-                throw $e;
+            if (!empty($session['checkout_url'])) {
+                $holdResult['provider_configured'] = true;
+                $holdResult['redirect_url'] = (string)$session['checkout_url'];
             }
+        } catch (Throwable $e) {
+            // Provider session creation failed after hold commit: release the hold safely so stock is freed immediately.
+            $this->releaseHoldInternal(
+                (int)$holdResult['hold_id'],
+                'released',
+                'failed',
+                'provider_session_failed',
+                'Payment session initialization failed: ' . $e->getMessage(),
+                $actorUserId
+            );
+            throw $e;
         }
 
         unset($holdResult['session_items']);
@@ -631,8 +703,12 @@ final class CheckoutHoldService
     }
 
     /**
-     * Server-side handler for verified payment captures (including delayed webhook captures arriving after hold expiry).
-     * Never call from an unverified browser redirect.
+     * Server-side handler for verified payment captures (including captures arriving after prior
+     * failed attempts or after hold expiration). Never call from an unverified browser redirect.
+     *
+     * Lock hierarchy:
+     *   inventory (inventory_id ASC) -> inventory_batch (batch_id ASC) -> inventory_reservation (reservation_id ASC)
+     *   -> checkout_attempt -> inventory_hold -> inventory_hold_item -> cart_item
      *
      * @param array{
      *   attempt_id?:int,
@@ -665,23 +741,20 @@ final class CheckoutHoldService
             : null;
         $eventType = trim((string)($capturePayload['event_type'] ?? 'payment.captured'));
         $capturedAmount = round((float)($capturePayload['captured_amount'] ?? 0), 2);
-        $paymentMethod = trim((string)($capturePayload['payment_method'] ?? 'online'));
-        if ($paymentMethod === '') {
-            $paymentMethod = 'online';
-        }
+        $paymentMethod = trim((string)($capturePayload['payment_method'] ?? 'online')) ?: 'online';
         $rawPayload = $capturePayload['raw_payload'] ?? null;
 
         if ($providerName === '' || $providerPaymentId === '') {
             throw new RuntimeException('Provider name and verified provider payment ID are required.', self::ERR_UNPROCESSABLE);
         }
 
-        // Pre-resolve attempt and its hold's inventory IDs so inventory locks are acquired FIRST in ascending order.
+        // Pre-resolve attempt & immutable hold inventory metadata so inventory -> batch locks are acquired in ascending order.
         $targetAttempt = $this->locateAttemptForProviderEvent($capturePayload);
         if (!$targetAttempt) {
             throw new RuntimeException('Matching checkout attempt could not be found for payment capture.', self::ERR_NOT_FOUND);
         }
         $attemptId = (int)$targetAttempt['attempt_id'];
-        $sortedInvIds = $this->loadHoldInventoryIdsForAttempt($attemptId);
+        [$sortedInvIds, $batchInvIds] = $this->loadHoldInventoryIdsForAttempt($attemptId);
 
         $this->db->exec('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
         $this->db->beginTransaction();
@@ -709,8 +782,11 @@ final class CheckoutHoldService
                 }
             }
 
-            // 2. Acquire inventory locks FIRST in ascending order (consistent lock hierarchy across all services).
+            // 2. Acquire inventory (inventory_id ASC) -> inventory_batch (batch_id ASC) -> inventory_reservation (reservation_id ASC).
             $lockedInventory = $sortedInvIds ? $this->lockInventories($sortedInvIds) : [];
+            $batchPoolsByInv = $batchInvIds
+                ? InventoryBatch::lockEligibleFefoBatchesForInventories($this->db, $batchInvIds, true)
+                : [];
 
             // 3. Lock attempt, hold, and hold items.
             $attStmt = $this->db->prepare('SELECT * FROM checkout_attempt WHERE attempt_id = ? FOR UPDATE');
@@ -723,14 +799,21 @@ final class CheckoutHoldService
                 throw new RuntimeException("Checkout attempt #{$attemptId} is not an online payment attempt.", self::ERR_CONFLICT);
             }
 
-            // Deduplicate by (provider_name, provider_payment_id) across attempts/payments.
+            // Deduplicate ONLY against already-completed/refunded captures (never block on prior 'failed' attempts).
             $dupPayStmt = $this->db->prepare(
-                'SELECT payment_id, order_id, attempt_id FROM payment WHERE provider_name = ? AND provider_payment_id = ? AND payment_type = "payment" LIMIT 1 FOR UPDATE'
+                "SELECT payment_id, order_id, attempt_id
+                 FROM payment
+                 WHERE provider_name = ?
+                   AND provider_payment_id = ?
+                   AND payment_type = 'payment'
+                   AND payment_status IN ('completed', 'refunded')
+                 LIMIT 1
+                 FOR UPDATE"
             );
             $dupPayStmt->execute([$providerName, $providerPaymentId]);
             $dupPay = $dupPayStmt->fetch(PDO::FETCH_ASSOC);
             if ($dupPay) {
-                $this->finalizeWebhookEvent($webhookEventId, 'ignored_duplicate', 'Duplicate provider_payment_id ignored.');
+                $this->finalizeWebhookEvent($webhookEventId, 'ignored_duplicate', 'Duplicate completed provider_payment_id ignored.');
                 $this->db->commit();
                 return [
                     'status' => 'duplicate_ignored',
@@ -794,9 +877,14 @@ final class CheckoutHoldService
                 throw new RuntimeException("Inventory hold #{$holdId} has no items.", self::ERR_UNPROCESSABLE);
             }
 
-            $wasExpiredOrReleased = ($hold['hold_status'] !== 'active') || ((int)$hold['is_unexpired'] !== 1);
+            $wasExpired = ($hold['hold_status'] === 'expired') || ($hold['hold_status'] === 'active' && (int)$hold['is_unexpired'] !== 1);
+            $wasReleased = ($hold['hold_status'] === 'released');
+            $wasExpiredOrReleased = $wasExpired || $wasReleased;
+
             $businessUnitId = (int)$attempt['business_unit_id'];
             $customerId = (int)$attempt['customer_id'];
+            $subtotalAmount = round((float)$attempt['subtotal_amount'], 2);
+            $deliveryFee = round((float)$attempt['delivery_fee'], 2);
             $expectedAmount = round((float)$attempt['expected_amount'], 2);
 
             // Amount mismatch must never auto-confirm an order or silently drop captured funds.
@@ -826,7 +914,7 @@ final class CheckoutHoldService
 
             // Check whether products are still active & stock is available (excluding this hold itself).
             $otherActiveHeld = OrderReservationService::activeHeldQuantitiesByInventory($this->db, $sortedInvIds, $holdId);
-            $fulfillabilityIssue = $this->checkHoldFulfillability($holdItems, $businessUnitId, $lockedInventory, $otherActiveHeld);
+            $fulfillabilityIssue = $this->checkHoldFulfillability($holdItems, $businessUnitId, $lockedInventory, $otherActiveHeld, $batchPoolsByInv);
 
             if ($fulfillabilityIssue !== null) {
                 // Do NOT silently discard payment and do NOT create an unfulfillable order.
@@ -858,9 +946,10 @@ final class CheckoutHoldService
             $nowUtc = $this->dbUtcNow();
             $ordStmt = $this->db->prepare(
                 "INSERT INTO customer_order (
-                    customer_id, business_unit_id, branch_id, fulfillment_method, order_status, total_amount,
+                    customer_id, business_unit_id, branch_id, fulfillment_method, order_status,
+                    total_amount, subtotal_amount, delivery_fee,
                     delivery_address_line1, delivery_address_line2, delivery_city, delivery_province, delivery_postal_code, notes
-                 ) VALUES (?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, ?, ?, ?)"
+                 ) VALUES (?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             );
             $ordStmt->execute([
                 $customerId,
@@ -868,6 +957,8 @@ final class CheckoutHoldService
                 (int)$attempt['branch_id'],
                 $attempt['fulfillment_method'],
                 $expectedAmount,
+                $subtotalAmount,
+                $deliveryFee,
                 $attempt['delivery_address_line1'],
                 $attempt['delivery_address_line2'],
                 $attempt['delivery_city'],
@@ -908,7 +999,9 @@ final class CheckoutHoldService
             );
             $payStmt->execute([$orderId, $attemptId, $capturedAmount, $paymentMethod, $providerName, $providerPaymentId]);
 
-            $releaseReason = $wasExpiredOrReleased ? 'reconciled_after_expiry' : null;
+            $releaseReason = $wasExpired
+                ? 'reconciled_after_expiry'
+                : ($wasReleased ? 'reconciled_after_release' : null);
             $updHold = $this->db->prepare(
                 "UPDATE inventory_hold
                  SET hold_status = 'converted', converted_at = ?, converted_order_id = ?, release_reason = COALESCE(?, release_reason)
@@ -919,7 +1012,7 @@ final class CheckoutHoldService
             $updAtt = $this->db->prepare(
                 "UPDATE checkout_attempt
                  SET attempt_status = 'completed', order_id = ?, provider_name = ?, provider_payment_id = ?,
-                     updated_at = ?, completed_at = ?
+                     failure_reason = NULL, updated_at = ?, completed_at = ?
                  WHERE attempt_id = ?"
             );
             $updAtt->execute([$orderId, $providerName, $providerPaymentId, $nowUtc, $nowUtc, $attemptId]);
@@ -932,7 +1025,7 @@ final class CheckoutHoldService
                 ? 'customer.checkout.late_capture_reconciled'
                 : 'customer.checkout.online_confirmed';
             $auditMsg = $wasExpiredOrReleased
-                ? "Reconciled delayed payment capture for expired hold #{$holdId}; created confirmed order #{$orderId} ({$resResult['total_reserved_quantity']} unit(s) reserved)."
+                ? "Reconciled verified payment capture after prior hold {$hold['hold_status']} (#{$holdId}); created confirmed order #{$orderId} ({$resResult['total_reserved_quantity']} unit(s) reserved)."
                 : "Converted online checkout hold #{$holdId} into confirmed order #{$orderId} ({$resResult['total_reserved_quantity']} unit(s) reserved).";
 
             $actorUserId = $this->lookupCustomerUserAccountId($customerId);
@@ -969,6 +1062,7 @@ final class CheckoutHoldService
 
     /**
      * Record a server-verified payment failure and safely release any active hold.
+     * Never blocks a subsequent legitimate verified capture on the same checkout attempt.
      *
      * @param array{
      *   attempt_id?:int,
@@ -1009,7 +1103,7 @@ final class CheckoutHoldService
             throw new RuntimeException('Matching checkout attempt could not be found.', self::ERR_NOT_FOUND);
         }
         $attemptId = (int)$targetAttempt['attempt_id'];
-        $sortedInvIds = $this->loadHoldInventoryIdsForAttempt($attemptId);
+        [$sortedInvIds] = $this->loadHoldInventoryIdsForAttempt($attemptId);
 
         $this->db->exec('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
         $this->db->beginTransaction();
@@ -1068,14 +1162,25 @@ final class CheckoutHoldService
             $this->db->prepare(
                 "UPDATE checkout_attempt
                  SET attempt_status = 'failed', failure_reason = ?, updated_at = ?
-                 WHERE attempt_id = ? AND attempt_status IN ('initiated', 'awaiting_payment', 'expired')"
+                 WHERE attempt_id = ? AND attempt_status IN ('initiated', 'awaiting_payment', 'expired', 'failed')"
             )->execute([$failureReason, $nowUtc, $attemptId]);
 
-            // Record failed payment attempt once if providerPaymentId is provided or no failed row exists yet.
-            $existingFailStmt = $this->db->prepare(
-                "SELECT payment_id FROM payment WHERE attempt_id = ? AND payment_status = 'failed' LIMIT 1 FOR UPDATE"
-            );
-            $existingFailStmt->execute([$attemptId]);
+            // Record distinct failed payment attempts auditably without blocking a future verified capture.
+            if ($providerPaymentId !== null) {
+                $existingFailStmt = $this->db->prepare(
+                    "SELECT payment_id FROM payment
+                     WHERE attempt_id = ? AND provider_name = ? AND provider_payment_id = ? AND payment_status = 'failed'
+                     LIMIT 1 FOR UPDATE"
+                );
+                $existingFailStmt->execute([$attemptId, $providerName, $providerPaymentId]);
+            } else {
+                $existingFailStmt = $this->db->prepare(
+                    "SELECT payment_id FROM payment
+                     WHERE attempt_id = ? AND provider_payment_id IS NULL AND payment_status = 'failed'
+                     LIMIT 1 FOR UPDATE"
+                );
+                $existingFailStmt->execute([$attemptId]);
+            }
             if ($existingFailStmt->fetchColumn() === false) {
                 $this->db->prepare(
                     "INSERT INTO payment (order_id, attempt_id, payment_type, amount, payment_date, payment_method, payment_status, provider_name, provider_payment_id)
@@ -1148,12 +1253,13 @@ final class CheckoutHoldService
      * in deterministic lock order. Note that availability queries already ignore expired holds
      * immediately even before this cleanup executes.
      *
-     * @return array{expired_count:int, hold_ids:array<int,int>}
+     * @return array{expired_count:int, hold_ids:array<int,int>, has_more:bool}
      */
     public function releaseExpiredHolds(int $limit = 100): array
     {
         $this->assertTopLevelTransaction('Expired hold cleanup');
         $limit = max(1, min(500, $limit));
+        $fetchLimit = $limit + 1;
 
         $stmt = $this->db->prepare(
             "SELECT hold_id
@@ -1161,10 +1267,15 @@ final class CheckoutHoldService
              WHERE hold_status = 'active'
                AND expires_at <= UTC_TIMESTAMP()
              ORDER BY expires_at ASC, hold_id ASC
-             LIMIT {$limit}"
+             LIMIT {$fetchLimit}"
         );
         $stmt->execute();
         $holdIds = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+
+        $hasMore = count($holdIds) > $limit;
+        if ($hasMore) {
+            $holdIds = array_slice($holdIds, 0, $limit);
+        }
 
         $expiredIds = [];
         foreach ($holdIds as $holdId) {
@@ -1176,6 +1287,41 @@ final class CheckoutHoldService
         return [
             'expired_count' => count($expiredIds),
             'hold_ids' => $expiredIds,
+            'has_more' => $hasMore,
+        ];
+    }
+
+    /**
+     * Drain expired active holds across bounded batches for scheduled CLI/cron cleanup.
+     *
+     * @return array{expired_count:int, hold_ids:array<int,int>, batches:int, has_more:bool}
+     */
+    public function releaseAllExpiredHolds(int $batchSize = 100, int $maxBatches = 20): array
+    {
+        $this->assertTopLevelTransaction('Expired hold batch cleanup');
+        $maxBatches = max(1, min(200, $maxBatches));
+
+        $totalExpired = 0;
+        $allIds = [];
+        $batches = 0;
+        $hasMore = false;
+
+        for ($i = 0; $i < $maxBatches; $i++) {
+            $batches++;
+            $res = $this->releaseExpiredHolds($batchSize);
+            $totalExpired += $res['expired_count'];
+            array_push($allIds, ...$res['hold_ids']);
+            $hasMore = $res['has_more'];
+            if (!$hasMore || $res['expired_count'] === 0) {
+                break;
+            }
+        }
+
+        return [
+            'expired_count' => $totalExpired,
+            'hold_ids' => $allIds,
+            'batches' => $batches,
+            'has_more' => $hasMore,
         ];
     }
 
@@ -1260,8 +1406,8 @@ final class CheckoutHoldService
     }
 
     /**
-     * Execute a checkout callback under READ COMMITTED with deterministic inventory_id ASC FOR UPDATE locks
-     * and full 3-unit minimum-stock threshold & batch-expiry validation.
+     * Execute a checkout callback under READ COMMITTED with deterministic inventory_id ASC -> batch_id ASC
+     * FOR UPDATE locks, single-active-attempt DB protection, 3-unit threshold, and FEFO usable batch validation.
      *
      * @param callable(array<string,mixed>): array<string,mixed> $fn
      * @return array<string,mixed>
@@ -1283,6 +1429,7 @@ final class CheckoutHoldService
             }
 
             $preInvIds = [];
+            $preBatchInvIds = [];
             foreach ($preLines as $pl) {
                 if ((int)$pl['business_unit_id'] !== $businessUnitId) {
                     throw new RuntimeException($pl['product_name'] . ' does not belong to this shop and cannot be ordered here.', self::ERR_UNPROCESSABLE);
@@ -1296,38 +1443,68 @@ final class CheckoutHoldService
                 if ($pl['inventory_id'] === null) {
                     throw new RuntimeException('Not enough stock for ' . $pl['product_name'] . ' (0 available).', self::ERR_UNPROCESSABLE);
                 }
-                $preInvIds[(int)$pl['inventory_id']] = (int)$pl['inventory_id'];
+                $invId = (int)$pl['inventory_id'];
+                $preInvIds[$invId] = $invId;
+                if (!empty($pl['requires_batch_tracking'])) {
+                    $preBatchInvIds[$invId] = $invId;
+                }
             }
+
+            // Include any inventory IDs from an existing active attempt's hold so expiring stale holds
+            // inside this transaction strictly respects ascending inventory_id lock ordering.
+            $preActiveAttempts = $this->findActiveAttemptsForCustomerUnit($customerId, $businessUnitId);
+            foreach ($preActiveAttempts as $pa) {
+                [$paInvIds] = $this->loadHoldInventoryIdsForAttempt((int)$pa['attempt_id']);
+                foreach ($paInvIds as $paInvId) {
+                    $preInvIds[$paInvId] = $paInvId;
+                }
+            }
+
             $sortedInvIds = array_values($preInvIds);
             sort($sortedInvIds, SORT_NUMERIC);
+            $sortedBatchInvIds = array_values($preBatchInvIds);
+            sort($sortedBatchInvIds, SORT_NUMERIC);
 
             $this->db->exec('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
             $this->db->beginTransaction();
             try {
-                // 1. Lock distinct inventory rows FIRST in ascending ID order.
+                // 1. Lock distinct inventory rows FIRST in ascending ID order,
+                //    then eligible inventory_batch rows in ascending batch_id order.
                 $lockedInventory = $this->lockInventories($sortedInvIds);
+                $batchPoolsByInv = $sortedBatchInvIds
+                    ? InventoryBatch::lockEligibleFefoBatchesForInventories($this->db, $sortedBatchInvIds, true)
+                    : [];
 
-                // 2. Re-check idempotency key under inventory lock (serializes duplicate submits cleanly).
+                // 2. Re-check idempotency key under locks (serializes repeated submits cleanly).
                 $existingAttempt = $this->findExistingAttempt($customerId, $businessUnitId, $idempotencyKey, true);
                 if ($existingAttempt !== null) {
                     if ($existingAttempt['payment_channel'] !== $expectedChannel) {
-                        throw new RuntimeException('This checkout submission token was already used for another payment method. Please refresh checkout.', self::ERR_CONFLICT);
+                        throw new RuntimeException($this->channelTransitionConflictMessage($existingAttempt, $expectedChannel), self::ERR_CONFLICT);
                     }
                     $result = $fn(['existing_attempt' => $existingAttempt]);
                     $this->db->commit();
                     return $result;
                 }
 
-                // 3. Lock and re-read cart lines under inventory locks.
+                // 3. Enforce single active checkout attempt per (customer_id, business_unit_id),
+                //    automatically expiring stale holds whose 3-minute TTL already elapsed.
+                $this->guardAgainstOtherActiveAttempt($customerId, $businessUnitId, $expectedChannel, $sortedInvIds);
+
+                // 4. Lock and re-read cart lines under inventory locks.
                 $lines = $this->readCartLines($cartId, true);
                 if (!$lines) {
                     throw new RuntimeException('Your cart is empty.', self::ERR_UNPROCESSABLE);
                 }
 
                 $lockedInvSet = array_flip($sortedInvIds);
+                $lockedBatchInvSet = array_flip($sortedBatchInvIds);
                 $needRetry = false;
                 foreach ($lines as $l) {
                     if ($l['inventory_id'] === null || !isset($lockedInvSet[(int)$l['inventory_id']])) {
+                        $needRetry = true;
+                        break;
+                    }
+                    if (!empty($l['requires_batch_tracking']) && !isset($lockedBatchInvSet[(int)$l['inventory_id']])) {
                         $needRetry = true;
                         break;
                     }
@@ -1340,10 +1517,10 @@ final class CheckoutHoldService
                     throw new RuntimeException('Your cart contents changed during checkout. Please try again.', self::ERR_CONFLICT);
                 }
 
-                // 4. Validate products, quantities, active holds, 3-unit threshold, and FEFO usable batch stock.
+                // 5. Validate products, quantities, active holds, 3-unit threshold, and FEFO usable batch stock.
                 $activeHeldByInv = OrderReservationService::activeHeldQuantitiesByInventory($this->db, $sortedInvIds);
                 $linesByInv = [];
-                $total = 0.0;
+                $subtotal = 0.0;
                 foreach ($lines as $l) {
                     if ((int)$l['business_unit_id'] !== $businessUnitId) {
                         throw new RuntimeException($l['product_name'] . ' does not belong to this shop and cannot be ordered here.', self::ERR_UNPROCESSABLE);
@@ -1356,7 +1533,7 @@ final class CheckoutHoldService
                     }
                     $invId = (int)$l['inventory_id'];
                     $linesByInv[$invId][] = $l;
-                    $total = round($total + round((float)$l['selling_price'] * (int)$l['quantity'], 2), 2);
+                    $subtotal = round($subtotal + round((float)$l['selling_price'] * (int)$l['quantity'], 2), 2);
                 }
 
                 foreach ($sortedInvIds as $invId) {
@@ -1382,7 +1559,7 @@ final class CheckoutHoldService
 
                     $effectiveAvailable = $invAvailable;
                     if ($requiresBatch) {
-                        $batchPool = InventoryBatch::lockEligibleFefoBatchesForReservation($this->db, $invId);
+                        $batchPool = $batchPoolsByInv[$invId] ?? [];
                         $batchUnreserved = 0;
                         foreach ($batchPool as $batch) {
                             $batchUnreserved += (int)$batch['unreserved_quantity'];
@@ -1408,7 +1585,7 @@ final class CheckoutHoldService
                 $result = $fn([
                     'existing_attempt' => null,
                     'lines' => $lines,
-                    'total_amount' => $total,
+                    'subtotal_amount' => $subtotal,
                     'sorted_inv_ids' => $sortedInvIds,
                     'locked_inventory' => $lockedInventory,
                     'active_held_by_inv' => $activeHeldByInv,
@@ -1416,6 +1593,28 @@ final class CheckoutHoldService
 
                 $this->db->commit();
                 return $result;
+            } catch (PDOException $e) {
+                if ($this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
+                if ($e->getCode() === '23000') {
+                    // DB-level uniqueness constraint tripped under concurrency (uk_checkout_attempt_idempotency or uk_checkout_attempt_active_customer_bu).
+                    $existingAfterRace = $this->findExistingAttempt($customerId, $businessUnitId, $idempotencyKey);
+                    if ($existingAfterRace !== null) {
+                        if ($existingAfterRace['payment_channel'] !== $expectedChannel) {
+                            throw new RuntimeException($this->channelTransitionConflictMessage($existingAfterRace, $expectedChannel), self::ERR_CONFLICT, $e);
+                        }
+                        return $expectedChannel === 'cod'
+                            ? $this->formatCodReplayResult($existingAfterRace)
+                            : $this->formatOnlineReplayResult($existingAfterRace);
+                    }
+                    throw new RuntimeException(
+                        'Another checkout attempt is already active for this shop. Please complete or cancel it before starting a new checkout.',
+                        self::ERR_CONFLICT,
+                        $e
+                    );
+                }
+                throw $e;
             } catch (Throwable $e) {
                 if ($this->db->inTransaction()) {
                     $this->db->rollBack();
@@ -1425,6 +1624,140 @@ final class CheckoutHoldService
         }
 
         throw new RuntimeException('Could not lock cart inventory snapshot.', self::ERR_CONFLICT);
+    }
+
+    /**
+     * Lock any active attempts for (customer_id, business_unit_id).
+     * If an active attempt has an expired hold, safely expire it in-place (clearing active_guard_key)
+     * so the customer can proceed; otherwise throw ERR_CONFLICT.
+     *
+     * @param array<int,int> $lockedInvIds
+     */
+    private function guardAgainstOtherActiveAttempt(
+        int $customerId,
+        int $businessUnitId,
+        string $requestedChannel,
+        array $lockedInvIds
+    ): void {
+        $stmt = $this->db->prepare(
+            "SELECT ca.attempt_id, ca.payment_channel, ca.attempt_status,
+                    ih.hold_id, ih.hold_status,
+                    (ih.hold_status = 'active' AND ih.expires_at > UTC_TIMESTAMP()) AS is_hold_unexpired
+             FROM checkout_attempt ca
+             LEFT JOIN inventory_hold ih ON ih.attempt_id = ca.attempt_id
+             WHERE ca.customer_id = ?
+               AND ca.business_unit_id = ?
+               AND ca.attempt_status IN ('initiated', 'awaiting_payment')
+             ORDER BY ca.attempt_id ASC
+             FOR UPDATE"
+        );
+        $stmt->execute([$customerId, $businessUnitId]);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        if (!$rows) {
+            return;
+        }
+
+        $lockedInvSet = array_flip($lockedInvIds);
+        $nowUtc = $this->dbUtcNow();
+
+        foreach ($rows as $row) {
+            $attId = (int)$row['attempt_id'];
+            $holdId = $row['hold_id'] !== null ? (int)$row['hold_id'] : null;
+            $holdStatus = $row['hold_status'] !== null ? (string)$row['hold_status'] : null;
+            $isUnexpired = !empty($row['is_hold_unexpired']);
+
+            if ((string)$row['attempt_status'] === 'initiated') {
+                throw new RuntimeException(
+                    'Another checkout submission is already in progress for this shop.',
+                    self::ERR_CONFLICT
+                );
+            }
+
+            if ($isUnexpired) {
+                if ($requestedChannel === 'cod') {
+                    throw new RuntimeException(
+                        "You already have an active online checkout hold (#{$attId}) for this shop. Complete payment or cancel the active hold before placing a COD order.",
+                        self::ERR_CONFLICT
+                    );
+                }
+                throw new RuntimeException(
+                    "You already have an active online checkout hold (#{$attId}) for this shop. Complete payment or cancel it before starting another checkout.",
+                    self::ERR_CONFLICT
+                );
+            }
+
+            // Stale awaiting_payment attempt whose hold already expired (or was released):
+            // verify its inventory IDs were locked above, then expire it safely.
+            [$holdInvIds] = $this->loadHoldInventoryIdsForAttempt($attId);
+            foreach ($holdInvIds as $hInvId) {
+                if (!isset($lockedInvSet[$hInvId])) {
+                    throw new RuntimeException(
+                        'Previous checkout hold expired concurrently; please resubmit checkout.',
+                        self::ERR_CONFLICT
+                    );
+                }
+            }
+
+            if ($holdId !== null && $holdStatus === 'active') {
+                $this->db->prepare(
+                    "UPDATE inventory_hold
+                     SET hold_status = 'expired', released_at = ?, release_reason = 'expired_superseded'
+                     WHERE hold_id = ? AND hold_status = 'active'"
+                )->execute([$nowUtc, $holdId]);
+            }
+
+            $this->db->prepare(
+                "UPDATE checkout_attempt
+                 SET attempt_status = 'expired',
+                     failure_reason = COALESCE(failure_reason, 'Superseded after 3-minute hold expiration.'),
+                     updated_at = ?
+                 WHERE attempt_id = ? AND attempt_status IN ('initiated', 'awaiting_payment')"
+            )->execute([$nowUtc, $attId]);
+
+            $actorUserId = $this->lookupCustomerUserAccountId($customerId);
+            Audit::record(
+                $this->db,
+                'customer.checkout.hold_expired',
+                "Expired stale checkout attempt #{$attId} before starting new {$requestedChannel} checkout.",
+                $businessUnitId,
+                $actorUserId,
+                null,
+                "attempt_status:{$row['attempt_status']}",
+                'attempt_status:expired; reason:expired_superseded',
+                'checkout_attempt',
+                $attId
+            );
+        }
+    }
+
+    private function channelTransitionConflictMessage(array $existingAttempt, string $requestedChannel): string
+    {
+        $attId = (int)$existingAttempt['attempt_id'];
+        if ($existingAttempt['payment_channel'] === 'cod' && $existingAttempt['order_id'] !== null) {
+            return "This checkout submission was already completed as Cash on Delivery (Order #{$existingAttempt['order_id']}).";
+        }
+        if ($existingAttempt['payment_channel'] === 'online' && $requestedChannel === 'cod') {
+            return "This checkout submission belongs to online checkout hold (#{$attId}). Cancel the active hold or refresh checkout before placing a COD order.";
+        }
+        return 'This checkout submission token was already used for another payment method. Please refresh checkout.';
+    }
+
+    /**
+     * @return array<int,array<string,mixed>>
+     */
+    private function findActiveAttemptsForCustomerUnit(int $customerId, int $businessUnitId): array
+    {
+        $stmt = $this->db->prepare(
+            "SELECT attempt_id
+             FROM checkout_attempt
+             WHERE customer_id = ?
+               AND business_unit_id = ?
+               AND attempt_status IN ('initiated', 'awaiting_payment')
+             ORDER BY attempt_id ASC"
+        );
+        $stmt->execute([$customerId, $businessUnitId]);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     /**
@@ -1494,7 +1827,7 @@ final class CheckoutHoldService
     }
 
     /**
-     * @return array{attempt_id:int,attempt_token:string,order_id:int,total_amount:float,reservations_created:int,idempotent_replay:bool}
+     * @return array{attempt_id:int,attempt_token:string,order_id:int,subtotal_amount:float,delivery_fee:float,total_amount:float,reservations_created:int,idempotent_replay:bool}
      */
     private function formatCodReplayResult(array $attempt): array
     {
@@ -1505,6 +1838,8 @@ final class CheckoutHoldService
             'attempt_id' => (int)$attempt['attempt_id'],
             'attempt_token' => (string)$attempt['attempt_token'],
             'order_id' => (int)$attempt['order_id'],
+            'subtotal_amount' => (float)($attempt['subtotal_amount'] ?? $attempt['expected_amount']),
+            'delivery_fee' => (float)($attempt['delivery_fee'] ?? 0.0),
             'total_amount' => (float)$attempt['expected_amount'],
             'reservations_created' => 0,
             'idempotent_replay' => true,
@@ -1518,6 +1853,8 @@ final class CheckoutHoldService
      *   hold_id:int,
      *   created_at:string,
      *   expires_at:string,
+     *   subtotal_amount:float,
+     *   delivery_fee:float,
      *   total_amount:float,
      *   provider_configured:bool,
      *   redirect_url:string,
@@ -1540,6 +1877,8 @@ final class CheckoutHoldService
             'hold_id' => (int)($attempt['hold_id'] ?? 0),
             'created_at' => (string)($attempt['hold_created_at'] ?? $attempt['created_at']),
             'expires_at' => (string)($attempt['hold_expires_at'] ?? $attempt['created_at']),
+            'subtotal_amount' => (float)($attempt['subtotal_amount'] ?? $attempt['expected_amount']),
+            'delivery_fee' => (float)($attempt['delivery_fee'] ?? 0.0),
             'total_amount' => (float)$attempt['expected_amount'],
             'provider_configured' => !empty($attempt['provider_checkout_url']),
             'redirect_url' => $redirectUrl,
@@ -1617,19 +1956,34 @@ final class CheckoutHoldService
     }
 
     /**
-     * @return array<int,int>
+     * Return [sorted_inventory_ids, sorted_batch_tracked_inventory_ids] for an attempt's hold.
+     *
+     * @return array{0:array<int,int>, 1:array<int,int>}
      */
     private function loadHoldInventoryIdsForAttempt(int $attemptId): array
     {
         $stmt = $this->db->prepare(
-            "SELECT DISTINCT ihi.inventory_id
+            "SELECT DISTINCT ihi.inventory_id, bp.requires_batch_tracking
              FROM inventory_hold_item ihi
              JOIN inventory_hold ih ON ih.hold_id = ihi.hold_id
+             JOIN business_product bp ON bp.business_product_id = ihi.business_product_id
              WHERE ih.attempt_id = ?
              ORDER BY ihi.inventory_id ASC"
         );
         $stmt->execute([$attemptId]);
-        return array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+
+        $invIds = [];
+        $batchInvIds = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $invId = (int)$row['inventory_id'];
+            $invIds[] = $invId;
+            if (!empty($row['requires_batch_tracking'])) {
+                $batchInvIds[] = $invId;
+            }
+        }
+        sort($invIds, SORT_NUMERIC);
+        sort($batchInvIds, SORT_NUMERIC);
+        return [$invIds, $batchInvIds];
     }
 
     /**
@@ -1681,12 +2035,14 @@ final class CheckoutHoldService
      * @param array<int,array<string,mixed>> $holdItems
      * @param array<int,array<string,mixed>> $lockedInventory
      * @param array<int,int> $otherActiveHeld
+     * @param array<int,array<int,array<string,mixed>>> $batchPoolsByInv
      */
     private function checkHoldFulfillability(
         array $holdItems,
         int $businessUnitId,
         array $lockedInventory,
-        array $otherActiveHeld
+        array $otherActiveHeld,
+        array $batchPoolsByInv
     ): ?string {
         $byInv = [];
         foreach ($holdItems as $hi) {
@@ -1716,11 +2072,11 @@ final class CheckoutHoldService
             $available = (((int)$inv['on_hand'] + (int)$inv['in_transit']) - (int)$inv['committed']) - $activeHeld;
             if ($available < $requestedQty) {
                 $displayAvail = max(0, $available);
-                return "Insufficient stock after hold expiry for '{$productName}' (available: {$displayAvail}, paid qty: {$requestedQty}).";
+                return "Insufficient stock after hold release/expiry for '{$productName}' (available: {$displayAvail}, paid qty: {$requestedQty}).";
             }
 
             if ($requiresBatch) {
-                $batchPool = InventoryBatch::lockEligibleFefoBatchesForReservation($this->db, $invId);
+                $batchPool = $batchPoolsByInv[$invId] ?? [];
                 $batchUnreserved = 0;
                 foreach ($batchPool as $batch) {
                     $batchUnreserved += (int)$batch['unreserved_quantity'];
@@ -1728,7 +2084,7 @@ final class CheckoutHoldService
                 $effectiveBatchAvail = $batchUnreserved - $activeHeld;
                 if ($effectiveBatchAvail < $requestedQty) {
                     $displayBatchAvail = max(0, $effectiveBatchAvail);
-                    return "Insufficient non-expired batch stock after hold expiry for '{$productName}' (available: {$displayBatchAvail}, paid qty: {$requestedQty}).";
+                    return "Insufficient non-expired batch stock after hold release/expiry for '{$productName}' (available: {$displayBatchAvail}, paid qty: {$requestedQty}).";
                 }
             }
         }

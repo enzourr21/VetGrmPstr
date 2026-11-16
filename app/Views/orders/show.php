@@ -1,6 +1,10 @@
 <?php
 $payMethod = !empty($o['payment_method']) ? strtoupper((string)$o['payment_method']) : 'Pending';
 $payStatus = !empty($o['payment_status']) ? ucfirst((string)$o['payment_status']) : 'Pending';
+$deliveryFee = (float)($o['delivery_fee'] ?? 0.0);
+$subtotalAmount = isset($o['subtotal_amount']) && $o['subtotal_amount'] !== null
+    ? (float)$o['subtotal_amount']
+    : max(0.0, (float)$o['total_amount'] - $deliveryFee);
 ?>
 <a class="breadcrumb-link" href="/orders"><span class="arrow-back" aria-hidden="true">&larr;</span> Back to orders</a>
 <div class="page-header">
@@ -31,7 +35,11 @@ $payStatus = !empty($o['payment_status']) ? ucfirst((string)$o['payment_status']
     <tr><td><strong><?= e($l['product_name']) ?></strong></td><td class="tabular"><?= money($l['unit_price']) ?></td><td class="tabular"><?= (int)$l['quantity'] ?></td><td class="right price"><?= money((float)$l['unit_price'] * (int)$l['quantity']) ?></td></tr>
   <?php endforeach; ?>
   </tbody>
-  <tfoot><tr><th colspan="3" class="right">Total</th><th class="right price"><?= money($o['total_amount']) ?></th></tr></tfoot>
+  <tfoot>
+    <tr><th colspan="3" class="right">Product subtotal</th><th class="right tabular"><?= money($subtotalAmount) ?></th></tr>
+    <tr><th colspan="3" class="right">Delivery fee<?= $o['fulfillment_method'] === 'pickup' ? ' (Pickup)' : '' ?></th><th class="right tabular"><?= money($deliveryFee) ?></th></tr>
+    <tr><th colspan="3" class="right">Total</th><th class="right price"><?= money($o['total_amount']) ?></th></tr>
+  </tfoot>
 </table>
 
 <?php if (($o['payment_method'] ?? '') === 'cod' && ($o['payment_status'] ?? '') === 'pending'): ?>

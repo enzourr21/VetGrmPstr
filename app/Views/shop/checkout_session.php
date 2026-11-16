@@ -67,7 +67,11 @@ $secondsRemaining = (int)($attempt['seconds_remaining'] ?? 0);
     </tr>
   <?php endforeach; ?>
   </tbody>
-  <tfoot><tr><th colspan="3" class="right">Total</th><th class="right price"><?= money($attempt['expected_amount']) ?></th></tr></tfoot>
+  <tfoot>
+    <tr><th colspan="3" class="right">Product subtotal</th><th class="right tabular"><?= money($attempt['subtotal_amount'] ?? $attempt['expected_amount']) ?></th></tr>
+    <tr><th colspan="3" class="right">Delivery fee</th><th class="right tabular"><?= money($attempt['delivery_fee'] ?? 0) ?></th></tr>
+    <tr><th colspan="3" class="right">Total</th><th class="right price"><?= money($attempt['expected_amount']) ?></th></tr>
+  </tfoot>
 </table>
 
 <div class="row" style="margin-top: 1.25rem; justify-content: space-between;">

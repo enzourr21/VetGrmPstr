@@ -281,11 +281,21 @@ $totalOrders = count($ordersList);
         </table>
       </div>
 
+      <?php
+      $mFee = (float)($o['delivery_fee'] ?? 0.0);
+      $mSub = isset($o['subtotal_amount']) && $o['subtotal_amount'] !== null
+          ? (float)$o['subtotal_amount']
+          : ($calcSubtotal > 0 ? $calcSubtotal : max(0.0, (float)$o['total_amount'] - $mFee));
+      ?>
       <div style="display: flex; justify-content: flex-end;">
         <div style="min-width: 240px; background: var(--bg-subtle, #f9fafb); padding: 1rem; border-radius: 6px;">
           <div class="row" style="justify-content: space-between; margin-bottom: 0.35rem;">
-            <span class="caption">Subtotal:</span>
-            <span><?= peso($calcSubtotal > 0 ? $calcSubtotal : (float)$o['total_amount']) ?></span>
+            <span class="caption">Product Subtotal:</span>
+            <span><?= peso($mSub) ?></span>
+          </div>
+          <div class="row" style="justify-content: space-between; margin-bottom: 0.35rem;">
+            <span class="caption">Delivery Fee<?= $o['fulfillment_method'] === 'pickup' ? ' (Pickup)' : '' ?>:</span>
+            <span><?= peso($mFee) ?></span>
           </div>
           <div class="row" style="justify-content: space-between; margin-bottom: 0.35rem;">
             <span class="caption">Discount:</span>
