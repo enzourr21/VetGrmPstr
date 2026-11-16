@@ -502,7 +502,7 @@ final class DeliveryController extends Controller
         $rawIds = $_POST['payment_ids'] ?? [];
         $paymentIds = is_array($rawIds) ? array_map('intval', $rawIds) : [];
         $rawTotal = trim((string)($_POST['remitted_total'] ?? ''));
-        $declaredTotal = ($rawTotal !== '' && is_numeric($rawTotal)) ? (float)$rawTotal : null;
+        $declaredTotal = $rawTotal !== '' ? $rawTotal : null;
         $notes = trim((string)($_POST['notes'] ?? ''));
 
         try {
@@ -518,7 +518,7 @@ final class DeliveryController extends Controller
             $this->flash(
                 'success',
                 "Submitted COD remittance {$result['remittance_reference']} ({$result['allocations_created']} payment(s), ₱"
-                . number_format((float)$result['remitted_total'], 2) . "). Pending staff remittance verification."
+                . $result['remitted_total'] . "). Pending staff remittance verification."
             );
         } catch (RuntimeException $e) {
             $this->handleServiceException($e, '/delivery/orders?tab=history');
@@ -546,7 +546,8 @@ final class DeliveryController extends Controller
     private function loadCourierCodRemittanceState(int $empId): array
     {
         $unremStmt = $this->db->prepare(
-            "SELECT p.payment_id, p.order_id, p.amount, p.collected_at, co.order_date,
+            "SELECT p.payment_id, p.order_id, p.amount, p.collected_at,
+                    co.order_date, co.subtotal_amount, co.delivery_fee, co.total_amount,
                     CONCAT(c.first_name, ' ', c.last_name) AS customer_name
              FROM payment p
              JOIN customer_order co ON co.order_id = p.order_id

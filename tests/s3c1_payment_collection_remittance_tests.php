@@ -421,10 +421,17 @@ try {
         $foreignRemitBlocked = $e->getCode() === OrderPaymentService::ERR_FORBIDDEN;
     }
 
-    // 7e. Rejects remittance variance (without inventing discrepancy rules)
+    // 7e. Rejects fee-inclusive total (350.00 when subtotals sum to 250.00) and variance (300.00)
+    $feeInclusiveRemitBlocked = false;
+    try {
+        $paymentService->submitCourierCodRemittance($unitId, $courier1EmpId, $courier1Uid, [$pay1, $pay2], '350.00');
+    } catch (RuntimeException $e) {
+        $feeInclusiveRemitBlocked = $e->getCode() === OrderPaymentService::ERR_UNPROCESSABLE;
+    }
+
     $varianceRemitBlocked = false;
     try {
-        $paymentService->submitCourierCodRemittance($unitId, $courier1EmpId, $courier1Uid, [$pay1, $pay2], 300.00); // expected 350.00
+        $paymentService->submitCourierCodRemittance($unitId, $courier1EmpId, $courier1Uid, [$pay1, $pay2], '300.00');
     } catch (RuntimeException $e) {
         $varianceRemitBlocked = $e->getCode() === OrderPaymentService::ERR_UNPROCESSABLE;
     }
@@ -445,15 +452,145 @@ try {
         $onlineRemitBlocked = $e->getCode() === OrderPaymentService::ERR_UNPROCESSABLE;
     }
 
+    // 7g. Strict SuperAdmin cross-unit isolation on remittance submission
+    $pdo->prepare("INSERT INTO user_account (email, password_hash, is_super_admin) VALUES ('chks3c1_sa@test.invalid', 'hash', 1)")->execute();
+    $saUid = (int)$pdo->lastInsertId();
+    $cleanup['users'][] = $saUid;
+    $pdo->prepare("INSERT INTO employee (user_account_id, business_unit_id, first_name, last_name, position, employee_status) VALUES (?, ?, 'Super', 'Foreign', 'Delivery Personnel', 'active')")
+        ->execute([$saUid, $foreignUnitId]);
+    $saForeignEmpId = (int)$pdo->lastInsertId();
+    $cleanup['employees'][] = $saForeignEmpId;
+
+    $superForeignRemitBlocked = false;
+    try {
+        $paymentService->submitCourierCodRemittance($unitId, $saForeignEmpId, $saUid, [$pay1]);
+    } catch (RuntimeException $e) {
+        $superForeignRemitBlocked = $e->getCode() === OrderPaymentService::ERR_FORBIDDEN;
+    }
+
     check(
-        'Courier COD remittance rejects pending payments, pickup orders, online channel, other courier, foreign unit, and unapproved variance totals',
+        'Courier COD remittance rejects pending payments, pickup orders, online channel, other courier, foreign/SuperAdmin-foreign unit, fee-inclusive totals, and variance totals',
         $uncollectedRemitBlocked
             && $pickupRemitBlocked
             && $onlineRemitBlocked
             && $otherCourierRemitBlocked
             && $foreignRemitBlocked
+            && $superForeignRemitBlocked
+            && $feeInclusiveRemitBlocked
             && $varianceRemitBlocked
             && (int)$pdo->query('SELECT COUNT(*) FROM courier_cod_remittance')->fetchColumn() === 0
+    );
+
+    // 7h. Financial integrity rejections: NULL subtotal, zero subtotal, negative delivery_fee, sum mismatches, and payment mismatch
+    $createCollectedCorruptOrder = static function (string $subSql, string $feeSql, string $totSql, string $paySql) use ($pdo, $custId, $unitId, $branchId, $courier1EmpId, &$cleanup): array {
+        $pdo->prepare(
+            "INSERT INTO customer_order (customer_id, business_unit_id, branch_id, fulfillment_method, order_status, subtotal_amount, delivery_fee, total_amount)
+             VALUES (?, ?, ?, 'delivery', 'completed', {$subSql}, {$feeSql}, {$totSql})"
+        )->execute([$custId, $unitId, $branchId]);
+        $oId = (int)$pdo->lastInsertId();
+        $cleanup['orders'][] = $oId;
+        $pdo->prepare(
+            "INSERT INTO payment (order_id, payment_type, amount, payment_date, payment_method, payment_status, collection_channel, collected_by_employee_id, collected_at)
+             VALUES (?, 'payment', {$paySql}, NOW(), 'cod', 'completed', 'courier_cod', ?, UTC_TIMESTAMP())"
+        )->execute([$oId, $courier1EmpId]);
+        return [$oId, (int)$pdo->lastInsertId()];
+    };
+
+    [, $payNullSub] = $createCollectedCorruptOrder('NULL', '50.00', '150.00', '150.00');
+    [, $payZeroSub] = $createCollectedCorruptOrder('0.00', '50.00', '50.00', '50.00');
+    [, $paySumMismatch] = $createCollectedCorruptOrder('90.00', '50.00', '150.00', '150.00');
+    [$ordPayMismatch, $payAmtMismatch] = $createCollectedCorruptOrder('100.00', '50.00', '150.00', '140.00');
+
+    $nullSubRejected = false;
+    try {
+        $paymentService->submitCourierCodRemittance($unitId, $courier1EmpId, $courier1Uid, [$payNullSub]);
+    } catch (RuntimeException $e) {
+        $nullSubRejected = $e->getCode() === OrderPaymentService::ERR_UNPROCESSABLE;
+    }
+
+    $zeroSubRejected = false;
+    try {
+        $paymentService->submitCourierCodRemittance($unitId, $courier1EmpId, $courier1Uid, [$payZeroSub]);
+    } catch (RuntimeException $e) {
+        $zeroSubRejected = $e->getCode() === OrderPaymentService::ERR_UNPROCESSABLE;
+    }
+
+    $sumMismatchRejected = false;
+    try {
+        $paymentService->submitCourierCodRemittance($unitId, $courier1EmpId, $courier1Uid, [$paySumMismatch]);
+    } catch (RuntimeException $e) {
+        $sumMismatchRejected = $e->getCode() === OrderPaymentService::ERR_UNPROCESSABLE;
+    }
+
+    $payMismatchRejected = false;
+    try {
+        $paymentService->submitCourierCodRemittance($unitId, $courier1EmpId, $courier1Uid, [$payAmtMismatch]);
+    } catch (RuntimeException $e) {
+        $payMismatchRejected = $e->getCode() === OrderPaymentService::ERR_UNPROCESSABLE;
+    }
+
+    // Confirm negative delivery_fee is blocked at DB constraint level & service parser rejects negative monetary values cleanly
+    $negFeeDbBlocked = false;
+    try {
+        $pdo->prepare('UPDATE customer_order SET delivery_fee = -5.00 WHERE order_id = ?')->execute([$ordPayMismatch]);
+    } catch (PDOException $e) {
+        $negFeeDbBlocked = true;
+    }
+
+    check(
+        'Remittance rejects NULL subtotal, zero subtotal, subtotal+fee mismatch, payment mismatch, and blocks negative delivery fees',
+        $nullSubRejected
+            && $zeroSubRejected
+            && $sumMismatchRejected
+            && $payMismatchRejected
+            && $negFeeDbBlocked
+            && (int)$pdo->query('SELECT COUNT(*) FROM courier_cod_remittance')->fetchColumn() === 0
+    );
+
+    // 7i. Exact decimal-string parsing & formatting: valid, malformed, negative, excessive precision, and overflow
+    $parseMethod = new ReflectionMethod(OrderPaymentService::class, 'parseDecimalToCents');
+    $formatMethod = new ReflectionMethod(OrderPaymentService::class, 'formatCents');
+    $decimalChecksOk = $parseMethod->invoke($paymentService, '123.45', 't') === 12345
+        && $parseMethod->invoke($paymentService, '0.05', 't') === 5
+        && $parseMethod->invoke($paymentService, '9999999999.99', 't') === 999999999999
+        && $formatMethod->invoke($paymentService, 999999999999) === '9999999999.99'
+        && $formatMethod->invoke($paymentService, 5) === '0.05';
+
+    $badMoneyInputs = [
+        'empty' => '',
+        'alpha' => '250.00abc',
+        'comma' => '1,250.00',
+        'scientific' => '1e2',
+        'negative' => '-10.00',
+        'excessive_precision' => '250.123',
+        'overflow_decimal12' => '10000000000.00',
+        'overflow_int64' => '99999999999999999999.99',
+    ];
+    $allBadInputsRejected = true;
+    foreach ($badMoneyInputs as $caseLabel => $badVal) {
+        $caught = false;
+        try {
+            $paymentService->submitCourierCodRemittance($unitId, $courier1EmpId, $courier1Uid, [$pay1, $pay2], $badVal);
+        } catch (RuntimeException $e) {
+            $caught = $e->getCode() === OrderPaymentService::ERR_UNPROCESSABLE;
+        }
+        if (!$caught) {
+            $allBadInputsRejected = false;
+            echo "  DETAIL: failed badMoneyInput case {$caseLabel}\n";
+        }
+    }
+
+    // Verify parseDecimalToCents without allowNegative rejects '-5.00' directly too
+    $negParseRejected = false;
+    try {
+        $parseMethod->invoke($paymentService, '-5.00', 'Delivery fee', false);
+    } catch (RuntimeException $e) {
+        $negParseRejected = $e->getCode() === OrderPaymentService::ERR_UNPROCESSABLE;
+    }
+
+    check(
+        'Exact decimal parsing & formatting accept valid DECIMAL(12,2) boundaries and reject malformed, negative, over-precise, and overflowing inputs',
+        $decimalChecksOk && $allBadInputsRejected && $negParseRejected
     );
 
     // 8. Mid-transaction rollback test on remittance submission before valid submission
@@ -484,13 +621,13 @@ try {
             && (int)$pdo->query('SELECT COUNT(*) FROM courier_cod_remittance_allocation')->fetchColumn() === 0
     );
 
-    // 9. Valid exact-total multi-payment courier remittance submission & duplicate allocation guard
+    // 9. Valid exact-subtotal multi-payment courier remittance submission & duplicate allocation guard
     $remitRes = $paymentService->submitCourierCodRemittance(
         $unitId,
         $courier1EmpId,
         $courier1Uid,
         [$pay1, $pay2],
-        350.00,
+        '250.00',
         'End-of-route cash batch'
     );
     $cleanup['remittances'][] = (int)$remitRes['remittance_id'];
@@ -498,6 +635,8 @@ try {
     $rmtRow = $pdo->query("SELECT remittance_status, expected_total, remitted_total, verified_total, verified_by_employee_id, verified_at FROM courier_cod_remittance WHERE remittance_id = {$remitRes['remittance_id']}")->fetch();
     $allocRows = $pdo->query("SELECT payment_id, order_id, business_unit_id, expected_amount, allocated_amount, allocation_status FROM courier_cod_remittance_allocation WHERE remittance_id = {$remitRes['remittance_id']} ORDER BY payment_id ASC")->fetchAll();
     $rmtAuditCnt = (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE action_code = 'courier.cod_remittance_submitted' AND target_type = 'courier_cod_remittance' AND target_id = {$remitRes['remittance_id']}")->fetchColumn();
+    $pay1Final = $pdo->query("SELECT amount, payment_status FROM payment WHERE payment_id = {$pay1}")->fetch();
+    $pay2Final = $pdo->query("SELECT amount, payment_status FROM payment WHERE payment_id = {$pay2}")->fetch();
 
     $dupAllocBlocked = false;
     try {
@@ -507,19 +646,27 @@ try {
     }
 
     check(
-        'Courier COD remittance creates submitted batch + active per-payment allocations, audits cleanly, and blocks duplicate allocation',
+        'Courier COD remittance submits subtotal-only batch (250.00), preserves fee-inclusive customer payments (150.00 & 200.00), audits cleanly, and blocks duplicate allocation',
         $remitRes['remittance_status'] === 'submitted'
             && $remitRes['allocations_created'] === 2
-            && abs((float)$rmtRow['expected_total'] - 350.00) < 0.001
-            && abs((float)$rmtRow['remitted_total'] - 350.00) < 0.001
+            && $remitRes['expected_total'] === '250.00'
+            && $remitRes['remitted_total'] === '250.00'
+            && (string)$rmtRow['expected_total'] === '250.00'
+            && (string)$rmtRow['remitted_total'] === '250.00'
             && $rmtRow['verified_total'] === null
             && $rmtRow['verified_by_employee_id'] === null
             && $rmtRow['verified_at'] === null
             && count($allocRows) === 2
             && (int)$allocRows[0]['payment_id'] === $pay1
+            && (string)$allocRows[0]['expected_amount'] === '100.00'
+            && (string)$allocRows[0]['allocated_amount'] === '100.00'
             && (int)$allocRows[1]['payment_id'] === $pay2
+            && (string)$allocRows[1]['expected_amount'] === '150.00'
+            && (string)$allocRows[1]['allocated_amount'] === '150.00'
             && $allocRows[0]['allocation_status'] === 'active'
             && $allocRows[1]['allocation_status'] === 'active'
+            && (string)$pay1Final['amount'] === '150.00' && $pay1Final['payment_status'] === 'completed'
+            && (string)$pay2Final['amount'] === '200.00' && $pay2Final['payment_status'] === 'completed'
             && $rmtAuditCnt === 1
             && $dupAllocBlocked
     );

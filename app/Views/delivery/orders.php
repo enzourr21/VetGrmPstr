@@ -167,7 +167,9 @@ $buildTabUrl = function (string $t) use ($q): string {
                     <th style="padding: 0.5rem;">Order</th>
                     <th style="padding: 0.5rem;">Customer</th>
                     <th style="padding: 0.5rem;">Collected At (UTC)</th>
-                    <th style="padding: 0.5rem; text-align: right;">COD Amount</th>
+                    <th style="padding: 0.5rem; text-align: right;">Order Total (Collected)</th>
+                    <th style="padding: 0.5rem; text-align: right;">Delivery Fee (Excluded)</th>
+                    <th style="padding: 0.5rem; text-align: right;">Remittable Subtotal</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -179,7 +181,11 @@ $buildTabUrl = function (string $t) use ($q): string {
                       <td style="padding: 0.5rem; font-family: var(--font-mono, monospace);">#ORD-<?= (int)$up['order_id'] ?></td>
                       <td style="padding: 0.5rem;"><?= e((string)$up['customer_name']) ?></td>
                       <td style="padding: 0.5rem;" class="caption muted"><?= e((string)$up['collected_at']) ?></td>
-                      <td style="padding: 0.5rem; text-align: right; font-weight: 600;">₱<?= number_format((float)$up['amount'], 2) ?></td>
+                      <td style="padding: 0.5rem; text-align: right;">₱<?= number_format((float)$up['amount'], 2) ?></td>
+                      <td style="padding: 0.5rem; text-align: right;" class="caption muted">₱<?= number_format((float)($up['delivery_fee'] ?? 0), 2) ?></td>
+                      <td style="padding: 0.5rem; text-align: right; font-weight: 600;">
+                        <?= $up['subtotal_amount'] !== null ? '₱' . number_format((float)$up['subtotal_amount'], 2) : 'Invalid' ?>
+                      </td>
                     </tr>
                   <?php endforeach; ?>
                 </tbody>

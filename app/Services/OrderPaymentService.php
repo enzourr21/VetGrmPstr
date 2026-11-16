@@ -24,6 +24,7 @@ final class OrderPaymentService
     public const ERR_FORBIDDEN = 403;
     public const ERR_CONFLICT = 409;
     public const ERR_UNPROCESSABLE = 422;
+    private const MAX_MONEY_CENTS = 999999999999; // DECIMAL(12,2) max: 9,999,999,999.99
 
     private PDO $db;
 
@@ -115,16 +116,17 @@ final class OrderPaymentService
     /**
      * Submit an exact-amount courier COD remittance batch in 'submitted' status for collected
      * courier_cod payments owned by the submitting courier within the same business unit.
+     * Remittable amounts use customer_order.subtotal_amount (excluding delivery_fee).
      *
      * @param array<int,int|string> $paymentIds
-     * @return array{remittance_id:int, remittance_reference:string, remittance_status:string, expected_total:float, remitted_total:float, allocations_created:int}
+     * @return array{remittance_id:int, remittance_reference:string, remittance_status:string, expected_total:string, remitted_total:string, allocations_created:int}
      */
     public function submitCourierCodRemittance(
         int $businessUnitId,
         int $courierEmployeeId,
         int $actorUserId,
         array $paymentIds,
-        ?float $declaredRemittedTotal = null,
+        ?string $declaredRemittedTotal = null,
         ?string $notes = null
     ): array {
         $normalizedIds = [];
@@ -141,6 +143,14 @@ final class OrderPaymentService
             throw new RuntimeException('Select at least one collected COD payment to remit.', self::ERR_UNPROCESSABLE);
         }
 
+        $declaredCents = null;
+        if ($declaredRemittedTotal !== null) {
+            $declaredCents = $this->parseDecimalToCents($declaredRemittedTotal, 'Remitted total', true);
+            if ($declaredCents <= 0) {
+                throw new RuntimeException('Declared remitted total must be greater than zero.', self::ERR_UNPROCESSABLE);
+            }
+        }
+
         $cleanNotes = $notes !== null ? trim($notes) : null;
         if ($cleanNotes === '') {
             $cleanNotes = null;
@@ -154,7 +164,7 @@ final class OrderPaymentService
             $courierEmployeeId,
             $actorUserId,
             $sortedPaymentIds,
-            $declaredRemittedTotal,
+            $declaredCents,
             $cleanNotes
         ): array {
             $payPlaceholders = implode(',', array_fill(0, count($sortedPaymentIds), '?'));
@@ -170,7 +180,8 @@ final class OrderPaymentService
             if ($candidateOrderIds) {
                 $ordPlaceholders = implode(',', array_fill(0, count($candidateOrderIds), '?'));
                 $lockOrdStmt = $this->db->prepare(
-                    "SELECT order_id, business_unit_id, fulfillment_method, order_status, delivery_employee_id
+                    "SELECT order_id, business_unit_id, fulfillment_method, order_status, delivery_employee_id,
+                            subtotal_amount, delivery_fee, total_amount
                      FROM customer_order
                      WHERE order_id IN ({$ordPlaceholders})
                      ORDER BY order_id ASC
@@ -182,8 +193,8 @@ final class OrderPaymentService
                 }
             }
 
-            // Step 2: Lock active employee belonging to the business unit.
-            $this->lockAuthorizedCollectorEmployee($courierEmployeeId, $businessUnitId);
+            // Step 2: Lock active employee strictly belonging to this business unit.
+            $this->lockAuthorizedRemittanceEmployee($courierEmployeeId, $businessUnitId);
 
             // Step 3: Lock payments (ASC), then any active allocations (ASC).
             $lockPayStmt = $this->db->prepare(
@@ -287,30 +298,65 @@ final class OrderPaymentService
                     );
                 }
 
-                $amountCents = (int)round(((float)$pay['amount']) * 100);
-                if ($amountCents <= 0) {
-                    throw new RuntimeException("Payment #{$pid} has an invalid non-positive amount.", self::ERR_UNPROCESSABLE);
+                if ($ord['subtotal_amount'] === null || trim((string)$ord['subtotal_amount']) === '') {
+                    throw new RuntimeException("Order #ORD-{$orderId} is missing a valid purchase subtotal.", self::ERR_UNPROCESSABLE);
                 }
-                $expectedCents += $amountCents;
+                $subtotalCents = $this->parseDecimalToCents((string)$ord['subtotal_amount'], "Order #ORD-{$orderId} subtotal", true);
+                if ($subtotalCents <= 0) {
+                    throw new RuntimeException("Order #ORD-{$orderId} must have a positive purchase subtotal.", self::ERR_UNPROCESSABLE);
+                }
+
+                if ($ord['delivery_fee'] === null || trim((string)$ord['delivery_fee']) === '') {
+                    throw new RuntimeException("Order #ORD-{$orderId} is missing delivery fee metadata.", self::ERR_UNPROCESSABLE);
+                }
+                $deliveryFeeCents = $this->parseDecimalToCents((string)$ord['delivery_fee'], "Order #ORD-{$orderId} delivery fee", true);
+                if ($deliveryFeeCents < 0) {
+                    throw new RuntimeException("Order #ORD-{$orderId} has a negative delivery fee.", self::ERR_UNPROCESSABLE);
+                }
+
+                if ($ord['total_amount'] === null || trim((string)$ord['total_amount']) === '') {
+                    throw new RuntimeException("Order #ORD-{$orderId} is missing total amount.", self::ERR_UNPROCESSABLE);
+                }
+                $orderTotalCents = $this->parseDecimalToCents((string)$ord['total_amount'], "Order #ORD-{$orderId} total", true);
+                if ($orderTotalCents <= 0) {
+                    throw new RuntimeException("Order #ORD-{$orderId} must have a positive total amount.", self::ERR_UNPROCESSABLE);
+                }
+
+                if ($subtotalCents > self::MAX_MONEY_CENTS - $deliveryFeeCents || ($subtotalCents + $deliveryFeeCents) !== $orderTotalCents) {
+                    throw new RuntimeException(
+                        "Order #ORD-{$orderId} purchase subtotal plus delivery fee does not match order total.",
+                        self::ERR_UNPROCESSABLE
+                    );
+                }
+
+                $paymentCents = $this->parseDecimalToCents((string)$pay['amount'], "Payment #{$pid} amount", true);
+                if ($paymentCents <= 0 || $paymentCents !== $orderTotalCents) {
+                    throw new RuntimeException(
+                        "Payment #{$pid} amount does not match Order #ORD-{$orderId} total.",
+                        self::ERR_UNPROCESSABLE
+                    );
+                }
+
+                if ($subtotalCents > self::MAX_MONEY_CENTS - $expectedCents) {
+                    throw new RuntimeException('Remittance batch total exceeds maximum supported DECIMAL(12,2) limit.', self::ERR_UNPROCESSABLE);
+                }
+                $expectedCents += $subtotalCents;
 
                 $validatedRows[] = [
                     'payment_id' => $pid,
                     'order_id' => $orderId,
-                    'amount' => number_format($amountCents / 100, 2, '.', ''),
+                    'amount' => $this->formatCents($subtotalCents),
                 ];
             }
 
-            $expectedTotal = round($expectedCents / 100, 2);
-            if ($declaredRemittedTotal !== null) {
-                $declaredCents = (int)round($declaredRemittedTotal * 100);
-                if ($declaredCents !== $expectedCents) {
-                    throw new RuntimeException(
-                        'Remitted total must match the exact collected COD total (' . number_format($expectedTotal, 2) . '); variance and discrepancy rules are not yet approved.',
-                        self::ERR_UNPROCESSABLE
-                    );
-                }
+            $expectedTotalFormatted = $this->formatCents($expectedCents);
+            if ($declaredCents !== null && $declaredCents !== $expectedCents) {
+                throw new RuntimeException(
+                    "Remitted total must match the exact remittable purchase subtotal total ({$expectedTotalFormatted}, excluding delivery fees).",
+                    self::ERR_UNPROCESSABLE
+                );
             }
-            $remittedTotal = $expectedTotal;
+            $remittedTotalFormatted = $expectedTotalFormatted;
 
             $reference = 'RMT-' . gmdate('YmdHis') . '-' . strtoupper(bin2hex(random_bytes(4)));
 
@@ -324,8 +370,8 @@ final class OrderPaymentService
                 $reference,
                 $businessUnitId,
                 $courierEmployeeId,
-                number_format($expectedTotal, 2, '.', ''),
-                number_format($remittedTotal, 2, '.', ''),
+                $expectedTotalFormatted,
+                $remittedTotalFormatted,
                 $cleanNotes,
             ]);
             $remittanceId = (int)$this->db->lastInsertId();
@@ -361,12 +407,12 @@ final class OrderPaymentService
             Audit::record(
                 $this->db,
                 'courier.cod_remittance_submitted',
-                "Courier employee #{$courierEmployeeId} submitted COD remittance {$reference} covering " . count($validatedRows) . " payment(s) totaling " . number_format($remittedTotal, 2, '.', '') . '.',
+                "Courier employee #{$courierEmployeeId} submitted COD remittance {$reference} covering " . count($validatedRows) . " payment(s) totaling {$remittedTotalFormatted}.",
                 $businessUnitId,
                 $actorUserId,
                 $courierEmployeeId,
                 'remittance:none',
-                "remittance:{$reference}; status:submitted; total:" . number_format($remittedTotal, 2, '.', ''),
+                "remittance:{$reference}; status:submitted; total:{$remittedTotalFormatted}",
                 'courier_cod_remittance',
                 $auditTargetId
             );
@@ -375,8 +421,8 @@ final class OrderPaymentService
                 'remittance_id' => $remittanceId,
                 'remittance_reference' => $reference,
                 'remittance_status' => 'submitted',
-                'expected_total' => $expectedTotal,
-                'remitted_total' => $remittedTotal,
+                'expected_total' => $expectedTotalFormatted,
+                'remitted_total' => $remittedTotalFormatted,
                 'allocations_created' => count($validatedRows),
             ];
         });
@@ -553,6 +599,85 @@ final class OrderPaymentService
         if ($empBuId !== $businessUnitId && !$isSuper) {
             throw new RuntimeException("Employee #{$employeeId} does not belong to business unit #{$businessUnitId}.", self::ERR_FORBIDDEN);
         }
+    }
+
+    /**
+     * Strict unit-scoped active employee lock for remittance submission (no cross-unit Super Admin bypass).
+     */
+    private function lockAuthorizedRemittanceEmployee(int $employeeId, int $businessUnitId): void
+    {
+        if ($employeeId <= 0) {
+            throw new RuntimeException('A valid active employee record is required for COD remittance submission.', self::ERR_FORBIDDEN);
+        }
+
+        $empStmt = $this->db->prepare(
+            "SELECT employee_id, business_unit_id, employee_status
+             FROM employee
+             WHERE employee_id = ?
+             FOR UPDATE"
+        );
+        $empStmt->execute([$employeeId]);
+        $emp = $empStmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$emp || (string)$emp['employee_status'] !== 'active') {
+            throw new RuntimeException("Employee #{$employeeId} is missing or inactive.", self::ERR_FORBIDDEN);
+        }
+
+        $empBuId = $emp['business_unit_id'] !== null ? (int)$emp['business_unit_id'] : 0;
+        if ($empBuId !== $businessUnitId) {
+            throw new RuntimeException("Employee #{$employeeId} does not belong to business unit #{$businessUnitId}.", self::ERR_FORBIDDEN);
+        }
+    }
+
+    /**
+     * Pure-PHP exact decimal-string parser converting DECIMAL(12,2) values to integer cents
+     * without IEEE-754 floating-point conversions.
+     */
+    private function parseDecimalToCents(string $raw, string $fieldLabel, bool $allowNegative = false): int
+    {
+        $trimmed = trim($raw);
+        if ($trimmed === '' || !preg_match('/^([+-])?(\d+)(?:\.(\d+))?$/', $trimmed, $m)) {
+            throw new RuntimeException("{$fieldLabel} must be a valid decimal monetary value.", self::ERR_UNPROCESSABLE);
+        }
+
+        $sign = $m[1] ?? '';
+        $wholeRaw = ltrim($m[2], '0');
+        $wholeStr = $wholeRaw === '' ? '0' : $wholeRaw;
+        $fracStr = $m[3] ?? '';
+
+        if (strlen($fracStr) > 2) {
+            throw new RuntimeException("{$fieldLabel} cannot exceed 2 decimal places.", self::ERR_UNPROCESSABLE);
+        }
+
+        $fracCents = (int)str_pad($fracStr, 2, '0', STR_PAD_RIGHT);
+        if (strlen($wholeStr) > 10) {
+            throw new RuntimeException("{$fieldLabel} exceeds supported DECIMAL(12,2) range.", self::ERR_UNPROCESSABLE);
+        }
+
+        $wholeInt = (int)$wholeStr;
+        if ($wholeInt > intdiv(self::MAX_MONEY_CENTS - $fracCents, 100)) {
+            throw new RuntimeException("{$fieldLabel} exceeds supported DECIMAL(12,2) range.", self::ERR_UNPROCESSABLE);
+        }
+
+        $cents = ($wholeInt * 100) + $fracCents;
+        if ($sign === '-') {
+            if (!$allowNegative && $cents > 0) {
+                throw new RuntimeException("{$fieldLabel} cannot be negative.", self::ERR_UNPROCESSABLE);
+            }
+            $cents = -$cents;
+        }
+
+        return $cents;
+    }
+
+    /**
+     * Pure-PHP integer-cent formatter producing exact 2-decimal SQL strings.
+     */
+    private function formatCents(int $cents): string
+    {
+        $sign = $cents < 0 ? '-' : '';
+        $abs = abs($cents);
+        return sprintf('%s%d.%02d', $sign, intdiv($abs, 100), $abs % 100);
     }
 
     /**
