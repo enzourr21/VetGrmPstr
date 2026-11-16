@@ -486,22 +486,49 @@ try {
             && (int)$invTransitAfter['in_transit'] === 4
     );
 
-    // 8b. Corrupted invariant (committed < in_transit) fails closed with ERR_CONFLICT without counting excess in_transit
-    $pCorrupt = $createGlobalProduct('ChkD Corrupt Invariant');
-    [$bpCorrupt, $invCorrupt] = $addBusinessProduct($pCorrupt, $unitA, 75.00, 10, 2, 4, 0);
+    // 8b. DB constraint chk_inventory_committed_ge_in_transit prevents committed < in_transit,
+    //     and valid boundary committed === in_transit (shelf_committed = 0) protects dispatched transit units cleanly.
+    $pCorruptAttempt = $createGlobalProduct('ChkD Invariant Guard');
+    $stmtBpGuard = $pdo->prepare(
+        "INSERT INTO business_product (business_unit_id, product_id, selling_price, requires_batch_tracking, product_status)
+         VALUES (?, ?, 75.00, 0, 'active')"
+    );
+    $stmtBpGuard->execute([$unitA, $pCorruptAttempt]);
+    $bpCorruptAttempt = (int)$pdo->lastInsertId();
 
-    $invariantRejected = false;
+    $dbConstraintBlocked = false;
+    try {
+        $pdo->prepare("INSERT INTO inventory (business_product_id, on_hand, committed, in_transit) VALUES (?, 10, 2, 4)")
+            ->execute([$bpCorruptAttempt]);
+    } catch (PDOException $e) {
+        $dbConstraintBlocked = str_contains($e->getMessage(), 'chk_inventory_committed_ge_in_transit') || str_contains($e->getMessage(), '3819');
+    }
+
+    // Valid fixture satisfying chk_inventory_committed_ge_in_transit: on_hand = 10, committed = 4, in_transit = 4 (shelf_committed = 0)
+    $pValidTransit = $createGlobalProduct('ChkD Equal InTransit');
+    [$bpValidTransit, $invValidTransit] = $addBusinessProduct($pValidTransit, $unitA, 75.00, 10, 4, 4, 0);
+
+    $oversellEqualRejected = false;
     try {
         $service->recordSale($unitA, $empUid, $empId, null, 'Cash', [
-            ['business_product_id' => $bpCorrupt, 'quantity' => 1],
+            ['business_product_id' => $bpValidTransit, 'quantity' => 11],
         ]);
     } catch (RuntimeException $e) {
-        $invariantRejected = $e->getCode() === PosSaleService::ERR_CONFLICT;
+        $oversellEqualRejected = $e->getCode() === PosSaleService::ERR_UNPROCESSABLE;
     }
-    $invCorruptAfter = (int)$pdo->query("SELECT on_hand FROM inventory WHERE inventory_id = {$invCorrupt}")->fetchColumn();
+
+    $res8b = $service->recordSale($unitA, $empUid, $empId, null, 'Cash', [
+        ['business_product_id' => $bpValidTransit, 'quantity' => 1],
+    ]);
+    $cleanup['sales'][] = $res8b['sale_id'];
+    $invValidAfter = $pdo->query("SELECT on_hand, committed, in_transit FROM inventory WHERE inventory_id = {$invValidTransit}")->fetch(PDO::FETCH_ASSOC);
     check(
-        'Violated Committed >= In Transit invariant fails closed with ERR_CONFLICT and 0 stock changes',
-        $invariantRejected && $invCorruptAfter === 10
+        'DB enforces chk_inventory_committed_ge_in_transit and POS handles committed = in_transit (shelf_committed = 0) without error',
+        $dbConstraintBlocked
+            && $oversellEqualRejected
+            && (int)$invValidAfter['on_hand'] === 9
+            && (int)$invValidAfter['committed'] === 4
+            && (int)$invValidAfter['in_transit'] === 4
     );
 
     // 8c. Missing inventory record on active business_product rejects sale cleanly without partial records

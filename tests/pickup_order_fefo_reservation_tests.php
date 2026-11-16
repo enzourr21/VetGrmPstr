@@ -122,7 +122,7 @@ try {
     $rows1 = $pdo->query("SELECT batch_id, reserved_quantity, reservation_status FROM inventory_reservation WHERE order_item_id = {$oi1} ORDER BY reservation_id")->fetchAll();
     $invRow1 = $pdo->query("SELECT on_hand, committed, in_transit FROM inventory WHERE inventory_id = {$invSplit}")->fetch();
     $bSoonQty = (int)$pdo->query("SELECT quantity FROM inventory_batch WHERE batch_id = {$bSoon}")->fetchColumn();
-    $audit1 = $pdo->query("SELECT actor_user_id, affected_employee_id FROM audit_log WHERE target_type = 'customer_order' AND target_id = {$ord1} ORDER BY audit_id DESC LIMIT 1")->fetch();
+    $audit1 = $pdo->query("SELECT actor_user_id, affected_employee_id FROM audit_log WHERE target_type = 'customer_order' AND target_id = {$ord1} ORDER BY log_id DESC LIMIT 1")->fetch();
 
     check('Multi-batch FEFO split creates 2 active reservations skipping expired', count($rows1) === 2 && (int)$rows1[0]['batch_id'] === $bSoon && (int)$rows1[0]['reserved_quantity'] === 4 && (int)$rows1[1]['batch_id'] === $bLater && (int)$rows1[1]['reserved_quantity'] === 3);
     check('Confirmation increases committed without changing on_hand or batch.quantity', (int)$invRow1['on_hand'] === 15 && (int)$invRow1['committed'] === 7 && (int)$invRow1['in_transit'] === 0 && $bSoonQty === 4 && $res1['reservations_created'] === 2);
@@ -253,7 +253,7 @@ try {
     $fulResRows = $pdo->query("SELECT reservation_id, order_item_id, batch_id, reserved_quantity, reservation_status FROM inventory_reservation WHERE order_item_id IN ({$oiFulBatch}, {$oiFulNonBatch}) ORDER BY reservation_id ASC")->fetchAll();
     $fulMovRows = $pdo->query("SELECT reservation_id, batch_id, movement_type, quantity FROM inventory_movement WHERE reservation_id IN ({$fulResRows[0]['reservation_id']}, {$fulResRows[1]['reservation_id']}) ORDER BY movement_id ASC")->fetchAll();
     $ordFullStatus = (string)$pdo->query("SELECT order_status FROM customer_order WHERE order_id = {$ordFull}")->fetchColumn();
-    $fulAudit = $pdo->query("SELECT actor_user_id, affected_employee_id FROM audit_log WHERE target_type = 'customer_order' AND target_id = {$ordFull} ORDER BY audit_id DESC LIMIT 1")->fetch();
+    $fulAudit = $pdo->query("SELECT actor_user_id, affected_employee_id FROM audit_log WHERE target_type = 'customer_order' AND target_id = {$ordFull} ORDER BY log_id DESC LIMIT 1")->fetch();
 
     check(
         'Full handover transitions ready_for_pickup -> completed, deducts on_hand/committed/batch, keeps reserved_quantity, and inserts negative order_fulfillment movements',
