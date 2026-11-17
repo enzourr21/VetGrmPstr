@@ -533,6 +533,304 @@ final class OrderPaymentService
     }
 
     /**
+     * Atomically process all remaining eligible active allocations in a single COD remittance batch
+     * within one database transaction as an authorized Pet Store Business Manager:
+     * - `submitted + pending`: completes handover & verifies with `verification_mode = 'manager_collection'`.
+     * - `completed + pending`: verifies manually with `verification_mode = 'manual'`, preserving original handover actor & timestamp.
+     * - Already `completed + verified`: left unchanged.
+     * Recalculates and persists the parent batch header at the end of the transaction.
+     *
+     * @return array{
+     *     remittance_id:int,
+     *     remittance_reference:string,
+     *     remittance_status:string,
+     *     collected_count:int,
+     *     verified_count:int,
+     *     unchanged_count:int,
+     *     processed_count:int,
+     *     expected_total:string,
+     *     verified_total:?string,
+     *     verified_by_employee_id:?int,
+     *     verified_at:?string,
+     *     batch:array<string, mixed>
+     * }
+     */
+    public function processRemittanceBatch(
+        int $remittanceId,
+        int $actorUserId,
+        int $businessUnitId = self::PET_STORE_UNIT_ID
+    ): array {
+        if ($remittanceId <= 0) {
+            throw new RuntimeException('Remittance batch ID must be a positive integer.', self::ERR_UNPROCESSABLE);
+        }
+        if ($businessUnitId !== self::PET_STORE_UNIT_ID) {
+            throw new RuntimeException(
+                'COD remittance lifecycle operations are restricted to Pet Store (business unit #1).',
+                self::ERR_FORBIDDEN
+            );
+        }
+        if ($actorUserId <= 0) {
+            throw new RuntimeException('A valid authenticated user account is required.', self::ERR_FORBIDDEN);
+        }
+
+        return $this->runInTransaction(function () use ($remittanceId, $actorUserId, $businessUnitId): array {
+            $hdrProbeStmt = $this->db->prepare(
+                "SELECT remittance_id, business_unit_id FROM courier_cod_remittance WHERE remittance_id = ? LIMIT 1"
+            );
+            $hdrProbeStmt->execute([$remittanceId]);
+            $hdrProbe = $hdrProbeStmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$hdrProbe) {
+                $this->lockAuthorizedRemittanceActorByUser($actorUserId, $businessUnitId, 'BUSINESS_MANAGER');
+                throw new RuntimeException("COD remittance batch #{$remittanceId} was not found.", self::ERR_NOT_FOUND);
+            }
+
+            $allocProbeStmt = $this->db->prepare(
+                "SELECT allocation_id, order_id, payment_id
+                 FROM courier_cod_remittance_allocation
+                 WHERE remittance_id = ? AND allocation_status = 'active'
+                 ORDER BY order_id ASC, payment_id ASC"
+            );
+            $allocProbeStmt->execute([$remittanceId]);
+            $probeRows = $allocProbeStmt->fetchAll(PDO::FETCH_ASSOC);
+
+            $candidateOrderIds = [];
+            $candidatePaymentIds = [];
+            foreach ($probeRows as $pr) {
+                $candidateOrderIds[(int)$pr['order_id']] = (int)$pr['order_id'];
+                $candidatePaymentIds[(int)$pr['payment_id']] = (int)$pr['payment_id'];
+            }
+            $candidateOrderIds = array_values($candidateOrderIds);
+            sort($candidateOrderIds, SORT_NUMERIC);
+            $candidatePaymentIds = array_values($candidatePaymentIds);
+            sort($candidatePaymentIds, SORT_NUMERIC);
+
+            // 1. Lock customer_order rows in ascending order_id order.
+            $lockedOrders = [];
+            if ($candidateOrderIds) {
+                $ordPh = implode(',', array_fill(0, count($candidateOrderIds), '?'));
+                $ordStmt = $this->db->prepare(
+                    "SELECT order_id, business_unit_id, fulfillment_method, order_status, delivery_employee_id,
+                            subtotal_amount, delivery_fee, total_amount
+                     FROM customer_order
+                     WHERE order_id IN ({$ordPh})
+                     ORDER BY order_id ASC
+                     FOR UPDATE"
+                );
+                $ordStmt->execute($candidateOrderIds);
+                foreach ($ordStmt->fetchAll(PDO::FETCH_ASSOC) as $oRow) {
+                    $lockedOrders[(int)$oRow['order_id']] = $oRow;
+                }
+            }
+
+            // 2. Lock and authorize the active Pet Store Business Manager actor.
+            $actorEmployeeId = $this->lockAuthorizedRemittanceActorByUser($actorUserId, $businessUnitId, 'BUSINESS_MANAGER');
+
+            if ((int)$hdrProbe['business_unit_id'] !== $businessUnitId) {
+                throw new RuntimeException(
+                    "Remittance batch #{$remittanceId} does not belong to business unit #{$businessUnitId}.",
+                    self::ERR_FORBIDDEN
+                );
+            }
+
+            // 3. Lock payment rows and check refunds in ascending payment_id order.
+            $lockedPayments = [];
+            $refundedPaymentIds = [];
+            if ($candidatePaymentIds) {
+                $payPh = implode(',', array_fill(0, count($candidatePaymentIds), '?'));
+                $payStmt = $this->db->prepare(
+                    "SELECT payment_id, order_id, sale_id, invoice_id, payment_type, amount, payment_method, payment_status,
+                            collection_channel, collected_by_employee_id, collected_at
+                     FROM payment
+                     WHERE payment_id IN ({$payPh})
+                     ORDER BY payment_id ASC
+                     FOR UPDATE"
+                );
+                $payStmt->execute($candidatePaymentIds);
+                foreach ($payStmt->fetchAll(PDO::FETCH_ASSOC) as $pRow) {
+                    $lockedPayments[(int)$pRow['payment_id']] = $pRow;
+                }
+
+                $refCheckStmt = $this->db->prepare(
+                    "SELECT DISTINCT original_payment_id
+                     FROM payment
+                     WHERE original_payment_id IN ({$payPh})
+                       AND payment_type = 'refund'
+                       AND payment_status = 'completed'
+                     ORDER BY original_payment_id ASC
+                     FOR UPDATE"
+                );
+                $refCheckStmt->execute($candidatePaymentIds);
+                foreach ($refCheckStmt->fetchAll(PDO::FETCH_COLUMN) as $rPid) {
+                    $refundedPaymentIds[(int)$rPid] = true;
+                }
+            }
+
+            // 4. Lock parent courier_cod_remittance batch header.
+            $hdrStmt = $this->db->prepare(
+                "SELECT remittance_id, remittance_reference, business_unit_id, courier_employee_id,
+                        expected_total, remitted_total, verified_total, remittance_status,
+                        submitted_at, verified_by_employee_id, verified_at, notes
+                 FROM courier_cod_remittance
+                 WHERE remittance_id = ?
+                 FOR UPDATE"
+            );
+            $hdrStmt->execute([$remittanceId]);
+            $header = $hdrStmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$header) {
+                throw new RuntimeException("COD remittance batch #{$remittanceId} was not found.", self::ERR_NOT_FOUND);
+            }
+            if ((int)$header['business_unit_id'] !== $businessUnitId) {
+                throw new RuntimeException(
+                    "Remittance batch #{$remittanceId} does not belong to business unit #{$businessUnitId}.",
+                    self::ERR_FORBIDDEN
+                );
+            }
+
+            $courierEmpId = (int)$header['courier_employee_id'];
+            if ($actorEmployeeId === $courierEmpId) {
+                throw new RuntimeException(
+                    "Employee #{$actorEmployeeId} is the courier assigned to remittance batch {$header['remittance_reference']} and cannot collect or verify it.",
+                    self::ERR_FORBIDDEN
+                );
+            }
+
+            $oldBatchStatus = (string)$header['remittance_status'];
+            if (!in_array($oldBatchStatus, ['submitted', 'completed'], true)) {
+                throw new RuntimeException(
+                    "Remittance batch {$header['remittance_reference']} is already '{$oldBatchStatus}' and cannot be processed.",
+                    self::ERR_CONFLICT
+                );
+            }
+
+            // 5. Lock all allocations for this batch in ascending allocation_id order.
+            $allocStmt = $this->db->prepare(
+                "SELECT allocation_id, remittance_id, payment_id, order_id, business_unit_id,
+                        expected_amount, allocated_amount, allocation_status,
+                        handover_status, completed_by_employee_id, completed_at,
+                        verification_status, verified_by_employee_id, verified_at, verification_mode
+                 FROM courier_cod_remittance_allocation
+                 WHERE remittance_id = ?
+                 ORDER BY allocation_id ASC
+                 FOR UPDATE"
+            );
+            $allocStmt->execute([$remittanceId]);
+            $allAllocations = $allocStmt->fetchAll(PDO::FETCH_ASSOC);
+
+            $activeAllocations = array_values(array_filter(
+                $allAllocations,
+                static fn(array $row): bool => (string)$row['allocation_status'] === 'active'
+            ));
+
+            if (!$activeAllocations) {
+                throw new RuntimeException(
+                    "Remittance batch {$header['remittance_reference']} has no active allocations.",
+                    self::ERR_UNPROCESSABLE
+                );
+            }
+
+            // Validate every active allocation and determine transition operation before modifying any row.
+            $plan = [];
+            $collectedCount = 0;
+            $verifiedCount = 0;
+            $unchangedCount = 0;
+
+            foreach ($activeAllocations as $alloc) {
+                $allocId = (int)$alloc['allocation_id'];
+                $oId = (int)$alloc['order_id'];
+                $pId = (int)$alloc['payment_id'];
+                $order = $lockedOrders[$oId] ?? null;
+                $payment = $lockedPayments[$pId] ?? null;
+                $hasRefund = isset($refundedPaymentIds[$pId]);
+
+                $this->assertAllocationEligibleForLifecycleTransition(
+                    $alloc,
+                    $order,
+                    $payment,
+                    $hasRefund,
+                    $businessUnitId,
+                    $actorEmployeeId,
+                    $courierEmpId
+                );
+
+                $hStatus = (string)$alloc['handover_status'];
+                $vStatus = (string)$alloc['verification_status'];
+
+                if ($hStatus === 'completed' && $vStatus === 'verified') {
+                    if ($alloc['completed_by_employee_id'] === null || $alloc['completed_at'] === null || $alloc['verified_at'] === null || $alloc['verification_mode'] === null) {
+                        throw new RuntimeException(
+                            "Allocation #{$allocId} has inconsistent verified metadata.",
+                            self::ERR_UNPROCESSABLE
+                        );
+                    }
+                    $unchangedCount++;
+                    continue;
+                }
+
+                if ($hStatus === 'submitted' && $vStatus === 'pending') {
+                    $plan[] = [$alloc, 'manager_collection'];
+                    $collectedCount++;
+                } elseif ($hStatus === 'completed' && $vStatus === 'pending') {
+                    $plan[] = [$alloc, 'manager_manual_verify'];
+                    $verifiedCount++;
+                } else {
+                    throw new RuntimeException(
+                        "Allocation #{$allocId} is in an invalid lifecycle state ({$hStatus}/{$vStatus}).",
+                        self::ERR_UNPROCESSABLE
+                    );
+                }
+            }
+
+            if (!$plan) {
+                throw new RuntimeException(
+                    "Remittance batch {$header['remittance_reference']} has no remaining pending allocations to process.",
+                    self::ERR_CONFLICT
+                );
+            }
+
+            // 6. Execute guarded transitions sequentially inside the same transaction.
+            foreach ($plan as [$alloc, $opType]) {
+                $this->applyAllocationLifecycleTransition($alloc, $remittanceId, $businessUnitId, $actorEmployeeId, $opType, false);
+            }
+
+            // 7. Recalculate and persist parent batch header state from active allocations.
+            $batchState = $this->recalculateAndPersistBatchHeaderInTransaction($remittanceId, $businessUnitId, $header);
+
+            $processedCount = $collectedCount + $verifiedCount;
+            $auditTargetId = $remittanceId <= 4294967295 ? $remittanceId : null;
+            $verifierLabel = $batchState['verified_by_employee_id'] !== null ? (string)$batchState['verified_by_employee_id'] : 'none';
+            Audit::record(
+                $this->db,
+                'manager.cod_remittance_batch_processed',
+                "Business Manager employee #{$actorEmployeeId} processed COD remittance batch {$header['remittance_reference']} ({$collectedCount} collected, {$verifiedCount} verified, {$unchangedCount} already verified; verified total {$batchState['verified_total']}).",
+                $businessUnitId,
+                $actorUserId,
+                $actorEmployeeId,
+                "batch_status:{$oldBatchStatus}",
+                "batch_status:{$batchState['remittance_status']}; collected:{$collectedCount}; verified:{$verifiedCount}; unchanged:{$unchangedCount}; batch_verifier:{$verifierLabel}",
+                'courier_cod_remittance',
+                $auditTargetId
+            );
+
+            return [
+                'remittance_id' => $remittanceId,
+                'remittance_reference' => (string)$batchState['remittance_reference'],
+                'remittance_status' => (string)$batchState['remittance_status'],
+                'collected_count' => $collectedCount,
+                'verified_count' => $verifiedCount,
+                'unchanged_count' => $unchangedCount,
+                'processed_count' => $processedCount,
+                'expected_total' => (string)$batchState['expected_total'],
+                'verified_total' => $batchState['verified_total'],
+                'verified_by_employee_id' => $batchState['verified_by_employee_id'],
+                'verified_at' => $batchState['verified_at'],
+                'batch' => $batchState,
+            ];
+        });
+    }
+
+    /**
      * Shared transactional implementation for per-allocation COD remittance lifecycle transitions.
      *
      * Lock hierarchy:
@@ -605,7 +903,7 @@ final class OrderPaymentService
             if (!$order) {
                 throw new RuntimeException("Order #{$orderId} for allocation #{$allocationId} was not found.", self::ERR_NOT_FOUND);
             }
-            if ((int)$probe['business_unit_id'] !== $businessUnitId || (int)$order['business_unit_id'] !== $businessUnitId) {
+            if ((int)$probe['business_unit_id'] !== $businessUnitId) {
                 throw new RuntimeException(
                     "Allocation #{$allocationId} does not belong to business unit #{$businessUnitId}.",
                     self::ERR_FORBIDDEN
@@ -637,30 +935,7 @@ final class OrderPaymentService
                  FOR UPDATE"
             );
             $refCheckStmt->execute([$paymentId]);
-            if ((string)$payment['payment_status'] === 'refunded' || $refCheckStmt->fetchColumn() !== false) {
-                throw new RuntimeException(
-                    "Payment #{$paymentId} has been refunded and its COD remittance allocation cannot be transitioned.",
-                    self::ERR_CONFLICT
-                );
-            }
-
-            if ((string)$order['fulfillment_method'] !== 'delivery' || (string)$order['order_status'] !== 'completed') {
-                throw new RuntimeException(
-                    "Order #ORD-{$orderId} must remain a completed delivery order.",
-                    self::ERR_CONFLICT
-                );
-            }
-            if (
-                (string)$payment['payment_type'] !== 'payment'
-                || (string)$payment['payment_status'] !== 'completed'
-                || (string)($payment['collection_channel'] ?? '') !== 'courier_cod'
-                || $payment['collected_at'] === null
-            ) {
-                throw new RuntimeException(
-                    "Payment #{$paymentId} is not a completed courier_cod payment.",
-                    self::ERR_CONFLICT
-                );
-            }
+            $hasRefund = $refCheckStmt->fetchColumn() !== false;
 
             // 4. For Receptionist handover completion, read and lock Pet Store auto_verify_cod_remittance setting.
             $autoVerifyEnabled = false;
@@ -721,23 +996,16 @@ final class OrderPaymentService
                 throw new RuntimeException("COD remittance allocation #{$allocationId} was not found in batch #{$remittanceId}.", self::ERR_NOT_FOUND);
             }
 
-            // Enforce non-self courier restriction across batch header, payment collector, and order delivery courier.
             $courierEmpId = (int)$header['courier_employee_id'];
-            $collectorEmpId = (int)($payment['collected_by_employee_id'] ?? 0);
-            $deliveryEmpId = (int)($order['delivery_employee_id'] ?? 0);
-            if ($actorEmployeeId === $courierEmpId || $actorEmployeeId === $collectorEmpId || $actorEmployeeId === $deliveryEmpId) {
-                throw new RuntimeException(
-                    "Employee #{$actorEmployeeId} is the courier assigned to Order #ORD-{$orderId} and cannot complete or verify its COD remittance allocation.",
-                    self::ERR_FORBIDDEN
-                );
-            }
-
-            if ((string)$alloc['allocation_status'] !== 'active') {
-                throw new RuntimeException(
-                    "Allocation #{$allocationId} is not active (current: {$alloc['allocation_status']}).",
-                    self::ERR_CONFLICT
-                );
-            }
+            $this->assertAllocationEligibleForLifecycleTransition(
+                $alloc,
+                $order,
+                $payment,
+                $hasRefund,
+                $businessUnitId,
+                $actorEmployeeId,
+                $courierEmpId
+            );
 
             $batchStatus = (string)$header['remittance_status'];
             if (!in_array($batchStatus, ['submitted', 'completed'], true)) {
@@ -747,173 +1015,15 @@ final class OrderPaymentService
                 );
             }
 
-            // Verify allocation financial amount parity before transitioning.
-            $subtotalCents = $this->parseDecimalToCents((string)($order['subtotal_amount'] ?? ''), "Order #ORD-{$orderId} subtotal", true);
-            $expectedAllocCents = $this->parseDecimalToCents((string)$alloc['expected_amount'], "Allocation #{$allocationId} expected amount", true);
-            $allocatedCents = $this->parseDecimalToCents((string)$alloc['allocated_amount'], "Allocation #{$allocationId} allocated amount", true);
-            if ($subtotalCents <= 0 || $expectedAllocCents !== $subtotalCents || $allocatedCents !== $expectedAllocCents) {
-                throw new RuntimeException(
-                    "Allocation #{$allocationId} financial amounts do not match Order #ORD-{$orderId} purchase subtotal.",
-                    self::ERR_UNPROCESSABLE
-                );
-            }
-
-            $curHandover = (string)$alloc['handover_status'];
-            $curVerification = (string)$alloc['verification_status'];
-            $oldStateSummary = "handover:{$curHandover}; verification:{$curVerification}; batch:{$batchStatus}";
-
-            if ($operationType === 'receptionist_handover') {
-                if ($curHandover !== 'submitted' || $curVerification !== 'pending' || $alloc['completed_by_employee_id'] !== null || $alloc['completed_at'] !== null) {
-                    throw new RuntimeException(
-                        "Allocation #{$allocationId} handover has already been completed.",
-                        self::ERR_CONFLICT
-                    );
-                }
-
-                if ($autoVerifyEnabled) {
-                    $updStmt = $this->db->prepare(
-                        "UPDATE courier_cod_remittance_allocation
-                         SET handover_status = 'completed',
-                             completed_by_employee_id = ?,
-                             completed_at = UTC_TIMESTAMP(),
-                             verification_status = 'verified',
-                             verified_by_employee_id = NULL,
-                             verified_at = UTC_TIMESTAMP(),
-                             verification_mode = 'auto_setting',
-                             updated_at = NOW()
-                         WHERE allocation_id = ?
-                           AND remittance_id = ?
-                           AND business_unit_id = ?
-                           AND allocation_status = 'active'
-                           AND handover_status = 'submitted'
-                           AND completed_by_employee_id IS NULL
-                           AND completed_at IS NULL
-                           AND verification_status = 'pending'
-                           AND verified_by_employee_id IS NULL
-                           AND verified_at IS NULL
-                           AND verification_mode IS NULL"
-                    );
-                    $updStmt->execute([$actorEmployeeId, $allocationId, $remittanceId, $businessUnitId]);
-                } else {
-                    $updStmt = $this->db->prepare(
-                        "UPDATE courier_cod_remittance_allocation
-                         SET handover_status = 'completed',
-                             completed_by_employee_id = ?,
-                             completed_at = UTC_TIMESTAMP(),
-                             updated_at = NOW()
-                         WHERE allocation_id = ?
-                           AND remittance_id = ?
-                           AND business_unit_id = ?
-                           AND allocation_status = 'active'
-                           AND handover_status = 'submitted'
-                           AND completed_by_employee_id IS NULL
-                           AND completed_at IS NULL
-                           AND verification_status = 'pending'
-                           AND verified_by_employee_id IS NULL
-                           AND verified_at IS NULL
-                           AND verification_mode IS NULL"
-                    );
-                    $updStmt->execute([$actorEmployeeId, $allocationId, $remittanceId, $businessUnitId]);
-                }
-
-                if ($updStmt->rowCount() !== 1) {
-                    throw new RuntimeException(
-                        "Allocation #{$allocationId} could not be marked completed due to a concurrent state change.",
-                        self::ERR_CONFLICT
-                    );
-                }
-                $auditActionCode = 'petstore_receptionist.cod_remittance_allocation_completed';
-            } elseif ($operationType === 'manager_collection') {
-                if ($curHandover !== 'submitted' || $curVerification !== 'pending' || $alloc['completed_by_employee_id'] !== null || $alloc['completed_at'] !== null) {
-                    throw new RuntimeException(
-                        "Allocation #{$allocationId} is no longer awaiting handover and cannot use direct manager collection.",
-                        self::ERR_CONFLICT
-                    );
-                }
-
-                $updStmt = $this->db->prepare(
-                    "UPDATE courier_cod_remittance_allocation
-                     SET handover_status = 'completed',
-                         completed_by_employee_id = ?,
-                         completed_at = UTC_TIMESTAMP(),
-                         verification_status = 'verified',
-                         verified_by_employee_id = ?,
-                         verified_at = UTC_TIMESTAMP(),
-                         verification_mode = 'manager_collection',
-                         updated_at = NOW()
-                     WHERE allocation_id = ?
-                       AND remittance_id = ?
-                       AND business_unit_id = ?
-                       AND allocation_status = 'active'
-                       AND handover_status = 'submitted'
-                       AND completed_by_employee_id IS NULL
-                       AND completed_at IS NULL
-                       AND verification_status = 'pending'
-                       AND verified_by_employee_id IS NULL
-                       AND verified_at IS NULL
-                       AND verification_mode IS NULL"
-                );
-                $updStmt->execute([$actorEmployeeId, $actorEmployeeId, $allocationId, $remittanceId, $businessUnitId]);
-
-                if ($updStmt->rowCount() !== 1) {
-                    throw new RuntimeException(
-                        "Allocation #{$allocationId} could not be collected due to a concurrent state change.",
-                        self::ERR_CONFLICT
-                    );
-                }
-                $auditActionCode = 'manager.cod_remittance_allocation_collected';
-            } elseif ($operationType === 'manager_manual_verify') {
-                if ($curHandover !== 'completed' || $alloc['completed_by_employee_id'] === null || $alloc['completed_at'] === null) {
-                    throw new RuntimeException(
-                        "Allocation #{$allocationId} must complete handover before manual verification.",
-                        self::ERR_CONFLICT
-                    );
-                }
-                if ($curVerification !== 'pending' || $alloc['verified_by_employee_id'] !== null || $alloc['verified_at'] !== null || $alloc['verification_mode'] !== null) {
-                    throw new RuntimeException(
-                        "Allocation #{$allocationId} has already been verified.",
-                        self::ERR_CONFLICT
-                    );
-                }
-
-                $updStmt = $this->db->prepare(
-                    "UPDATE courier_cod_remittance_allocation
-                     SET verification_status = 'verified',
-                         verified_by_employee_id = ?,
-                         verified_at = UTC_TIMESTAMP(),
-                         verification_mode = 'manual',
-                         updated_at = NOW()
-                     WHERE allocation_id = ?
-                       AND remittance_id = ?
-                       AND business_unit_id = ?
-                       AND allocation_status = 'active'
-                       AND handover_status = 'completed'
-                       AND completed_by_employee_id = ?
-                       AND completed_at = ?
-                       AND verification_status = 'pending'
-                       AND verified_by_employee_id IS NULL
-                       AND verified_at IS NULL
-                       AND verification_mode IS NULL"
-                );
-                $updStmt->execute([
-                    $actorEmployeeId,
-                    $allocationId,
-                    $remittanceId,
-                    $businessUnitId,
-                    (int)$alloc['completed_by_employee_id'],
-                    (string)$alloc['completed_at'],
-                ]);
-
-                if ($updStmt->rowCount() !== 1) {
-                    throw new RuntimeException(
-                        "Allocation #{$allocationId} could not be verified due to a concurrent state change.",
-                        self::ERR_CONFLICT
-                    );
-                }
-                $auditActionCode = 'manager.cod_remittance_allocation_verified';
-            } else {
-                throw new RuntimeException("Unsupported remittance operation: {$operationType}", self::ERR_UNPROCESSABLE);
-            }
+            $oldStateSummary = "handover:{$alloc['handover_status']}; verification:{$alloc['verification_status']}; batch:{$batchStatus}";
+            $auditActionCode = $this->applyAllocationLifecycleTransition(
+                $alloc,
+                $remittanceId,
+                $businessUnitId,
+                $actorEmployeeId,
+                $operationType,
+                $autoVerifyEnabled
+            );
 
             // 7. Recalculate and persist parent batch header state from all active allocations.
             $batchState = $this->recalculateAndPersistBatchHeaderInTransaction($remittanceId, $businessUnitId, $header);
@@ -971,6 +1081,273 @@ final class OrderPaymentService
                 'batch' => $batchState,
             ];
         });
+    }
+
+    /**
+     * Validate parent order/payment/refund/unit/non-self courier and exact subtotal parity
+     * for a locked active allocation row inside an open transaction.
+     *
+     * @param array<string, mixed> $alloc
+     * @param array<string, mixed>|null $order
+     * @param array<string, mixed>|null $payment
+     */
+    private function assertAllocationEligibleForLifecycleTransition(
+        array $alloc,
+        ?array $order,
+        ?array $payment,
+        bool $hasRefund,
+        int $businessUnitId,
+        int $actorEmployeeId,
+        int $courierEmpId
+    ): void {
+        $allocationId = (int)$alloc['allocation_id'];
+        $orderId = (int)$alloc['order_id'];
+        $paymentId = (int)$alloc['payment_id'];
+
+        if ((int)$alloc['business_unit_id'] !== $businessUnitId) {
+            throw new RuntimeException(
+                "Allocation #{$allocationId} does not belong to business unit #{$businessUnitId}.",
+                self::ERR_FORBIDDEN
+            );
+        }
+        if ((string)$alloc['allocation_status'] !== 'active') {
+            throw new RuntimeException(
+                "Allocation #{$allocationId} is not active (current: {$alloc['allocation_status']}).",
+                self::ERR_CONFLICT
+            );
+        }
+        if (!$order) {
+            throw new RuntimeException("Order #{$orderId} for allocation #{$allocationId} was not found.", self::ERR_NOT_FOUND);
+        }
+        if ((int)$order['business_unit_id'] !== $businessUnitId) {
+            throw new RuntimeException(
+                "Order #{$orderId} for allocation #{$allocationId} does not belong to business unit #{$businessUnitId}.",
+                self::ERR_FORBIDDEN
+            );
+        }
+        if (!$payment || (int)($payment['order_id'] ?? 0) !== $orderId) {
+            throw new RuntimeException("Payment #{$paymentId} for allocation #{$allocationId} was not found.", self::ERR_NOT_FOUND);
+        }
+        if ($hasRefund || (string)$payment['payment_status'] === 'refunded') {
+            throw new RuntimeException(
+                "Payment #{$paymentId} has been refunded and its COD remittance allocation cannot be transitioned.",
+                self::ERR_CONFLICT
+            );
+        }
+        if ((string)$order['fulfillment_method'] !== 'delivery' || (string)$order['order_status'] !== 'completed') {
+            throw new RuntimeException(
+                "Order #ORD-{$orderId} must remain a completed delivery order.",
+                self::ERR_CONFLICT
+            );
+        }
+        if (
+            (string)$payment['payment_type'] !== 'payment'
+            || (string)$payment['payment_status'] !== 'completed'
+            || (string)($payment['collection_channel'] ?? '') !== 'courier_cod'
+            || $payment['collected_at'] === null
+        ) {
+            throw new RuntimeException(
+                "Payment #{$paymentId} is not a completed courier_cod payment.",
+                self::ERR_CONFLICT
+            );
+        }
+
+        $collectorEmpId = (int)($payment['collected_by_employee_id'] ?? 0);
+        $deliveryEmpId = (int)($order['delivery_employee_id'] ?? 0);
+        if ($actorEmployeeId === $courierEmpId || $actorEmployeeId === $collectorEmpId || $actorEmployeeId === $deliveryEmpId) {
+            throw new RuntimeException(
+                "Employee #{$actorEmployeeId} is the courier assigned to Order #ORD-{$orderId} and cannot complete or verify its COD remittance allocation.",
+                self::ERR_FORBIDDEN
+            );
+        }
+
+        $subtotalCents = $this->parseDecimalToCents((string)($order['subtotal_amount'] ?? ''), "Order #ORD-{$orderId} subtotal", true);
+        $expectedAllocCents = $this->parseDecimalToCents((string)$alloc['expected_amount'], "Allocation #{$allocationId} expected amount", true);
+        $allocatedCents = $this->parseDecimalToCents((string)$alloc['allocated_amount'], "Allocation #{$allocationId} allocated amount", true);
+        if ($subtotalCents <= 0 || $expectedAllocCents !== $subtotalCents || $allocatedCents !== $expectedAllocCents) {
+            throw new RuntimeException(
+                "Allocation #{$allocationId} financial amounts do not match Order #ORD-{$orderId} purchase subtotal.",
+                self::ERR_UNPROCESSABLE
+            );
+        }
+    }
+
+    /**
+     * Execute the guarded single-allocation UPDATE for receptionist handover, manager direct collection,
+     * or manager manual verification, returning the corresponding audit action code.
+     *
+     * @param array<string, mixed> $alloc
+     */
+    private function applyAllocationLifecycleTransition(
+        array $alloc,
+        int $remittanceId,
+        int $businessUnitId,
+        int $actorEmployeeId,
+        string $operationType,
+        bool $autoVerifyEnabled = false
+    ): string {
+        $this->assertInTransaction('Allocation lifecycle transition');
+
+        $allocationId = (int)$alloc['allocation_id'];
+        $curHandover = (string)$alloc['handover_status'];
+        $curVerification = (string)$alloc['verification_status'];
+
+        if ($operationType === 'receptionist_handover') {
+            if ($curHandover !== 'submitted' || $curVerification !== 'pending' || $alloc['completed_by_employee_id'] !== null || $alloc['completed_at'] !== null) {
+                throw new RuntimeException(
+                    "Allocation #{$allocationId} handover has already been completed.",
+                    self::ERR_CONFLICT
+                );
+            }
+
+            if ($autoVerifyEnabled) {
+                $updStmt = $this->db->prepare(
+                    "UPDATE courier_cod_remittance_allocation
+                     SET handover_status = 'completed',
+                         completed_by_employee_id = ?,
+                         completed_at = UTC_TIMESTAMP(),
+                         verification_status = 'verified',
+                         verified_by_employee_id = NULL,
+                         verified_at = UTC_TIMESTAMP(),
+                         verification_mode = 'auto_setting',
+                         updated_at = NOW()
+                     WHERE allocation_id = ?
+                       AND remittance_id = ?
+                       AND business_unit_id = ?
+                       AND allocation_status = 'active'
+                       AND handover_status = 'submitted'
+                       AND completed_by_employee_id IS NULL
+                       AND completed_at IS NULL
+                       AND verification_status = 'pending'
+                       AND verified_by_employee_id IS NULL
+                       AND verified_at IS NULL
+                       AND verification_mode IS NULL"
+                );
+                $updStmt->execute([$actorEmployeeId, $allocationId, $remittanceId, $businessUnitId]);
+            } else {
+                $updStmt = $this->db->prepare(
+                    "UPDATE courier_cod_remittance_allocation
+                     SET handover_status = 'completed',
+                         completed_by_employee_id = ?,
+                         completed_at = UTC_TIMESTAMP(),
+                         updated_at = NOW()
+                     WHERE allocation_id = ?
+                       AND remittance_id = ?
+                       AND business_unit_id = ?
+                       AND allocation_status = 'active'
+                       AND handover_status = 'submitted'
+                       AND completed_by_employee_id IS NULL
+                       AND completed_at IS NULL
+                       AND verification_status = 'pending'
+                       AND verified_by_employee_id IS NULL
+                       AND verified_at IS NULL
+                       AND verification_mode IS NULL"
+                );
+                $updStmt->execute([$actorEmployeeId, $allocationId, $remittanceId, $businessUnitId]);
+            }
+
+            if ($updStmt->rowCount() !== 1) {
+                throw new RuntimeException(
+                    "Allocation #{$allocationId} could not be marked completed due to a concurrent state change.",
+                    self::ERR_CONFLICT
+                );
+            }
+            return 'petstore_receptionist.cod_remittance_allocation_completed';
+        }
+
+        if ($operationType === 'manager_collection') {
+            if ($curHandover !== 'submitted' || $curVerification !== 'pending' || $alloc['completed_by_employee_id'] !== null || $alloc['completed_at'] !== null) {
+                throw new RuntimeException(
+                    "Allocation #{$allocationId} is no longer awaiting handover and cannot use direct manager collection.",
+                    self::ERR_CONFLICT
+                );
+            }
+
+            $updStmt = $this->db->prepare(
+                "UPDATE courier_cod_remittance_allocation
+                 SET handover_status = 'completed',
+                     completed_by_employee_id = ?,
+                     completed_at = UTC_TIMESTAMP(),
+                     verification_status = 'verified',
+                     verified_by_employee_id = ?,
+                     verified_at = UTC_TIMESTAMP(),
+                     verification_mode = 'manager_collection',
+                     updated_at = NOW()
+                 WHERE allocation_id = ?
+                   AND remittance_id = ?
+                   AND business_unit_id = ?
+                   AND allocation_status = 'active'
+                   AND handover_status = 'submitted'
+                   AND completed_by_employee_id IS NULL
+                   AND completed_at IS NULL
+                   AND verification_status = 'pending'
+                   AND verified_by_employee_id IS NULL
+                   AND verified_at IS NULL
+                   AND verification_mode IS NULL"
+            );
+            $updStmt->execute([$actorEmployeeId, $actorEmployeeId, $allocationId, $remittanceId, $businessUnitId]);
+
+            if ($updStmt->rowCount() !== 1) {
+                throw new RuntimeException(
+                    "Allocation #{$allocationId} could not be collected due to a concurrent state change.",
+                    self::ERR_CONFLICT
+                );
+            }
+            return 'manager.cod_remittance_allocation_collected';
+        }
+
+        if ($operationType === 'manager_manual_verify') {
+            if ($curHandover !== 'completed' || $alloc['completed_by_employee_id'] === null || $alloc['completed_at'] === null) {
+                throw new RuntimeException(
+                    "Allocation #{$allocationId} must complete handover before manual verification.",
+                    self::ERR_CONFLICT
+                );
+            }
+            if ($curVerification !== 'pending' || $alloc['verified_by_employee_id'] !== null || $alloc['verified_at'] !== null || $alloc['verification_mode'] !== null) {
+                throw new RuntimeException(
+                    "Allocation #{$allocationId} has already been verified.",
+                    self::ERR_CONFLICT
+                );
+            }
+
+            $updStmt = $this->db->prepare(
+                "UPDATE courier_cod_remittance_allocation
+                 SET verification_status = 'verified',
+                     verified_by_employee_id = ?,
+                     verified_at = UTC_TIMESTAMP(),
+                     verification_mode = 'manual',
+                     updated_at = NOW()
+                 WHERE allocation_id = ?
+                   AND remittance_id = ?
+                   AND business_unit_id = ?
+                   AND allocation_status = 'active'
+                   AND handover_status = 'completed'
+                   AND completed_by_employee_id = ?
+                   AND completed_at = ?
+                   AND verification_status = 'pending'
+                   AND verified_by_employee_id IS NULL
+                   AND verified_at IS NULL
+                   AND verification_mode IS NULL"
+            );
+            $updStmt->execute([
+                $actorEmployeeId,
+                $allocationId,
+                $remittanceId,
+                $businessUnitId,
+                (int)$alloc['completed_by_employee_id'],
+                (string)$alloc['completed_at'],
+            ]);
+
+            if ($updStmt->rowCount() !== 1) {
+                throw new RuntimeException(
+                    "Allocation #{$allocationId} could not be verified due to a concurrent state change.",
+                    self::ERR_CONFLICT
+                );
+            }
+            return 'manager.cod_remittance_allocation_verified';
+        }
+
+        throw new RuntimeException("Unsupported remittance operation: {$operationType}", self::ERR_UNPROCESSABLE);
     }
 
     /**
