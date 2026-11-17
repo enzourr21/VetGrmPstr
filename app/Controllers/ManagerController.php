@@ -5042,6 +5042,11 @@ final class ManagerController extends Controller
             $operatingHours = $hrsStmt->fetchAll();
         }
 
+        $uid = (int)Session::get('user_id', 0);
+        $canManageCodAutoVerify = ((int)$unitId === Units::petStoreId())
+            && !Session::get('inventory_manager_mode')
+            && $this->findActivePetStoreBusinessManagerEmployeeId($uid) > 0;
+
         $this->render('manager/settings', [
             'title' => "Business Settings · $unitName",
             'activeTab' => 'settings',
@@ -5051,6 +5056,7 @@ final class ManagerController extends Controller
             'allUnits' => $isSuper ? Units::all() : [],
             'settings' => $settings,
             'operatingHours' => $operatingHours,
+            'canManageCodAutoVerify' => $canManageCodAutoVerify,
         ]);
     }
 
@@ -5286,27 +5292,12 @@ final class ManagerController extends Controller
         }
 
         $isSuper = $this->isSuperAdmin();
+        $empId = $this->findActivePetStoreBusinessManagerEmployeeId((int)$uid);
 
-        $stmt = $this->db->prepare(
-            "SELECT e.employee_id
-             FROM user_account ua
-             JOIN employee e ON e.user_account_id = ua.user_account_id
-                              AND e.employee_status = 'active'
-                              AND e.business_unit_id = ?
-             JOIN account_role ar ON ar.user_account_id = ua.user_account_id
-                                  AND ar.business_unit_id = e.business_unit_id
-             JOIN role r ON r.role_id = ar.role_id AND r.role_name = 'BUSINESS_MANAGER'
-             JOIN business_unit bu ON bu.business_unit_id = ar.business_unit_id AND bu.business_unit_status = 'active'
-             WHERE ua.user_account_id = ? AND ua.account_status = 'active'
-             LIMIT 1"
-        );
-        $stmt->execute([$petStoreUnitId, (int)$uid]);
-        $empId = $stmt->fetchColumn();
-
-        if ($empId !== false && (int)$empId > 0) {
+        if ($empId > 0) {
             return [
                 'uid' => (int)$uid,
-                'emp_id' => (int)$empId,
+                'emp_id' => $empId,
                 'unit_id' => $petStoreUnitId,
                 'unit_name' => Units::PET_STORE,
                 'is_manager_operator' => true,
@@ -5581,5 +5572,131 @@ final class ManagerController extends Controller
         }
 
         $this->redirect($redirectBase);
+    }
+
+    /**
+     * Resolve active Pet Store (business_unit_id = 1) employee ID for a user holding active
+     * user_account, active unit, and active unit-scoped BUSINESS_MANAGER role.
+     */
+    private function findActivePetStoreBusinessManagerEmployeeId(int $userId): int
+    {
+        if ($userId <= 0) {
+            return 0;
+        }
+        $stmt = $this->db->prepare(
+            "SELECT e.employee_id
+             FROM user_account ua
+             JOIN employee e ON e.user_account_id = ua.user_account_id
+                              AND e.employee_status = 'active'
+                              AND e.business_unit_id = ?
+             JOIN account_role ar ON ar.user_account_id = ua.user_account_id
+                                  AND ar.business_unit_id = e.business_unit_id
+             JOIN role r ON r.role_id = ar.role_id AND r.role_name = 'BUSINESS_MANAGER'
+             JOIN business_unit bu ON bu.business_unit_id = ar.business_unit_id AND bu.business_unit_status = 'active'
+             WHERE ua.user_account_id = ? AND ua.account_status = 'active'
+             LIMIT 1"
+        );
+        $stmt->execute([Units::petStoreId(), $userId]);
+        $empId = $stmt->fetchColumn();
+        return ($empId !== false && (int)$empId > 0) ? (int)$empId : 0;
+    }
+
+    /**
+     * Update Pet Store `business_settings.auto_verify_cod_remittance` (On = 1 / Off = 0).
+     * Strictly requires an active, email-authenticated Pet Store Business Manager assignment
+     * (never grants operational override to Super Administrators lacking that explicit assignment).
+     */
+    public function updateCodRemittanceVerificationSetting(?int $routeUnitId = null): void
+    {
+        CSRF::check();
+        $auth = $this->requireManagerRemittanceOperator($routeUnitId);
+        $uid = $auth['uid'];
+        $empId = $auth['emp_id'];
+        $unitId = Units::petStoreId();
+
+        if ($routeUnitId !== null) {
+            $redirectUrl = "/manager/units/{$routeUnitId}/settings";
+        } elseif ($auth['is_super'] || isset($_GET['unit_id'])) {
+            $redirectUrl = '/manager/settings?unit_id=' . $unitId;
+        } else {
+            $redirectUrl = '/manager/settings';
+        }
+
+        $rawVal = $_POST['auto_verify_cod_remittance'] ?? null;
+        if (!is_string($rawVal) && !is_int($rawVal)) {
+            $this->flash('error', 'Invalid COD Remittance Verification value. Choose Off (0) or On (1).');
+            $this->redirect($redirectUrl);
+            return;
+        }
+        $normalizedVal = trim((string)$rawVal);
+        if ($normalizedVal !== '0' && $normalizedVal !== '1') {
+            $this->flash('error', 'Invalid COD Remittance Verification value. Choose Off (0) or On (1).');
+            $this->redirect($redirectUrl);
+            return;
+        }
+        $newValue = (int)$normalizedVal;
+
+        $this->db->exec('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
+        $this->db->beginTransaction();
+        try {
+            $ensureStmt = $this->db->prepare(
+                'INSERT IGNORE INTO business_settings (business_unit_id, business_name, business_email, contact_number, cod_enabled, auto_verify_cod_remittance)
+                 VALUES (?, ?, ?, ?, 1, 0)'
+            );
+            $ensureStmt->execute([
+                $unitId,
+                'VETGRPET ' . Units::PET_STORE,
+                'petstore@vetgrpet.local',
+                '09175550100',
+            ]);
+
+            $lockStmt = $this->db->prepare(
+                'SELECT setting_id, auto_verify_cod_remittance
+                 FROM business_settings
+                 WHERE business_unit_id = ?
+                 LIMIT 1
+                 FOR UPDATE'
+            );
+            $lockStmt->execute([$unitId]);
+            $row = $lockStmt->fetch(PDO::FETCH_ASSOC);
+            if (!$row) {
+                throw new RuntimeException('Pet Store business settings record could not be loaded.');
+            }
+
+            $oldValue = (int)($row['auto_verify_cod_remittance'] ?? 0);
+            $updStmt = $this->db->prepare(
+                'UPDATE business_settings SET auto_verify_cod_remittance = ? WHERE setting_id = ? AND business_unit_id = ?'
+            );
+            $updStmt->execute([$newValue, (int)$row['setting_id'], $unitId]);
+
+            $stateText = $newValue === 1 ? 'On (auto-verify future Receptionist handovers)' : 'Off (require Business Manager verification)';
+            Audit::record(
+                $this->db,
+                'business_settings.cod_remittance_auto_verify',
+                "Updated Pet Store COD Remittance Verification setting to {$stateText}. Affects future Receptionist handover completions only.",
+                $unitId,
+                $uid,
+                $empId,
+                'auto_verify_cod_remittance:' . $oldValue,
+                'auto_verify_cod_remittance:' . $newValue,
+                'business_settings',
+                (int)$row['setting_id']
+            );
+
+            $this->db->commit();
+            $this->flash(
+                'success',
+                $newValue === 1
+                    ? 'COD Remittance Verification set to On. Future Receptionist handovers will be automatically verified.'
+                    : 'COD Remittance Verification set to Off. Receptionist handovers will require Business Manager verification.'
+            );
+        } catch (\Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            $this->flash('error', 'Failed to update COD Remittance Verification setting: ' . $e->getMessage());
+        }
+
+        $this->redirect($redirectUrl);
     }
 }

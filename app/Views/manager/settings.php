@@ -443,4 +443,82 @@ require __DIR__ . '/_nav.php';
       </div>
     </div>
   </div>
+
+  <?php if ((int)$unitId === \App\Models\Units::petStoreId()):
+    $autoVerifyCodOn = !empty($settings['auto_verify_cod_remittance']);
+    $canManageCodSetting = !empty($canManageCodAutoVerify);
+    $codSettingAction = (!empty($isSuper) && !empty($_SERVER['REQUEST_URI']) && str_contains((string)$_SERVER['REQUEST_URI'], '/manager/units/'))
+        ? '/manager/units/' . (int)$unitId . '/settings/cod-remittance-verification'
+        : '/manager/settings/cod-remittance-verification' . $unitQuery;
+  ?>
+    <div id="cod-remittance-verification-section" style="margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--line, #e2e8f0);">
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; margin-bottom: 0.85rem; flex-wrap: wrap;">
+        <div>
+          <h3 style="margin: 0 0 0.25rem 0; font-size: 1.05rem; font-weight: 700; color: var(--ink);">
+            COD Remittance Verification
+          </h3>
+          <p class="caption muted" style="margin: 0; line-height: 1.45; font-size: 0.84rem;">
+            Controls whether courier COD handover completions recorded by Pet Store Receptionists automatically count as verified or require Business Manager verification.
+          </p>
+        </div>
+        <span class="badge <?= $autoVerifyCodOn ? 'badge-success' : 'secondary' ?>" id="cod-auto-verify-badge" style="font-weight: 600;">
+          <?= $autoVerifyCodOn ? 'On (Auto-Verify)' : 'Off (Manual Verification)' ?>
+        </span>
+      </div>
+
+      <?php if (!$canManageCodSetting): ?>
+        <div class="alert alert-info" style="margin-bottom: 0.85rem;">
+          <strong>Administrative Oversight Mode (Read-Only):</strong> Changing COD Remittance Verification requires an explicit active Pet Store <code>BUSINESS_MANAGER</code> assignment.
+        </div>
+      <?php endif; ?>
+
+      <form method="post" action="<?= e($codSettingAction) ?>" id="cod-remittance-auto-verify-form" style="background: var(--surface-subtle, #f8fafc); border: 1px solid var(--line, #e2e8f0); border-radius: var(--radius-md, 8px); padding: 1.25rem;">
+        <?php if ($canManageCodSetting): ?>
+          <?= \App\Core\CSRF::field() ?>
+        <?php endif; ?>
+
+        <div style="display: grid; gap: 0.75rem; margin-bottom: 1rem;">
+          <label style="display: flex; gap: 0.65rem; align-items: flex-start; cursor: <?= $canManageCodSetting ? 'pointer' : 'not-allowed' ?>; padding: 0.75rem 1rem; background: var(--surface, #ffffff); border: 1px solid var(--line, #e2e8f0); border-radius: var(--radius-sm, 6px);">
+            <input type="radio"
+                   name="auto_verify_cod_remittance"
+                   id="cod-auto-verify-off"
+                   value="0"
+                   <?= !$autoVerifyCodOn ? 'checked' : '' ?>
+                   <?= !$canManageCodSetting ? 'disabled' : '' ?>
+                   style="margin-top: 0.2rem; width: 17px; height: 17px; accent-color: var(--brand-emerald, #10b981);">
+            <span>
+              <strong style="display: block; font-size: 0.9rem; color: var(--ink);">Off (Default) — Require Business Manager Verification</strong>
+              <span class="caption muted" style="display: block; margin-top: 0.15rem;">Receptionist handover completion marks the allocation <code>Handover Completed</code> with verification <code>Pending</code>.</span>
+            </span>
+          </label>
+
+          <label style="display: flex; gap: 0.65rem; align-items: flex-start; cursor: <?= $canManageCodSetting ? 'pointer' : 'not-allowed' ?>; padding: 0.75rem 1rem; background: var(--surface, #ffffff); border: 1px solid var(--line, #e2e8f0); border-radius: var(--radius-sm, 6px);">
+            <input type="radio"
+                   name="auto_verify_cod_remittance"
+                   id="cod-auto-verify-on"
+                   value="1"
+                   <?= $autoVerifyCodOn ? 'checked' : '' ?>
+                   <?= !$canManageCodSetting ? 'disabled' : '' ?>
+                   style="margin-top: 0.2rem; width: 17px; height: 17px; accent-color: var(--brand-emerald, #10b981);">
+            <span>
+              <strong style="display: block; font-size: 0.9rem; color: var(--ink);">On — Auto-Verify Future Receptionist Handovers</strong>
+              <span class="caption muted" style="display: block; margin-top: 0.15rem;">Future Receptionist handover completions mark the allocation <code>Completed</code> and <code>Verified</code> with <code>verification_mode = auto_setting</code>.</span>
+            </span>
+          </label>
+        </div>
+
+        <p class="caption muted" style="margin: 0 0 1rem 0; font-size: 0.82rem; line-height: 1.45;">
+          <strong>Future handovers only:</strong> Toggling this setting only applies to Receptionist handover completions performed after the change. Existing submitted, completed, or verified allocations are never altered retroactively.
+        </p>
+
+        <?php if ($canManageCodSetting): ?>
+          <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
+            <button type="submit" class="btn primary" id="save-cod-auto-verify-btn" style="height: 38px; padding: 0 1.25rem; font-weight: 600;">
+              Save COD Verification Setting
+            </button>
+          </div>
+        <?php endif; ?>
+      </form>
+    </div>
+  <?php endif; ?>
 </section>

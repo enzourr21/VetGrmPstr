@@ -171,6 +171,8 @@ $r->post('/manager/settings/verify-otp', 'ManagerController', 'verifyOtp');
 $r->post('/manager/units/{id}/settings/verify-otp', 'ManagerController', 'verifyOtp');
 $r->post('/manager/settings/payment', 'ManagerController', 'updatePaymentSettings');
 $r->post('/manager/units/{id}/settings/payment', 'ManagerController', 'updatePaymentSettings');
+$r->post('/manager/settings/cod-remittance-verification', 'ManagerController', 'updateCodRemittanceVerificationSetting');
+$r->post('/manager/units/{id}/settings/cod-remittance-verification', 'ManagerController', 'updateCodRemittanceVerificationSetting');
 $r->post('/manager/settings/overlap', 'ManagerController', 'updateOverlapSettings');
 $r->post('/manager/units/{id}/settings/overlap', 'ManagerController', 'updateOverlapSettings');
 
