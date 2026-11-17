@@ -520,7 +520,15 @@ final class PetStoreReceptionistController extends Controller
                       )
                       OR (
                           co.order_status = 'completed'
-                          AND DATE(co.updated_at) = CURDATE()
+                          AND co.order_completed_at IS NOT NULL
+                          AND DATE(co.order_completed_at) = CURDATE()
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM refund_request rr
+                              LEFT JOIN payment rp ON rp.payment_id = rr.payment_id
+                              WHERE rr.order_id = co.order_id
+                                 OR (rr.payment_id IS NOT NULL AND rp.order_id = co.order_id)
+                          )
                       )
                   )";
         $params = [$unitId];

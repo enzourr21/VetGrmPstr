@@ -527,7 +527,9 @@ final class OrderReservationService
 
             $updOrdStmt = $this->db->prepare(
                 "UPDATE customer_order
-                 SET order_status = 'completed', updated_at = NOW()
+                 SET order_status = 'completed',
+                     order_completed_at = COALESCE(order_completed_at, NOW()),
+                     updated_at = NOW()
                  WHERE order_id = ? AND order_status = 'out_for_delivery'"
             );
             $updOrdStmt->execute([$orderId]);
@@ -1046,7 +1048,9 @@ final class OrderReservationService
             if (!$isPartial) {
                 $updOrdStmt = $this->db->prepare(
                     "UPDATE customer_order
-                     SET order_status = 'completed', updated_at = NOW()
+                     SET order_status = 'completed',
+                         order_completed_at = COALESCE(order_completed_at, NOW()),
+                         updated_at = NOW()
                      WHERE order_id = ? AND order_status = ?"
                 );
                 $updOrdStmt->execute([$orderId, $currentStatus]);

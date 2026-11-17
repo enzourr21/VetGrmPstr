@@ -17,6 +17,7 @@ require_once dirname(__DIR__) . '/app/bootstrap.php';
 require_once __DIR__ . '/process_cleanup_helper.php';
 
 use App\Core\Database;
+use App\Services\OrderReservationService;
 
 $pdo = Database::pdo();
 $dbName = (string)$pdo->query('SELECT DATABASE()')->fetchColumn();
@@ -313,6 +314,7 @@ try {
         $failedAtExpr = isset($opts['delivery_failed_at_sql']) ? (string)$opts['delivery_failed_at_sql'] : 'NULL';
         $failReason = isset($opts['delivery_failure_reason']) ? $pdo->quote((string)$opts['delivery_failure_reason']) : 'NULL';
         $reschedExpr = isset($opts['rescheduled_date_sql']) ? (string)$opts['rescheduled_date_sql'] : 'NULL';
+        $completedAtExpr = isset($opts['order_completed_at_sql']) ? (string)$opts['order_completed_at_sql'] : 'NULL';
         $delivEmpExpr = isset($opts['delivery_employee_id']) ? (int)$opts['delivery_employee_id'] : 'NULL';
         $sub = (float)($opts['subtotal'] ?? 120.00);
         $fee = (float)($opts['delivery_fee'] ?? ($method === 'delivery' ? 50.00 : 0.00));
@@ -322,12 +324,12 @@ try {
                         customer_id, business_unit_id, branch_id, order_date, fulfillment_method, order_status,
                         subtotal_amount, delivery_fee, total_amount,
                         delivery_address_line1, delivery_city, delivery_failure_reason, delivery_employee_id,
-                        delivery_failed_at, rescheduled_date, created_at, updated_at
+                        delivery_failed_at, order_completed_at, rescheduled_date, created_at, updated_at
                     ) VALUES (
                         {$custId}, 1, {$branchId}, {$orderDateExpr}, " . $pdo->quote($method) . ", " . $pdo->quote($status) . ",
                         {$sub}, {$fee}, {$total},
                         '100 Test Ave', 'Manila', {$failReason}, {$delivEmpExpr},
-                        {$failedAtExpr}, {$reschedExpr}, {$orderDateExpr}, {$updatedAtExpr}
+                        {$failedAtExpr}, {$completedAtExpr}, {$reschedExpr}, {$orderDateExpr}, {$updatedAtExpr}
                     )");
         $orderId = (int)$pdo->lastInsertId();
         $createdOrderIds[] = $orderId;
@@ -432,6 +434,7 @@ try {
         'fulfillment_method' => 'delivery',
         'order_status' => 'completed',
         'order_date_sql' => 'NOW()',
+        'order_completed_at_sql' => 'NOW()',
         'updated_at_sql' => 'NOW()',
         'payment_method' => 'GCash',
         'payment_status' => 'completed',
@@ -482,7 +485,7 @@ try {
         'payment_status' => 'pending',
     ])['order_id'];
 
-    // 6. Previously placed failed delivery order that completed via redelivery TODAY (COD completed, NO remittance)
+    // 6. Previously placed failed delivery order that completed via redelivery TODAY (COD completed, NO remittance, NO refund request)
     $oPastRedeliveryCompletedToday = $insertOrder([
         'customer_id' => $custBobId,
         'fulfillment_method' => 'delivery',
@@ -490,6 +493,7 @@ try {
         'order_date_sql' => 'DATE_SUB(NOW(), INTERVAL 4 DAY)',
         'updated_at_sql' => 'NOW()',
         'delivery_failed_at_sql' => 'DATE_SUB(NOW(), INTERVAL 2 DAY)',
+        'order_completed_at_sql' => 'NOW()',
         'delivery_failure_reason' => 'Initial miss',
         'rescheduled_date_sql' => 'CURDATE()',
         'delivery_employee_id' => $courierEmpId,
@@ -505,6 +509,7 @@ try {
         'fulfillment_method' => 'pickup',
         'order_status' => 'completed',
         'order_date_sql' => 'DATE_SUB(NOW(), INTERVAL 3 DAY)',
+        'order_completed_at_sql' => 'DATE_SUB(NOW(), INTERVAL 3 DAY)',
         'updated_at_sql' => 'DATE_SUB(NOW(), INTERVAL 3 DAY)',
         'payment_method' => 'Cash',
         'payment_status' => 'completed',
@@ -649,6 +654,116 @@ try {
     $refApprovedLarge = $insertRefReq("REF-PSR-2-{$suffix}", $custBobId, $oDeliveryRefunded, $oDeliveryRefundedPayId, 170.00, 'approved', 'DATE_SUB(NOW(), INTERVAL 2 DAY)', 170.00);
     $refRejectedMid = $insertRefReq("REF-PSR-3-{$suffix}", $custAliceId, $oOldCompleted, null, 80.00, 'rejected', 'DATE_SUB(NOW(), INTERVAL 1 DAY)', null, 'Opened consumable outside return window');
 
+    // -----------------------------------------------------------------
+    // Fixtures: Receptionist Orders Issue #2 (order_completed_at + refund_request exclusion)
+    // -----------------------------------------------------------------
+    // 17. Placed 4 days ago, completed TODAY, NO refund request -> INCLUDED
+    $oPastCompletedTodayNoRefund = $insertOrder([
+        'customer_id' => $custAliceId,
+        'fulfillment_method' => 'pickup',
+        'order_status' => 'completed',
+        'order_date_sql' => 'DATE_SUB(NOW(), INTERVAL 4 DAY)',
+        'order_completed_at_sql' => 'NOW()',
+        'updated_at_sql' => 'NOW()',
+        'payment_method' => 'Cash',
+        'payment_status' => 'completed',
+        'collection_channel' => 'in_store_pickup',
+        'collected_by_employee_id' => $recEmpId,
+    ])['order_id'];
+
+    // 18. Placed TODAY AND completed TODAY with NO refund request (matches multiple inclusion conditions -> INCLUDED ONCE)
+    $oTodayMultiCondNoRefund = $insertOrder([
+        'customer_id' => $custBobId,
+        'fulfillment_method' => 'pickup',
+        'order_status' => 'completed',
+        'order_date_sql' => 'NOW()',
+        'order_completed_at_sql' => 'NOW()',
+        'updated_at_sql' => 'NOW()',
+        'payment_method' => 'Cash',
+        'payment_status' => 'completed',
+        'collection_channel' => 'in_store_pickup',
+        'collected_by_employee_id' => $recEmpId,
+    ])['order_id'];
+
+    // 19. Placed 4 days ago, completed TODAY, pending refund request via order_id -> EXCLUDED
+    $oPastCompletedTodayPendingRef = $insertOrder([
+        'customer_id' => $custBobId,
+        'fulfillment_method' => 'delivery',
+        'order_status' => 'completed',
+        'order_date_sql' => 'DATE_SUB(NOW(), INTERVAL 4 DAY)',
+        'order_completed_at_sql' => 'NOW()',
+        'updated_at_sql' => 'NOW()',
+        'payment_method' => 'GCash',
+        'payment_status' => 'completed',
+    ])['order_id'];
+    $insertRefReq("REF-REC-PEND-{$suffix}", $custBobId, $oPastCompletedTodayPendingRef, null, 30.00, 'pending', 'DATE_SUB(NOW(), INTERVAL 10 MINUTE)');
+
+    // 20. Placed 4 days ago, completed TODAY, approved refund request via order_id -> EXCLUDED
+    $oPastCompletedTodayApprovedRef = $insertOrder([
+        'customer_id' => $custAliceId,
+        'fulfillment_method' => 'delivery',
+        'order_status' => 'completed',
+        'order_date_sql' => 'DATE_SUB(NOW(), INTERVAL 4 DAY)',
+        'order_completed_at_sql' => 'NOW()',
+        'updated_at_sql' => 'NOW()',
+        'payment_method' => 'GCash',
+        'payment_status' => 'completed',
+    ])['order_id'];
+    $insertRefReq("REF-REC-APPR-{$suffix}", $custAliceId, $oPastCompletedTodayApprovedRef, null, 30.00, 'approved', 'DATE_SUB(NOW(), INTERVAL 10 MINUTE)', 30.00);
+
+    // 21. Placed 4 days ago, completed TODAY, rejected refund request via order_id -> EXCLUDED
+    $oPastCompletedTodayRejectedRef = $insertOrder([
+        'customer_id' => $custBobId,
+        'fulfillment_method' => 'delivery',
+        'order_status' => 'completed',
+        'order_date_sql' => 'DATE_SUB(NOW(), INTERVAL 4 DAY)',
+        'order_completed_at_sql' => 'NOW()',
+        'updated_at_sql' => 'NOW()',
+        'payment_method' => 'GCash',
+        'payment_status' => 'completed',
+    ])['order_id'];
+    $insertRefReq("REF-REC-REJ-{$suffix}", $custBobId, $oPastCompletedTodayRejectedRef, null, 30.00, 'rejected', 'DATE_SUB(NOW(), INTERVAL 10 MINUTE)', null, 'Test rejection');
+
+    // 22. Placed 4 days ago, completed TODAY, refund request linked ONLY via payment_id (rr.order_id = NULL) -> EXCLUDED
+    $oPastCompletedTodayPayIdRefRes = $insertOrder([
+        'customer_id' => $custAliceId,
+        'fulfillment_method' => 'delivery',
+        'order_status' => 'completed',
+        'order_date_sql' => 'DATE_SUB(NOW(), INTERVAL 4 DAY)',
+        'order_completed_at_sql' => 'NOW()',
+        'updated_at_sql' => 'NOW()',
+        'payment_method' => 'GCash',
+        'payment_status' => 'completed',
+    ]);
+    $oPastCompletedTodayPayIdRef = $oPastCompletedTodayPayIdRefRes['order_id'];
+    $insertRefReq("REF-REC-PAY-{$suffix}", $custAliceId, null, $oPastCompletedTodayPayIdRefRes['payment_id'], 30.00, 'pending', 'DATE_SUB(NOW(), INTERVAL 10 MINUTE)');
+
+    // 23. Placed 4 days ago, completed 3 days ago, updated_at = NOW() -> NOT included as completed today
+    $oPastCompletedEarlierUpdatedToday = $insertOrder([
+        'customer_id' => $custBobId,
+        'fulfillment_method' => 'delivery',
+        'order_status' => 'completed',
+        'order_date_sql' => 'DATE_SUB(NOW(), INTERVAL 4 DAY)',
+        'order_completed_at_sql' => 'DATE_SUB(NOW(), INTERVAL 3 DAY)',
+        'updated_at_sql' => 'NOW()',
+        'payment_method' => 'GCash',
+        'payment_status' => 'completed',
+    ])['order_id'];
+
+    // 24. Legacy completed order with order_completed_at = NULL and updated_at = NOW() -> NOT included as completed today
+    $oPastCompletedNullTsUpdatedToday = $insertOrder([
+        'customer_id' => $custAliceId,
+        'fulfillment_method' => 'pickup',
+        'order_status' => 'completed',
+        'order_date_sql' => 'DATE_SUB(NOW(), INTERVAL 5 DAY)',
+        'order_completed_at_sql' => 'NULL',
+        'updated_at_sql' => 'NOW()',
+        'payment_method' => 'Cash',
+        'payment_status' => 'completed',
+        'collection_channel' => 'in_store_pickup',
+        'collected_by_employee_id' => $recEmpId,
+    ])['order_id'];
+
     // =================================================================
     // TEST GROUP 1: Navigation & Role/Unit Access Control
     // =================================================================
@@ -773,6 +888,118 @@ try {
     check(
         'Order placed today and completed today appears exactly once (no duplicate rows)',
         substr_count($recOrdTable, "#ORD-{$oTodayCompletedOnline}") === 1
+            && substr_count($recOrdTable, "#ORD-{$oTodayMultiCondNoRefund}") === 1
+    );
+    check(
+        'Receptionist Orders includes prior-day order completed today (via order_completed_at) when no refund request exists',
+        str_contains($recOrdTable, "#ORD-{$oPastCompletedTodayNoRefund}")
+    );
+    check(
+        'Receptionist Orders excludes prior-day orders completed today when ANY refund request exists (pending, approved, rejected via order_id, or via payment_id)',
+        !str_contains($recOrdTable, "#ORD-{$oPastCompletedTodayPendingRef}")
+            && !str_contains($recOrdTable, "#ORD-{$oPastCompletedTodayApprovedRef}")
+            && !str_contains($recOrdTable, "#ORD-{$oPastCompletedTodayRejectedRef}")
+            && !str_contains($recOrdTable, "#ORD-{$oPastCompletedTodayPayIdRef}")
+    );
+    check(
+        'Receptionist Orders excludes earlier-completed and NULL-order_completed_at orders even when updated_at is today',
+        !str_contains($recOrdTable, "#ORD-{$oPastCompletedEarlierUpdatedToday}")
+            && !str_contains($recOrdTable, "#ORD-{$oPastCompletedNullTsUpdatedToday}")
+    );
+
+    // Completion workflow timestamp population & preservation tests
+    $pdo->prepare("INSERT INTO product (product_name, description, product_category, sku) VALUES (?, 'Service completion item', 'Supplies', ?)")
+        ->execute(["PSR Comp Item {$suffix}", "SKU-PSR-CMP-{$suffix}"]);
+    $prodCmpId = (int)$pdo->lastInsertId();
+    $createdProductIds[] = $prodCmpId;
+    $pdo->prepare("INSERT INTO business_product (business_unit_id, product_id, selling_price, requires_batch_tracking, product_status) VALUES (1, ?, 50.00, 0, 'active')")
+        ->execute([$prodCmpId]);
+    $bpCmpId = (int)$pdo->lastInsertId();
+    $createdBpIds[] = $bpCmpId;
+    $pdo->prepare("INSERT INTO inventory (business_product_id, on_hand, committed, in_transit) VALUES (?, 20, 0, 0)")
+        ->execute([$bpCmpId]);
+    $createdInvIds[] = (int)$pdo->lastInsertId();
+
+    $resSvc = new OrderReservationService($pdo);
+
+    // Delivery completion populates order_completed_at cleanly
+    $oSvcDeliv = $insertOrder([
+        'customer_id' => $custAliceId,
+        'fulfillment_method' => 'delivery',
+        'order_status' => 'pending',
+        'order_date_sql' => 'DATE_SUB(NOW(), INTERVAL 2 DAY)',
+        'items' => [[$bpCmpId, 1, 50.00]],
+        'subtotal' => 50.00,
+        'delivery_fee' => 25.00,
+        'payment_method' => 'GCash',
+        'payment_status' => 'completed',
+    ])['order_id'];
+    $resSvc->confirmDeliveryOrderAndReserve($oSvcDeliv, 1, $recUid);
+    $resSvc->markDeliveryOrderProcessing($oSvcDeliv, 1, $recUid);
+    $resSvc->dispatchDeliveryOrder($oSvcDeliv, 1, $courierEmpId, $courierUid);
+    $resSvc->completeDeliveryOrder($oSvcDeliv, 1, $courierEmpId, $courierUid);
+    $delivCompRow = $pdo->query("SELECT order_status, order_completed_at, DATE(order_completed_at) = CURDATE() AS is_today FROM customer_order WHERE order_id = {$oSvcDeliv}")->fetch(PDO::FETCH_ASSOC);
+
+    // Pickup handover keeps order_completed_at NULL on partial handover, then sets it on full completion
+    $oSvcPick = $insertOrder([
+        'customer_id' => $custBobId,
+        'fulfillment_method' => 'pickup',
+        'order_status' => 'pending',
+        'order_date_sql' => 'DATE_SUB(NOW(), INTERVAL 2 DAY)',
+        'items' => [[$bpCmpId, 2, 50.00]],
+        'subtotal' => 100.00,
+        'delivery_fee' => 0.00,
+        'payment_method' => 'Cash',
+        'payment_status' => 'completed',
+        'collection_channel' => 'in_store_pickup',
+        'collected_by_employee_id' => $recEmpId,
+    ])['order_id'];
+    $pickItemId = (int)$pdo->query("SELECT order_item_id FROM order_item WHERE order_id = {$oSvcPick} LIMIT 1")->fetchColumn();
+    $resSvc->confirmPickupOrderAndReserve($oSvcPick, 1, $recUid);
+    $resSvc->markPickupOrderReady($oSvcPick, 1, $recUid);
+    $resSvc->fulfillPickupOrder($oSvcPick, 1, $recUid, [$pickItemId => 1]);
+    $pickPartialRow = $pdo->query("SELECT order_status, order_completed_at FROM customer_order WHERE order_id = {$oSvcPick}")->fetch(PDO::FETCH_ASSOC);
+    $resSvc->fulfillPickupOrder($oSvcPick, 1, $recUid);
+    $pickFullRow = $pdo->query("SELECT order_status, order_completed_at, DATE(order_completed_at) = CURDATE() AS is_today FROM customer_order WHERE order_id = {$oSvcPick}")->fetch(PDO::FETCH_ASSOC);
+
+    // Preserve pre-existing order_completed_at on repeated completion transition (COALESCE(order_completed_at, NOW()))
+    $oSvcPreserve = $insertOrder([
+        'customer_id' => $custAliceId,
+        'fulfillment_method' => 'pickup',
+        'order_status' => 'pending',
+        'order_date_sql' => 'DATE_SUB(NOW(), INTERVAL 2 DAY)',
+        'items' => [[$bpCmpId, 1, 50.00]],
+        'subtotal' => 50.00,
+        'delivery_fee' => 0.00,
+        'payment_method' => 'Cash',
+        'payment_status' => 'completed',
+        'collection_channel' => 'in_store_pickup',
+        'collected_by_employee_id' => $recEmpId,
+    ])['order_id'];
+    $resSvc->confirmPickupOrderAndReserve($oSvcPreserve, 1, $recUid);
+    $resSvc->markPickupOrderReady($oSvcPreserve, 1, $recUid);
+    $fixedCompletedTs = '2026-01-15 10:20:30';
+    $pdo->prepare("UPDATE customer_order SET order_completed_at = ? WHERE order_id = ?")->execute([$fixedCompletedTs, $oSvcPreserve]);
+    $resSvc->fulfillPickupOrder($oSvcPreserve, 1, $recUid);
+    $preserveRow = $pdo->query("SELECT order_status, order_completed_at FROM customer_order WHERE order_id = {$oSvcPreserve}")->fetch(PDO::FETCH_ASSOC);
+
+    $recOrdAfterSvc = $rec->get('/petstore/receptionist/orders');
+    $recOrdTableAfterSvc = extractMainTable($recOrdAfterSvc['body']);
+    check(
+        'Both delivery and full pickup completion workflows populate order_completed_at (partial leaves NULL, repeated preserves original, Receptionist Orders shows new completions)',
+        $delivCompRow['order_status'] === 'completed'
+            && !empty($delivCompRow['order_completed_at'])
+            && (int)$delivCompRow['is_today'] === 1
+            && $pickPartialRow['order_status'] === 'ready_for_pickup'
+            && $pickPartialRow['order_completed_at'] === null
+            && $pickFullRow['order_status'] === 'completed'
+            && !empty($pickFullRow['order_completed_at'])
+            && (int)$pickFullRow['is_today'] === 1
+            && $preserveRow['order_status'] === 'completed'
+            && $preserveRow['order_completed_at'] === $fixedCompletedTs
+            && str_contains($recOrdTableAfterSvc, "#ORD-{$oSvcDeliv}")
+            && str_contains($recOrdTableAfterSvc, "#ORD-{$oSvcPick}")
+            && !str_contains($recOrdTableAfterSvc, "#ORD-{$oSvcPreserve}")
     );
 
     // =================================================================
@@ -1058,6 +1285,8 @@ try {
         }
         if ($createdOrderIds) {
             $ph = implode(',', array_map('intval', $createdOrderIds));
+            $pdo->exec("DELETE FROM inventory_movement WHERE reservation_id IN (SELECT reservation_id FROM inventory_reservation WHERE order_item_id IN (SELECT order_item_id FROM order_item WHERE order_id IN ({$ph})))");
+            $pdo->exec("DELETE FROM inventory_reservation WHERE order_item_id IN (SELECT order_item_id FROM order_item WHERE order_id IN ({$ph}))");
             $pdo->exec("DELETE FROM order_item WHERE order_id IN ({$ph})");
             $pdo->exec("DELETE FROM customer_order WHERE order_id IN ({$ph})");
         }
