@@ -181,22 +181,23 @@ assertCheck('Profile dropdown contains Switch Interface submenu container', str_
 assertCheck('Profile dropdown contains Dark Mode button', str_contains($superDash['body'], '<button type="button" class="profile-dropdown-item" id="admin-dark-mode-toggle" role="menuitem">Dark Mode</button>'));
 assertCheck('Profile dropdown contains Log Out button with CSRF token', str_contains($superDash['body'], 'action="/logout"') && str_contains($superDash['body'], 'Log Out'));
 
-// Check Super Admin authorized interfaces & extending business unit menus in dropdown
+// Check Super Admin authorized business-grouped interfaces in dropdown
 assertCheck('Switcher contains Super Administrator direct option (marked Current)', str_contains($superDash['body'], 'target=super-admin') && str_contains($superDash['body'], 'is-current-interface'));
+assertCheck('Switcher contains Pet Store business unit group', str_contains($superDash['body'], 'data-target="petstore"') && str_contains($superDash['body'], 'profile-switcher-parent-btn'));
+assertCheck('Switcher contains Veterinary Clinic business unit group', str_contains($superDash['body'], 'data-target="vetclinic"') && str_contains($superDash['body'], 'profile-switcher-parent-btn'));
+assertCheck('Switcher contains Pet Grooming business unit group', str_contains($superDash['body'], 'data-target="grooming"') && str_contains($superDash['body'], 'profile-switcher-parent-btn'));
 assertCheck('Switcher contains System Administrator expandable button', str_contains($superDash['body'], 'data-target="sysadmin"') && str_contains($superDash['body'], 'profile-switcher-parent-btn'));
-assertCheck('Switcher contains Business Manager expandable button', str_contains($superDash['body'], 'data-target="manager"') && str_contains($superDash['body'], 'profile-switcher-parent-btn'));
-assertCheck('Switcher contains Employee Workspace expandable button', str_contains($superDash['body'], 'data-target="employee"') && str_contains($superDash['body'], 'profile-switcher-parent-btn'));
 assertCheck('Switcher contains Customer Interface direct option', str_contains($superDash['body'], 'target=customer') && str_contains($superDash['body'], 'profile-switcher-option'));
 
-// Check 3 Business Units appear below Business Manager:
-assertCheck('Business Manager submenu contains Pet Store unit link', str_contains($superDash['body'], 'target=manager&amp;unit_id=1') || str_contains($superDash['body'], 'target=manager&unit_id=1'));
-assertCheck('Business Manager submenu contains Veterinary Clinic unit link', str_contains($superDash['body'], 'target=manager&amp;unit_id=2') || str_contains($superDash['body'], 'target=manager&unit_id=2'));
-assertCheck('Business Manager submenu contains Grooming Services unit link', str_contains($superDash['body'], 'target=manager&amp;unit_id=3') || str_contains($superDash['body'], 'target=manager&unit_id=3'));
+// Check 3 Business Units appear for Business Manager links under their respective business-unit groups:
+assertCheck('Pet Store group contains Business Manager unit link', str_contains($superDash['body'], 'target=manager&amp;unit_id=1') || str_contains($superDash['body'], 'target=manager&unit_id=1'));
+assertCheck('Veterinary Clinic group contains Business Manager unit link', str_contains($superDash['body'], 'target=manager&amp;unit_id=2') || str_contains($superDash['body'], 'target=manager&unit_id=2'));
+assertCheck('Pet Grooming group contains Business Manager unit link', str_contains($superDash['body'], 'target=manager&amp;unit_id=3') || str_contains($superDash['body'], 'target=manager&unit_id=3'));
 
 // Check 3 Business Units appear below System Administrator:
 assertCheck('System Administrator submenu contains Pet Store unit link', str_contains($superDash['body'], 'target=sysadmin&amp;unit_id=1') || str_contains($superDash['body'], 'target=sysadmin&unit_id=1'));
 assertCheck('System Administrator submenu contains Veterinary Clinic unit link', str_contains($superDash['body'], 'target=sysadmin&amp;unit_id=2') || str_contains($superDash['body'], 'target=sysadmin&unit_id=2'));
-assertCheck('System Administrator submenu contains Grooming Services unit link', str_contains($superDash['body'], 'target=sysadmin&amp;unit_id=3') || str_contains($superDash['body'], 'target=sysadmin&unit_id=3'));
+assertCheck('System Administrator submenu contains Pet Groom Service unit link', (str_contains($superDash['body'], 'target=sysadmin&amp;unit_id=3') || str_contains($superDash['body'], 'target=sysadmin&unit_id=3')) && str_contains($superDash['body'], 'Pet Groom Service'));
 
 // -------------------------------------------------------------------------
 // Section 3: Active State Accuracy Across Subpages (Root Cause Bug Fix)
@@ -258,8 +259,7 @@ assertCheck('Sys Admin does NOT see guest links in topbar nav', !preg_match('/<n
 assertCheck('Pet Store Sys Admin profile avatar displays initials "AM"', str_contains($petSysDash['body'], '<span class="profile-avatar">AM</span>'));
 
 // Check Sys Admin Switcher menu:
-assertCheck('Sys Admin switcher contains System Administrator (Current)', str_contains($petSysDash['body'], 'target=sysadmin') && str_contains($petSysDash['body'], 'is-current-interface'));
-assertCheck('Sys Admin switcher contains Employee Workspace', str_contains($petSysDash['body'], 'target=employee'));
+assertCheck('Sys Admin switcher contains System Administrator (Current)', str_contains($petSysDash['body'], 'target=sysadmin') && str_contains($petSysDash['body'], 'is-current-unit'));
 assertCheck('Sys Admin switcher contains Customer Interface', str_contains($petSysDash['body'], 'target=customer'));
 assertCheck('Sys Admin switcher does NOT contain Super Administrator', !str_contains($petSysDash['body'], 'target=super-admin'));
 assertCheck('Sys Admin switcher does NOT contain Business Manager', !str_contains($petSysDash['body'], 'target=manager'));

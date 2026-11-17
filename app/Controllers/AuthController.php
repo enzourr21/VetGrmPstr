@@ -9,6 +9,7 @@ use App\Core\Session;
 use App\Models\Audit;
 use App\Models\Units;
 use App\Services\CustomerRegistrationPendingService;
+use App\Services\InterfaceSwitcherService;
 use PDO;
 use PDOException;
 use Throwable;
@@ -74,11 +75,14 @@ final class AuthController extends Controller
         }
 
         $stmt = $db->prepare(
-            "SELECT r.role_name, bu.business_unit_name
-             FROM account_role ar
+            "SELECT r.role_name, bu.business_unit_id, bu.business_unit_name, e.business_unit_id AS emp_unit_id
+             FROM user_account ua
+             JOIN employee e ON e.user_account_id = ua.user_account_id AND e.employee_status = 'active'
+             JOIN account_role ar ON ar.user_account_id = ua.user_account_id
              JOIN role r ON r.role_id = ar.role_id
-             JOIN business_unit bu ON bu.business_unit_id = ar.business_unit_id
-             WHERE ar.user_account_id = ?"
+             JOIN business_unit bu ON bu.business_unit_id = ar.business_unit_id AND bu.business_unit_status = 'active'
+             WHERE ua.user_account_id = ? AND ua.account_status = 'active'
+             ORDER BY ar.business_unit_id ASC, r.role_name ASC"
         );
         $stmt->execute([$userId]);
         $roles = $stmt->fetchAll();
@@ -115,7 +119,11 @@ final class AuthController extends Controller
             }
         }
         foreach ($roles as $r) {
-            if ($r['role_name'] === 'DELIVERY_PERSONNEL' && ($r['business_unit_name'] === Units::PET_STORE || (int)($r['business_unit_id'] ?? 0) === 1)) {
+            if (
+                $r['role_name'] === 'DELIVERY_PERSONNEL'
+                && (int)($r['emp_unit_id'] ?? 0) === 1
+                && ($r['business_unit_name'] === Units::PET_STORE || (int)($r['business_unit_id'] ?? 0) === 1)
+            ) {
                 return '/delivery/orders';
             }
         }
@@ -418,6 +426,7 @@ final class AuthController extends Controller
         );
         Session::set('customer_id', $cid);
         Session::set('active_context', 'customer');
+        Session::forget('active_workspace_interface');
         Session::flash('info', 'Viewing VETGRPET in Customer interface mode.');
         $this->redirect('/');
     }
@@ -436,6 +445,7 @@ final class AuthController extends Controller
             $this->forbidden('Customer-only sessions cannot enter employee or administrative workspaces.');
         }
         Session::set('active_context', 'employee');
+        Session::forget('active_workspace_interface');
         $isSuper = $this->isSuperAdmin();
         $landing = self::resolveEmployeeLandingFor($this->db, (int)$uid, $isSuper);
         $this->redirect($landing);
@@ -472,6 +482,7 @@ final class AuthController extends Controller
         // 1. Customer Interface
         if ($target === 'customer') {
             Session::forget('inventory_manager_mode');
+            Session::forget('active_workspace_interface');
             $this->enterCustomerInterface();
             return;
         }
@@ -481,18 +492,16 @@ final class AuthController extends Controller
             $this->forbidden('Customer-only sessions cannot access administrative or employee workspaces.');
         }
 
-        // Determine if active account is Super Administrator from database
-        $s = $this->db->prepare(
-            "SELECT 1
-             FROM user_account ua
-             LEFT JOIN account_role ar ON ar.user_account_id = ua.user_account_id
-             LEFT JOIN role r ON r.role_id = ar.role_id
-             WHERE ua.user_account_id = ? AND ua.account_status = 'active'
-               AND (ua.is_super_admin = 1 OR r.role_name = 'SUPER_ADMINISTRATOR')
-             LIMIT 1"
-        );
-        $s->execute([(int)$uid]);
-        $isSuper = (bool)$s->fetchColumn();
+        $ctx = InterfaceSwitcherService::loadContext($this->db, (int)$uid);
+        $isSuper = !empty($ctx['is_super_admin']);
+
+        if (empty($ctx['account_active']) || (!$isSuper && empty($ctx['employee_active']))) {
+            $this->forbidden('An active employee account assignment is required.');
+        }
+
+        if ($unitId !== null && !isset($ctx['active_units'][$unitId])) {
+            $this->forbidden('Access denied: target business unit is inactive or invalid.');
+        }
 
         // 2. Super Administrator Interface
         if ($target === 'super-admin' || $target === 'super_admin') {
@@ -501,6 +510,7 @@ final class AuthController extends Controller
             }
             Session::set('active_context', 'employee');
             Session::forget('inventory_manager_mode');
+            Session::forget('active_workspace_interface');
             $this->redirect('/super-admin');
             return;
         }
@@ -508,23 +518,16 @@ final class AuthController extends Controller
         // 3. System Administrator Interface
         if ($target === 'sysadmin' || $target === 'system_admin') {
             if (!$isSuper) {
-                if ($unitId !== null) {
-                    $stmt = $this->db->prepare(
-                        "SELECT 1 FROM account_role ar JOIN role r ON r.role_id = ar.role_id WHERE ar.user_account_id = ? AND ar.business_unit_id = ? AND r.role_name = 'SYSTEM_ADMINISTRATOR' LIMIT 1"
-                    );
-                    $stmt->execute([(int)$uid, $unitId]);
-                } else {
-                    $stmt = $this->db->prepare(
-                        "SELECT 1 FROM account_role ar JOIN role r ON r.role_id = ar.role_id WHERE ar.user_account_id = ? AND r.role_name = 'SYSTEM_ADMINISTRATOR' LIMIT 1"
-                    );
-                    $stmt->execute([(int)$uid]);
-                }
-                if (!$stmt->fetchColumn()) {
+                $authorized = $unitId !== null
+                    ? InterfaceSwitcherService::hasAnyRoleInUnit($ctx, $unitId, ['SYSTEM_ADMINISTRATOR'])
+                    : !empty($ctx['sysadmin_units']);
+                if (!$authorized) {
                     $this->forbidden('System Administrator authorization is required.');
                 }
             }
             Session::set('active_context', 'employee');
             Session::forget('inventory_manager_mode');
+            Session::forget('active_workspace_interface');
             $this->redirect('/sysadmin' . $unitQuery);
             return;
         }
@@ -532,41 +535,16 @@ final class AuthController extends Controller
         // 4. Business Manager Interface
         if ($target === 'manager' || $target === 'business_manager') {
             if (!$isSuper) {
-                if ($unitId !== null) {
-                    $stmt = $this->db->prepare(
-                        "SELECT 1 FROM account_role ar JOIN role r ON r.role_id = ar.role_id WHERE ar.user_account_id = ? AND ar.business_unit_id = ? AND r.role_name IN ('BUSINESS_MANAGER', 'INVENTORY_MANAGER') LIMIT 1"
-                    );
-                    $stmt->execute([(int)$uid, $unitId]);
-                } else {
-                    $stmt = $this->db->prepare(
-                        "SELECT 1 FROM account_role ar JOIN role r ON r.role_id = ar.role_id WHERE ar.user_account_id = ? AND r.role_name IN ('BUSINESS_MANAGER', 'INVENTORY_MANAGER') LIMIT 1"
-                    );
-                    $stmt->execute([(int)$uid]);
-                }
-                if (!$stmt->fetchColumn()) {
+                $authorized = $unitId !== null
+                    ? InterfaceSwitcherService::hasAnyRoleInUnit($ctx, $unitId, ['BUSINESS_MANAGER'])
+                    : !empty($ctx['bm_units']);
+                if (!$authorized) {
                     $this->forbidden('Business Manager authorization is required.');
                 }
             }
             Session::set('active_context', 'employee');
             Session::forget('inventory_manager_mode');
-            if (!$isSuper) {
-                $chkRole = $this->db->prepare(
-                    "SELECT ar.business_unit_id, r.role_name FROM account_role ar JOIN role r ON r.role_id = ar.role_id WHERE ar.user_account_id = ? AND r.role_name IN ('BUSINESS_MANAGER', 'INVENTORY_MANAGER')"
-                );
-                $chkRole->execute([(int)$uid]);
-                $userRoleRows = $chkRole->fetchAll();
-                $userRoles = array_column($userRoleRows, 'role_name');
-                if (in_array('INVENTORY_MANAGER', $userRoles, true) && !in_array('BUSINESS_MANAGER', $userRoles, true)) {
-                    Session::set('inventory_manager_mode', true);
-                    $uId = (int)($unitId ?? $userRoleRows[0]['business_unit_id'] ?? 1);
-                    if ($uId === 1) {
-                        $this->redirect('/manager/orders' . $unitQuery);
-                    } else {
-                        $this->redirect('/manager/inventory' . $unitQuery);
-                    }
-                    return;
-                }
-            }
+            Session::forget('active_workspace_interface');
             $this->redirect('/manager' . $unitQuery);
             return;
         }
@@ -574,36 +552,22 @@ final class AuthController extends Controller
         // 4b. Inventory Manager Interface
         if ($target === 'inventory-manager' || $target === 'inventory_manager') {
             if (!$isSuper) {
-                if ($unitId !== null) {
-                    $stmt = $this->db->prepare(
-                        "SELECT 1 FROM account_role ar JOIN role r ON r.role_id = ar.role_id WHERE ar.user_account_id = ? AND ar.business_unit_id = ? AND r.role_name IN ('INVENTORY_MANAGER', 'BUSINESS_MANAGER') LIMIT 1"
-                    );
-                    $stmt->execute([(int)$uid, $unitId]);
-                } else {
-                    $stmt = $this->db->prepare(
-                        "SELECT 1 FROM account_role ar JOIN role r ON r.role_id = ar.role_id WHERE ar.user_account_id = ? AND r.role_name IN ('INVENTORY_MANAGER', 'BUSINESS_MANAGER') LIMIT 1"
-                    );
-                    $stmt->execute([(int)$uid]);
-                }
-                if (!$stmt->fetchColumn()) {
+                $authorized = $unitId !== null
+                    ? InterfaceSwitcherService::hasAnyRoleInUnit($ctx, $unitId, ['INVENTORY_MANAGER'])
+                    : !empty($ctx['im_units']);
+                if (!$authorized) {
                     $this->forbidden('Inventory Manager authorization is required.');
                 }
             }
             Session::set('active_context', 'employee');
             Session::set('inventory_manager_mode', true);
-            if ($unitId === null && !$isSuper) {
-                $uStmt = $this->db->prepare(
-                    "SELECT ar.business_unit_id FROM account_role ar JOIN role r ON r.role_id = ar.role_id WHERE ar.user_account_id = ? AND r.role_name = 'INVENTORY_MANAGER' LIMIT 1"
-                );
-                $uStmt->execute([(int)$uid]);
-                $foundU = $uStmt->fetchColumn();
-                if ($foundU) {
-                    $unitId = (int)$foundU;
-                    $unitQuery = '?unit_id=' . $unitId;
-                }
+            Session::forget('active_workspace_interface');
+            if ($unitId === null && !$isSuper && !empty($ctx['im_units'])) {
+                $unitId = (int)$ctx['im_units'][0];
+                $unitQuery = '?unit_id=' . $unitId;
             }
-            $targetUnit = $unitId ?? 1;
-            if ($targetUnit === 1) {
+            $targetUnit = $unitId ?? InterfaceSwitcherService::UNIT_PET_STORE;
+            if ($targetUnit === InterfaceSwitcherService::UNIT_PET_STORE) {
                 $this->redirect('/manager/orders' . $unitQuery);
             } else {
                 $this->redirect('/manager/inventory' . $unitQuery);
@@ -613,118 +577,140 @@ final class AuthController extends Controller
 
         // 4c. Pet Store Receptionist Interface
         if ($target === 'petstore-receptionist' || $target === 'petstore_receptionist') {
-            if (!$isSuper) {
-                $stmt = $this->db->prepare(
-                    "SELECT 1 FROM account_role ar
-                     JOIN role r ON r.role_id = ar.role_id
-                     WHERE ar.user_account_id = ? AND ar.business_unit_id = 1 AND r.role_name = 'RECEPTIONIST'
-                     LIMIT 1"
-                );
-                $stmt->execute([(int)$uid]);
-                if (!$stmt->fetchColumn()) {
-                    $this->forbidden('Pet Store Receptionist authorization is required.');
-                }
+            $uId = InterfaceSwitcherService::UNIT_PET_STORE;
+            if (!isset($ctx['active_units'][$uId]) || (!$isSuper && !InterfaceSwitcherService::hasAnyRoleInUnit($ctx, $uId, ['RECEPTIONIST']))) {
+                $this->forbidden('Pet Store Receptionist authorization is required.');
             }
             Session::set('active_context', 'employee');
             Session::forget('inventory_manager_mode');
+            Session::forget('active_workspace_interface');
             $this->redirect('/petstore/receptionist/sales');
             return;
         }
 
         // 4d. Grooming Services Receptionist Interface
         if ($target === 'grooming-receptionist' || $target === 'grooming_receptionist') {
-            if (!$isSuper) {
-                $stmt = $this->db->prepare(
-                    "SELECT 1 FROM account_role ar
-                     JOIN role r ON r.role_id = ar.role_id
-                     WHERE ar.user_account_id = ? AND ar.business_unit_id = 3 AND r.role_name = 'RECEPTIONIST'
-                     LIMIT 1"
-                );
-                $stmt->execute([(int)$uid]);
-                if (!$stmt->fetchColumn()) {
-                    $this->forbidden('Grooming Services Receptionist authorization is required.');
-                }
+            $uId = InterfaceSwitcherService::UNIT_GROOMING;
+            if (!isset($ctx['active_units'][$uId]) || (!$isSuper && !InterfaceSwitcherService::hasAnyRoleInUnit($ctx, $uId, ['RECEPTIONIST']))) {
+                $this->forbidden('Grooming Services Receptionist authorization is required.');
             }
             Session::set('active_context', 'employee');
             Session::forget('inventory_manager_mode');
+            Session::forget('active_workspace_interface');
             $this->redirect('/grooming/receptionist/overview');
             return;
         }
 
         // 4e. Veterinary Clinic Receptionist Interface
         if ($target === 'vetclinic-receptionist' || $target === 'vetclinic_receptionist' || $target === 'vet-receptionist') {
-            if (!$isSuper) {
-                $stmt = $this->db->prepare(
-                    "SELECT 1 FROM account_role ar
-                     JOIN role r ON r.role_id = ar.role_id
-                     WHERE ar.user_account_id = ? AND ar.business_unit_id = 2 AND r.role_name = 'RECEPTIONIST'
-                     LIMIT 1"
-                );
-                $stmt->execute([(int)$uid]);
-                if (!$stmt->fetchColumn()) {
-                    $this->forbidden('Veterinary Clinic Receptionist authorization is required.');
-                }
+            $uId = InterfaceSwitcherService::UNIT_VET_CLINIC;
+            if (!isset($ctx['active_units'][$uId]) || (!$isSuper && !InterfaceSwitcherService::hasAnyRoleInUnit($ctx, $uId, ['RECEPTIONIST']))) {
+                $this->forbidden('Veterinary Clinic Receptionist authorization is required.');
             }
             Session::set('active_context', 'employee');
             Session::forget('inventory_manager_mode');
+            Session::forget('active_workspace_interface');
             $this->redirect('/vetclinic/receptionist/overview');
             return;
         }
 
         // 4f. General Receptionist Switcher Target with unit_id
         if ($target === 'receptionist') {
-            $uId = isset($_GET['unit_id']) ? (int)$_GET['unit_id'] : 1;
-            if ($uId === 3) {
+            $uId = $unitId ?? InterfaceSwitcherService::UNIT_PET_STORE;
+            if ($uId === InterfaceSwitcherService::UNIT_GROOMING) {
                 $this->redirect('/switch-interface?target=grooming-receptionist');
-            } elseif ($uId === 2) {
+            } elseif ($uId === InterfaceSwitcherService::UNIT_VET_CLINIC) {
                 $this->redirect('/switch-interface?target=vetclinic-receptionist');
-            } else {
+            } elseif ($uId === InterfaceSwitcherService::UNIT_PET_STORE) {
                 $this->redirect('/switch-interface?target=petstore-receptionist');
+            } else {
+                $this->forbidden('Receptionist authorization is required.');
             }
             return;
         }
 
         // 4g. Pet Store Delivery Personnel Interface
         if ($target === 'delivery' || $target === 'delivery-personnel' || $target === 'delivery_personnel') {
+            if (!InterfaceSwitcherService::canAccessDelivery($ctx)) {
+                $this->forbidden('Pet Store Delivery Personnel authorization is required.');
+            }
+            Session::set('active_context', 'employee');
+            Session::forget('inventory_manager_mode');
+            Session::forget('active_workspace_interface');
+            $this->redirect('/delivery/orders');
+            return;
+        }
+
+        // 4h. Veterinary Clinic Role Workspaces
+        $vetTargets = [
+            'vetclinic-lead-vet' => ['roles' => ['VETERINARIAN_WORKSPACE', 'VETERINARIAN'], 'lead' => true, 'msg' => 'Veterinary Clinic Lead Vet authorization is required.'],
+            'vetclinic-associate-vet' => ['roles' => ['VETERINARIAN_WORKSPACE', 'VETERINARIAN'], 'lead' => false, 'msg' => 'Veterinary Clinic Associate Vet authorization is required.'],
+            'vetclinic-vet-nurse' => ['roles' => ['VETERINARY_NURSE_WORKSPACE', 'NURSE'], 'lead' => null, 'msg' => 'Veterinary Clinic Vet Nurse authorization is required.'],
+            'vetclinic-vet-assistant' => ['roles' => ['VETERINARY_TECHNICIAN_WORKSPACE', 'TECHNICIAN'], 'lead' => null, 'msg' => 'Veterinary Clinic Vet Assistant authorization is required.'],
+        ];
+        if (isset($vetTargets[$target])) {
+            $cfg = $vetTargets[$target];
+            $uId = InterfaceSwitcherService::UNIT_VET_CLINIC;
+            if (!isset($ctx['active_units'][$uId])) {
+                $this->forbidden($cfg['msg']);
+            }
             if (!$isSuper) {
-                $stmt = $this->db->prepare(
-                    "SELECT 1
-                     FROM user_account ua
-                     JOIN employee e ON e.user_account_id = ua.user_account_id
-                                      AND e.employee_status = 'active'
-                                      AND e.business_unit_id = 1
-                     JOIN account_role ar ON ar.user_account_id = ua.user_account_id
-                                          AND ar.business_unit_id = e.business_unit_id
-                     JOIN role r ON r.role_id = ar.role_id AND r.role_name = 'DELIVERY_PERSONNEL'
-                     JOIN business_unit bu ON bu.business_unit_id = ar.business_unit_id
-                                          AND bu.business_unit_status = 'active'
-                     WHERE ua.user_account_id = ? AND ua.account_status = 'active'
-                     LIMIT 1"
-                );
-                $stmt->execute([(int)$uid]);
-                if (!$stmt->fetchColumn()) {
-                    $this->forbidden('Pet Store Delivery Personnel authorization is required.');
+                $hasRole = InterfaceSwitcherService::hasAnyRoleInUnit($ctx, $uId, $cfg['roles']);
+                $isLead = InterfaceSwitcherService::isLeadVetPosition((string)($ctx['position'] ?? ''));
+                $posOk = $cfg['lead'] === null || ($cfg['lead'] ? $isLead : !$isLead);
+                if (!$hasRole || !$posOk) {
+                    $this->forbidden($cfg['msg']);
                 }
             }
             Session::set('active_context', 'employee');
             Session::forget('inventory_manager_mode');
-            $this->redirect('/delivery/orders');
+            Session::set('active_workspace_interface', $target);
+            $this->redirect('/staff/workspace?unit_id=' . $uId);
+            return;
+        }
+
+        // 4i. Pet Grooming Role Workspaces
+        $groomTargets = [
+            'grooming-stylist' => ['role' => 'STYLIST_WORKSPACE', 'msg' => 'Pet Grooming Stylist authorization is required.'],
+            'grooming-bather' => ['role' => 'BATHER_WORKSPACE', 'msg' => 'Pet Grooming Bather authorization is required.'],
+        ];
+        if (isset($groomTargets[$target])) {
+            $cfg = $groomTargets[$target];
+            $uId = InterfaceSwitcherService::UNIT_GROOMING;
+            if (!isset($ctx['active_units'][$uId])) {
+                $this->forbidden($cfg['msg']);
+            }
+            if (!$isSuper && !InterfaceSwitcherService::hasAnyRoleInUnit($ctx, $uId, [$cfg['role']])) {
+                $this->forbidden($cfg['msg']);
+            }
+            Session::set('active_context', 'employee');
+            Session::forget('inventory_manager_mode');
+            Session::set('active_workspace_interface', $target);
+            $this->redirect('/staff/workspace?unit_id=' . $uId);
             return;
         }
 
         // 5. Employee Workspace
         if ($target === 'employee' || $target === 'workspace') {
             if (!$isSuper) {
-                $stmt = $this->db->prepare(
-                    "SELECT 1 FROM employee WHERE user_account_id = ? AND employee_status = 'active' LIMIT 1"
-                );
-                $stmt->execute([(int)$uid]);
-                if (!$stmt->fetchColumn()) {
-                    $this->forbidden('Employee workspace authorization is required.');
+                if ($unitId !== null) {
+                    $authorized = ((int)($ctx['emp_unit_id'] ?? 0) === $unitId)
+                        || !empty($ctx['roles_by_unit'][$unitId]);
+                    if (!$authorized) {
+                        $this->forbidden('Access denied: you are not authorized for the requested business unit workspace.');
+                    }
+                } else {
+                    $empUnitId = (int)($ctx['emp_unit_id'] ?? 0);
+                    $hasActiveHomeUnit = $empUnitId > 0 && isset($ctx['active_units'][$empUnitId]);
+                    $hasAnyActiveRoleUnit = !empty($ctx['roles_by_unit']);
+                    if (!$hasActiveHomeUnit && !$hasAnyActiveRoleUnit) {
+                        $this->forbidden('Employee workspace authorization is required.');
+                    }
                 }
             }
             Session::set('active_context', 'employee');
             Session::forget('inventory_manager_mode');
+            Session::forget('active_workspace_interface');
             $this->redirect('/staff/workspace' . $unitQuery);
             return;
         }
