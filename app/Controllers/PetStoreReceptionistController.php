@@ -1020,9 +1020,9 @@ final class PetStoreReceptionistController extends Controller
 
     /**
      * Authorize Pet Store Receptionist Remittances viewer:
-     * - Permits active Pet Store employee (unit 1) with active RECEPTIONIST role (operational receptionist).
-     * - Permits Super Administrator in read-only oversight mode if not holding an active Pet Store RECEPTIONIST assignment
-     *   (never uses a fallback employee_id for operational actions).
+     * - Super Administrators always remain in read-only oversight mode (`is_receptionist = false`, `emp_id = 0`),
+     *   even if the account also holds an active Pet Store employee record and RECEPTIONIST role.
+     * - Permits non-Super-Admin active Pet Store employee (unit 1) with active RECEPTIONIST role as operational receptionist.
      *
      * @return array{uid:int, emp_id:int, unit_id:int, unit_name:string, is_receptionist:bool, is_super:bool}
      */
@@ -1042,7 +1042,28 @@ final class PetStoreReceptionistController extends Controller
             $this->forbidden('An email-authenticated Pet Store Receptionist session is required.');
         }
 
-        $isSuper = $this->isSuperAdmin();
+        if ($this->isSuperAdmin()) {
+            $accStmt = $this->db->prepare(
+                "SELECT 1
+                 FROM user_account ua
+                 JOIN business_unit bu ON bu.business_unit_id = ? AND bu.business_unit_status = 'active'
+                 WHERE ua.user_account_id = ? AND ua.account_status = 'active'
+                 LIMIT 1"
+            );
+            $accStmt->execute([self::PET_STORE_UNIT_ID, (int)$uid]);
+            if (!$accStmt->fetchColumn()) {
+                $this->forbidden('Access denied: active account and business unit are required.');
+            }
+
+            return [
+                'uid' => (int)$uid,
+                'emp_id' => 0,
+                'unit_id' => self::PET_STORE_UNIT_ID,
+                'unit_name' => Units::PET_STORE,
+                'is_receptionist' => false,
+                'is_super' => true,
+            ];
+        }
 
         $stmt = $this->db->prepare(
             "SELECT e.employee_id
@@ -1067,18 +1088,7 @@ final class PetStoreReceptionistController extends Controller
                 'unit_id' => self::PET_STORE_UNIT_ID,
                 'unit_name' => Units::PET_STORE,
                 'is_receptionist' => true,
-                'is_super' => $isSuper,
-            ];
-        }
-
-        if ($isSuper) {
-            return [
-                'uid' => (int)$uid,
-                'emp_id' => 0,
-                'unit_id' => self::PET_STORE_UNIT_ID,
-                'unit_name' => Units::PET_STORE,
-                'is_receptionist' => false,
-                'is_super' => true,
+                'is_super' => false,
             ];
         }
 
@@ -1087,14 +1097,14 @@ final class PetStoreReceptionistController extends Controller
 
     /**
      * Authorize operational Receptionist remittance handover mutations.
-     * Never grants mutation rights via Super Administrator status or fallback employee IDs.
+     * Rejects all Super Administrators as well as accounts lacking an active Pet Store Receptionist assignment.
      *
      * @return array{uid:int, emp_id:int, unit_id:int, unit_name:string, is_receptionist:bool, is_super:bool}
      */
     private function requireReceptionistOperator(): array
     {
         $auth = $this->requireReceptionistRemittanceViewer();
-        if (!$auth['is_receptionist'] || $auth['emp_id'] <= 0) {
+        if ($auth['is_super'] || !$auth['is_receptionist'] || $auth['emp_id'] <= 0) {
             $this->forbidden('Operational remittance handover actions require an active Pet Store Receptionist role assignment.');
         }
         return $auth;

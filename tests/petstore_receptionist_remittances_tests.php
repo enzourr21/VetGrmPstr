@@ -288,6 +288,7 @@ try {
     [$vetRecUid, $vetRecEmpId, $vetRecEmail] = $createStaff('vetrec', 2, [['RECEPTIONIST', 2], ['RECEPTIONIST', 1]]);
     [$inactEmpUid, $inactEmpId, $inactEmpEmail] = $createStaff('inactemp', 1, [['RECEPTIONIST', 1]], 'inactive', 'active');
     [$superUid, $superEmpId, $superEmail] = $createStaff('super', 2, [['SUPER_ADMINISTRATOR', 1]], 'active', 'active', 1);
+    [$superRecUid, $superRecEmpId, $superRecEmail] = $createStaff('super_rec', 1, [['SUPER_ADMINISTRATOR', 1], ['RECEPTIONIST', 1]], 'active', 'active', 1);
 
     // Customer
     $pdo->prepare('INSERT INTO user_account (email, password_hash, account_status) VALUES (?, ?, ?)')
@@ -486,6 +487,26 @@ try {
             && $superPost['status'] === 403
             && $alloc1aAfterSuper['handover_status'] === 'submitted'
             && $alloc1aAfterSuper['completed_by_employee_id'] === null
+    );
+
+    // Super Administrator who ALSO has an active Pet Store employee record and unit-1 RECEPTIONIST role must remain read-only
+    $superRecClient = new ReceptionistRemitTestClient($baseUrl);
+    $superRecClient->staffLogin($superRecEmail, $pwPlain);
+    $superRecGet = $superRecClient->get('/petstore/receptionist/remittances');
+    $superRecOv = $superRecClient->get('/petstore/receptionist/overview');
+    $superRecCsrf = $superRecClient->extractCsrf($superRecOv['body']);
+    $superRecPost = $superRecClient->post("/petstore/receptionist/remittances/allocations/{$alloc1a}/complete", ['csrf_token' => $superRecCsrf]);
+    $alloc1aAfterSuperRec = $pdo->query("SELECT handover_status, completed_by_employee_id FROM courier_cod_remittance_allocation WHERE allocation_id = {$alloc1a}")->fetch(PDO::FETCH_ASSOC);
+
+    check(
+        'Super Administrator with active Pet Store employee and RECEPTIONIST role remains read-only on GET (200) and is blocked (403) on POST without changing allocation',
+        $superRecGet['status'] === 200
+            && str_contains($superRecGet['body'], 'Administrative Oversight Mode (Read-Only)')
+            && str_contains($superRecGet['body'], 'Read-only oversight')
+            && !str_contains($superRecGet['body'], "/petstore/receptionist/remittances/allocations/{$alloc1a}/complete")
+            && $superRecPost['status'] === 403
+            && $alloc1aAfterSuperRec['handover_status'] === 'submitted'
+            && $alloc1aAfterSuperRec['completed_by_employee_id'] === null
     );
 
     // =========================================================================
