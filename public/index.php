@@ -180,6 +180,8 @@ $r->post('/petstore/receptionist/orders/{id}/status', 'PetStoreReceptionistContr
 $r->post('/petstore/receptionist/orders/{id}/collect-cod', 'PetStoreReceptionistController', 'collectPickupCod');
 $r->post('/petstore/receptionist/orders/{id}/delivery-status', 'PetStoreReceptionistController', 'updateDeliveryStatus');
 $r->post('/petstore/receptionist/orders/{id}/reschedule', 'PetStoreReceptionistController', 'rescheduleDelivery');
+$r->get('/petstore/receptionist/remittances', 'PetStoreReceptionistController', 'remittances');
+$r->post('/petstore/receptionist/remittances/allocations/{id}/complete', 'PetStoreReceptionistController', 'completeRemittanceAllocation');
 $r->get('/petstore/receptionist/employees', 'PetStoreReceptionistController', 'employees');
 
 // Pet Store Delivery Personnel Interface

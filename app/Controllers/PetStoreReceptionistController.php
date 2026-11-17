@@ -1013,4 +1013,271 @@ final class PetStoreReceptionistController extends Controller
             'workStatusFilter' => $wsFilter,
         ]);
     }
+
+    // ==========================================
+    // 4. COD REMITTANCES PAGE
+    // ==========================================
+
+    /**
+     * Authorize Pet Store Receptionist Remittances viewer:
+     * - Permits active Pet Store employee (unit 1) with active RECEPTIONIST role (operational receptionist).
+     * - Permits Super Administrator in read-only oversight mode if not holding an active Pet Store RECEPTIONIST assignment
+     *   (never uses a fallback employee_id for operational actions).
+     *
+     * @return array{uid:int, emp_id:int, unit_id:int, unit_name:string, is_receptionist:bool, is_super:bool}
+     */
+    private function requireReceptionistRemittanceViewer(): array
+    {
+        $uid = Session::get('user_id');
+        if (!$uid) {
+            Session::set('return_to', $_SERVER['REQUEST_URI'] ?? '/petstore/receptionist/remittances');
+            $this->redirect('/login');
+        }
+
+        $baseContext = Session::get('base_context', Session::get('employee_id') ? 'employee' : 'customer');
+        $activeContext = Session::get('active_context', $baseContext);
+        $authMethod = Session::get('auth_method', 'email');
+
+        if ($baseContext !== 'employee' || $activeContext === 'customer' || $authMethod === 'username') {
+            $this->forbidden('An email-authenticated Pet Store Receptionist session is required.');
+        }
+
+        $isSuper = $this->isSuperAdmin();
+
+        $stmt = $this->db->prepare(
+            "SELECT e.employee_id
+             FROM user_account ua
+             JOIN employee e ON e.user_account_id = ua.user_account_id
+                              AND e.employee_status = 'active'
+                              AND e.business_unit_id = ?
+             JOIN account_role ar ON ar.user_account_id = ua.user_account_id
+                                  AND ar.business_unit_id = e.business_unit_id
+             JOIN role r ON r.role_id = ar.role_id AND r.role_name = 'RECEPTIONIST'
+             JOIN business_unit bu ON bu.business_unit_id = ar.business_unit_id AND bu.business_unit_status = 'active'
+             WHERE ua.user_account_id = ? AND ua.account_status = 'active'
+             LIMIT 1"
+        );
+        $stmt->execute([self::PET_STORE_UNIT_ID, (int)$uid]);
+        $empId = $stmt->fetchColumn();
+
+        if ($empId !== false && (int)$empId > 0) {
+            return [
+                'uid' => (int)$uid,
+                'emp_id' => (int)$empId,
+                'unit_id' => self::PET_STORE_UNIT_ID,
+                'unit_name' => Units::PET_STORE,
+                'is_receptionist' => true,
+                'is_super' => $isSuper,
+            ];
+        }
+
+        if ($isSuper) {
+            return [
+                'uid' => (int)$uid,
+                'emp_id' => 0,
+                'unit_id' => self::PET_STORE_UNIT_ID,
+                'unit_name' => Units::PET_STORE,
+                'is_receptionist' => false,
+                'is_super' => true,
+            ];
+        }
+
+        $this->forbidden('Access denied: Pet Store Receptionist privileges are required.');
+    }
+
+    /**
+     * Authorize operational Receptionist remittance handover mutations.
+     * Never grants mutation rights via Super Administrator status or fallback employee IDs.
+     *
+     * @return array{uid:int, emp_id:int, unit_id:int, unit_name:string, is_receptionist:bool, is_super:bool}
+     */
+    private function requireReceptionistOperator(): array
+    {
+        $auth = $this->requireReceptionistRemittanceViewer();
+        if (!$auth['is_receptionist'] || $auth['emp_id'] <= 0) {
+            $this->forbidden('Operational remittance handover actions require an active Pet Store Receptionist role assignment.');
+        }
+        return $auth;
+    }
+
+    /**
+     * Dedicated Pet Store Receptionist COD Remittances page:
+     * Displays courier-submitted COD remittance batches and their active per-order allocations
+     * (using remittable purchase subtotal excluding delivery fees) for individual handover completion.
+     */
+    public function remittances(): void
+    {
+        $auth = $this->requireReceptionistRemittanceViewer();
+        $unitId = $auth['unit_id'];
+        $unitName = $auth['unit_name'];
+
+        $q = trim((string)($_GET['q'] ?? ''));
+
+        $batchSql = "SELECT r.remittance_id, r.remittance_reference, r.business_unit_id,
+                            r.courier_employee_id, r.expected_total, r.remitted_total,
+                            r.verified_total, r.remittance_status, r.submitted_at,
+                            r.verified_by_employee_id, r.verified_at, r.notes,
+                            CONCAT(ce.first_name, ' ', ce.last_name) AS courier_name
+                     FROM courier_cod_remittance r
+                     JOIN employee ce ON ce.employee_id = r.courier_employee_id
+                     WHERE r.business_unit_id = ?
+                       AND r.remittance_status IN ('submitted', 'completed', 'verified')
+                       AND EXISTS (
+                           SELECT 1
+                           FROM courier_cod_remittance_allocation a_ex
+                           WHERE a_ex.remittance_id = r.remittance_id
+                             AND a_ex.allocation_status = 'active'
+                       )";
+        $batchParams = [$unitId];
+
+        if ($q !== '') {
+            $cleanQ = ltrim($q, '#');
+            if (str_starts_with(strtoupper($cleanQ), 'ORD-')) {
+                $cleanQ = substr($cleanQ, 4);
+            }
+            $numId = ctype_digit($cleanQ) ? (int)$cleanQ : 0;
+            $batchSql .= " AND (
+                r.remittance_reference LIKE ?
+                OR ce.first_name LIKE ?
+                OR ce.last_name LIKE ?
+                OR CONCAT(ce.first_name, ' ', ce.last_name) LIKE ?
+                OR EXISTS (
+                    SELECT 1
+                    FROM courier_cod_remittance_allocation a_q
+                    WHERE a_q.remittance_id = r.remittance_id
+                      AND a_q.allocation_status = 'active'
+                      AND a_q.order_id = ?
+                )
+            )";
+            $batchParams[] = "%$q%";
+            $batchParams[] = "%$q%";
+            $batchParams[] = "%$q%";
+            $batchParams[] = "%$q%";
+            $batchParams[] = $numId;
+        }
+
+        $batchSql .= " ORDER BY CASE r.remittance_status
+                                    WHEN 'submitted' THEN 0
+                                    WHEN 'completed' THEN 1
+                                    ELSE 2
+                                END ASC,
+                                r.submitted_at DESC,
+                                r.remittance_id DESC";
+
+        $batchStmt = $this->db->prepare($batchSql);
+        $batchStmt->execute($batchParams);
+        $batches = $batchStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+        if ($batches) {
+            $batchIds = array_map(static fn(array $b): int => (int)$b['remittance_id'], $batches);
+            $placeholders = implode(',', array_fill(0, count($batchIds), '?'));
+
+            $allocStmt = $this->db->prepare(
+                "SELECT a.allocation_id, a.remittance_id, a.payment_id, a.order_id, a.business_unit_id,
+                        a.expected_amount, a.allocated_amount, a.allocation_status,
+                        a.handover_status, a.completed_by_employee_id, a.completed_at,
+                        a.verification_status, a.verified_by_employee_id, a.verified_at, a.verification_mode,
+                        co.order_date, co.subtotal_amount, co.delivery_fee, co.total_amount,
+                        CONCAT(c.first_name, ' ', c.last_name) AS customer_name,
+                        CONCAT(ec.first_name, ' ', ec.last_name) AS completed_by_name,
+                        CONCAT(ev.first_name, ' ', ev.last_name) AS verified_by_name
+                 FROM courier_cod_remittance_allocation a
+                 JOIN customer_order co ON co.order_id = a.order_id AND co.business_unit_id = a.business_unit_id
+                 JOIN customer c ON c.customer_id = co.customer_id
+                 LEFT JOIN employee ec ON ec.employee_id = a.completed_by_employee_id
+                 LEFT JOIN employee ev ON ev.employee_id = a.verified_by_employee_id
+                 WHERE a.remittance_id IN ({$placeholders})
+                   AND a.business_unit_id = ?
+                   AND a.allocation_status = 'active'
+                 ORDER BY a.allocation_id ASC"
+            );
+            $allocStmt->execute([...$batchIds, $unitId]);
+            $allocsByBatch = [];
+            foreach ($allocStmt->fetchAll(PDO::FETCH_ASSOC) as $aRow) {
+                $allocsByBatch[(int)$aRow['remittance_id']][] = $aRow;
+            }
+
+            foreach ($batches as &$b) {
+                $bAllocs = $allocsByBatch[(int)$b['remittance_id']] ?? [];
+                $b['allocations'] = $bAllocs;
+                $b['allocation_count'] = count($bAllocs);
+                $awaitingCnt = 0;
+                $completedCnt = 0;
+                $verifiedCnt = 0;
+                foreach ($bAllocs as $al) {
+                    if ((string)$al['handover_status'] === 'submitted') {
+                        $awaitingCnt++;
+                    } else {
+                        $completedCnt++;
+                    }
+                    if ((string)$al['verification_status'] === 'verified') {
+                        $verifiedCnt++;
+                    }
+                }
+                $b['awaiting_handover_count'] = $awaitingCnt;
+                $b['completed_handover_count'] = $completedCnt;
+                $b['verified_count'] = $verifiedCnt;
+            }
+            unset($b);
+        }
+
+        $this->render('petstore_receptionist/remittances', [
+            'title' => 'Remittances · Pet Store Receptionist',
+            'unitId' => $unitId,
+            'unitName' => $unitName,
+            'isReceptionist' => $auth['is_receptionist'],
+            'isSuper' => $auth['is_super'],
+            'empId' => $auth['emp_id'],
+            'remittanceBatches' => $batches,
+            'searchQuery' => $q,
+        ]);
+    }
+
+    /**
+     * Complete individual COD remittance allocation handover as an active Pet Store Receptionist.
+     */
+    public function completeRemittanceAllocation(int $allocationId): void
+    {
+        CSRF::check();
+        $auth = $this->requireReceptionistOperator();
+
+        if ($allocationId <= 0) {
+            $this->flash('error', 'Invalid COD remittance allocation selected.');
+            $this->redirect('/petstore/receptionist/remittances');
+            return;
+        }
+
+        try {
+            $paymentService = new OrderPaymentService($this->db);
+            $result = $paymentService->completeRemittanceAllocation(
+                $allocationId,
+                $auth['uid'],
+                self::PET_STORE_UNIT_ID
+            );
+
+            $amtFormatted = number_format((float)$result['allocated_amount'], 2);
+            if (($result['verification_status'] ?? '') === 'verified') {
+                $this->flash(
+                    'success',
+                    "Handover completed and Verified for Order #ORD-{$result['order_id']} (₱{$amtFormatted}) in batch {$result['remittance_reference']}."
+                );
+            } else {
+                $this->flash(
+                    'success',
+                    "Handover Completed for Order #ORD-{$result['order_id']} (₱{$amtFormatted}) in batch {$result['remittance_reference']}."
+                );
+            }
+        } catch (RuntimeException $e) {
+            $code = $e->getCode();
+            if ($code === OrderPaymentService::ERR_NOT_FOUND) {
+                $this->notFound();
+            }
+            if ($code === OrderPaymentService::ERR_FORBIDDEN) {
+                $this->forbidden($e->getMessage());
+            }
+            $this->flash('error', $e->getMessage());
+        }
+
+        $this->redirect('/petstore/receptionist/remittances');
+    }
 }

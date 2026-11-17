@@ -266,6 +266,7 @@ $renderProfileMenu = static function (string $adminInitials, array $authorizedIn
   <?php elseif (str_starts_with($curPath, '/petstore/receptionist')): ?>
       <a href="/petstore/receptionist/overview" class="<?= ($curPath === '/petstore/receptionist' || str_starts_with($curPath, '/petstore/receptionist/overview') || str_starts_with($curPath, '/petstore/receptionist/sales')) ? 'is-current' : '' ?>">Overview</a>
       <a href="/petstore/receptionist/orders" class="<?= str_starts_with($curPath, '/petstore/receptionist/orders') ? 'is-current' : '' ?>">Orders</a>
+      <a href="/petstore/receptionist/remittances" class="<?= str_starts_with($curPath, '/petstore/receptionist/remittances') ? 'is-current' : '' ?>">Remittances</a>
       <a href="/petstore/receptionist/employees" class="<?= str_starts_with($curPath, '/petstore/receptionist/employees') ? 'is-current' : '' ?>">Employees</a>
 
   <?php elseif (str_starts_with($curPath, '/grooming/receptionist')): ?>
