@@ -402,6 +402,16 @@ try {
         false,
         [[$bpId, 1, 120.00], [$bp2Id, 1, 80.00]]
     );
+    $saleOverRefundedId = $insertSale(
+        $recEmpId,
+        $custBobId,
+        'DATE_SUB(NOW(), INTERVAL 1 DAY)',
+        200.00,
+        'GCash',
+        'completed',
+        250.00,
+        [[$bpId, 1, 120.00], [$bp2Id, 1, 80.00]]
+    );
 
     // -----------------------------------------------------------------
     // Fixtures: Orders for Receptionist Orders & BM Sales
@@ -603,6 +613,21 @@ try {
         'payment_status' => 'refunded',
     ])['order_id'];
 
+    // 16. Online Delivery over-refunded anomaly (300.00 refunded > 250.00 paid) -> generic 'recorded' with inconsistency reported
+    $oDeliveryOverRefunded = $insertOrder([
+        'customer_id' => $custAliceId,
+        'fulfillment_method' => 'delivery',
+        'order_status' => 'completed',
+        'order_date_sql' => 'DATE_SUB(NOW(), INTERVAL 2 DAY)',
+        'updated_at_sql' => 'DATE_SUB(NOW(), INTERVAL 2 DAY)',
+        'subtotal' => 200.00,
+        'delivery_fee' => 50.00,
+        'items' => [[$bpId, 1, 120.00], [$bp2Id, 1, 80.00]],
+        'payment_method' => 'GCash',
+        'payment_status' => 'completed',
+        'refund_payment_amount' => 300.00,
+    ])['order_id'];
+
     // -----------------------------------------------------------------
     // Fixtures: Refund Requests (pending, approved, rejected with distinct dates & amounts)
     // -----------------------------------------------------------------
@@ -769,11 +794,13 @@ try {
     $refSaleModal = extractModal($salesWalk['body'], "walkin-modal-{$saleTodayRefundedId}");
     $partialSaleModal = extractModal($salesWalk['body'], "walkin-modal-{$salePartialRefundId}");
     $recordedSaleModal = extractModal($salesWalk['body'], "walkin-modal-{$saleRecordedRefundOnlyId}");
+    $overSaleModal = extractModal($salesWalk['body'], "walkin-modal-{$saleOverRefundedId}");
 
     $nonRefSaleItemsBody = extractProductsTbody($nonRefSaleModal);
     $refSaleItemsBody = extractProductsTbody($refSaleModal);
     $partialSaleItemsBody = extractProductsTbody($partialSaleModal);
     $recordedSaleItemsBody = extractProductsTbody($recordedSaleModal);
+    $overSaleItemsBody = extractProductsTbody($overSaleModal);
 
     check(
         'Walk-in non-refunded modal displays no refund notice or per-item refund badges',
@@ -819,6 +846,19 @@ try {
             && str_contains($recordedSaleItemsBody, "PSR Leash {$suffix}")
             && !str_contains($recordedSaleItemsBody, 'Refund')
     );
+    check(
+        'Walk-in over-refunded sale (250.00 > 200.00 paid) falls back to generic Refund Recorded with inconsistency reported instead of Full Refund',
+        !str_contains($overSaleModal, 'Refund Status')
+            && str_contains($overSaleModal, 'Refund Recorded')
+            && !str_contains($overSaleModal, 'Full Refund Recorded')
+            && !str_contains($overSaleModal, 'Partial Refund Recorded')
+            && str_contains($overSaleModal, '250.00 refunded vs.')
+            && str_contains($overSaleModal, '200.00 paid (inconsistent amount)')
+            && str_contains($overSaleModal, 'Recorded refund total exceeds the original paid amount')
+            && str_contains($overSaleItemsBody, "PSR Kibble {$suffix}")
+            && str_contains($overSaleItemsBody, "PSR Leash {$suffix}")
+            && !str_contains($overSaleItemsBody, 'Refund')
+    );
 
     $salesDeliv = $bm->get('/manager/sales?tab=delivery');
     $delivTable = extractMainTable($salesDeliv['body']);
@@ -856,12 +896,14 @@ try {
     $refDelivModal = extractModal($salesDeliv['body'], "online-modal-{$oDeliveryRefunded}");
     $partialDelivModal = extractModal($salesDeliv['body'], "online-modal-{$oDeliveryPartialRefunded}");
     $fullMultiDelivModal = extractModal($salesDeliv['body'], "online-modal-{$oDeliveryFullMultiRefunded}");
+    $overDelivModal = extractModal($salesDeliv['body'], "online-modal-{$oDeliveryOverRefunded}");
     $recordedPickupModal = extractModal($salesPickup['body'], "online-modal-{$oPickupRecordedRefundOnly}");
 
     $nonRefDelivItemsBody = extractProductsTbody($nonRefDelivModal);
     $refDelivItemsBody = extractProductsTbody($refDelivModal);
     $partialDelivItemsBody = extractProductsTbody($partialDelivModal);
     $fullMultiDelivItemsBody = extractProductsTbody($fullMultiDelivModal);
+    $overDelivItemsBody = extractProductsTbody($overDelivModal);
     $recordedPickupItemsBody = extractProductsTbody($recordedPickupModal);
 
     $dbOrdRefundedStatus = (string)$pdo->query("SELECT order_status FROM customer_order WHERE order_id = {$oDeliveryRefunded}")->fetchColumn();
@@ -918,6 +960,20 @@ try {
             && str_contains($recordedPickupItemsBody, "PSR Kibble {$suffix}")
             && str_contains($recordedPickupItemsBody, "PSR Leash {$suffix}")
             && !str_contains($recordedPickupItemsBody, 'Refund')
+    );
+    check(
+        'Online over-refunded order (300.00 > 250.00 paid) falls back to generic Refund Recorded with inconsistency reported instead of Full Refund',
+        !str_contains($overDelivModal, 'Refund Status')
+            && str_contains($overDelivModal, 'Refund Recorded')
+            && !str_contains($overDelivModal, 'Full Refund Recorded')
+            && !str_contains($overDelivModal, 'Partial Refund Recorded')
+            && str_contains($overDelivModal, '300.00 refunded vs.')
+            && str_contains($overDelivModal, '250.00 paid (inconsistent amount)')
+            && str_contains($overDelivModal, 'Recorded refund total exceeds the original paid amount')
+            && preg_match('/badge-success">\s*Completed\s*</s', $overDelivModal) === 1
+            && str_contains($overDelivItemsBody, "PSR Kibble {$suffix}")
+            && str_contains($overDelivItemsBody, "PSR Leash {$suffix}")
+            && !str_contains($overDelivItemsBody, 'Refund')
     );
 
     // =================================================================

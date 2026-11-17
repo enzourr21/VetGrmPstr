@@ -3173,7 +3173,7 @@ final class ManagerController extends Controller
      * Derive honest transaction-level refund indicators strictly from stored payment rows.
      * The current schema stores refunds at the transaction level (without item-level attribution).
      *
-     * @return array{refund_scope:string, payment_status:string}
+     * @return array{refund_scope:string, refund_inconsistent:bool, payment_status:string}
      */
     private static function summarizeTransactionRefund(array $row): array
     {
@@ -3182,6 +3182,7 @@ final class ManagerController extends Controller
         if (!$hasRefund) {
             return [
                 'refund_scope' => 'none',
+                'refund_inconsistent' => false,
                 'payment_status' => $baseStatus,
             ];
         }
@@ -3192,17 +3193,22 @@ final class ManagerController extends Controller
             if ($refundedCents < $paidCents) {
                 return [
                     'refund_scope' => 'partial',
+                    'refund_inconsistent' => false,
                     'payment_status' => 'partially_refunded',
                 ];
             }
-            return [
-                'refund_scope' => 'full',
-                'payment_status' => 'refunded',
-            ];
+            if ($refundedCents === $paidCents) {
+                return [
+                    'refund_scope' => 'full',
+                    'refund_inconsistent' => false,
+                    'payment_status' => 'refunded',
+                ];
+            }
         }
 
         return [
             'refund_scope' => 'recorded',
+            'refund_inconsistent' => $refundedCents > $paidCents,
             'payment_status' => 'refunded',
         ];
     }

@@ -60,8 +60,13 @@ $renderRefundNotice = static function (array $tx): string {
     } else {
         $badgeClass = 'badge-danger';
         $badgeText = 'Refund Recorded';
-        $headline = 'Transaction-level refund recorded';
-        $detail = 'This transaction payment is marked refunded without a separate refund amount or item-level breakdown in the current schema, so partial vs. full distinction and individual product attribution are unavailable.';
+        if (!empty($tx['refund_inconsistent'])) {
+            $headline = peso($refundedAmt) . ' refunded vs. ' . peso($paidAmt) . ' paid (inconsistent amount)';
+            $detail = 'Recorded refund total exceeds the original paid amount at the transaction level; verify the underlying payment records. Item-level refund attribution is not stored in the current schema, so individual product rows are not marked.';
+        } else {
+            $headline = 'Transaction-level refund recorded';
+            $detail = 'This transaction payment is marked refunded without a separate refund amount or item-level breakdown in the current schema, so partial vs. full distinction and individual product attribution are unavailable.';
+        }
         $boxBg = '#fef2f2';
         $boxBorder = '#ef4444';
     }
