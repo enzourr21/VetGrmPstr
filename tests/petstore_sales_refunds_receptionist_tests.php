@@ -179,6 +179,16 @@ function extractMainTable(string $html): string
     return '';
 }
 
+function extractProductsTbody(string $modalHtml): string
+{
+    $pos = strpos($modalHtml, 'Purchased Products');
+    $slice = $pos !== false ? substr($modalHtml, $pos) : $modalHtml;
+    if (preg_match('#<tbody>(.*?)</tbody>#s', $slice, $m)) {
+        return $m[1];
+    }
+    return '';
+}
+
 $port = 18093;
 [$serverProc, $serverPipes] = startBuiltInServer($port);
 $baseUrl = "http://127.0.0.1:{$port}";
@@ -254,14 +264,29 @@ try {
         ->execute([$bpId]);
     $createdInvIds[] = (int)$pdo->lastInsertId();
 
-    $insertSale = static function (int $empId, ?int $custId, string $saleDateSql, float $total, string $method, string $payStatus, bool $withChildRefund = false) use ($pdo, $branchId, $bpId, &$createdSaleIds, &$createdPaymentIds): int {
+    $pdo->prepare("INSERT INTO product (product_name, description, product_category, sku) VALUES (?, 'Test leash', 'Accessories', ?)")
+        ->execute(["PSR Leash {$suffix}", "SKU-PSR-2-{$suffix}"]);
+    $prod2Id = (int)$pdo->lastInsertId();
+    $createdProductIds[] = $prod2Id;
+    $pdo->prepare("INSERT INTO business_product (business_unit_id, product_id, selling_price, product_status) VALUES (1, ?, 80.00, 'active')")
+        ->execute([$prod2Id]);
+    $bp2Id = (int)$pdo->lastInsertId();
+    $createdBpIds[] = $bp2Id;
+    $pdo->prepare("INSERT INTO inventory (business_product_id, on_hand, committed, in_transit) VALUES (?, 100, 0, 0)")
+        ->execute([$bp2Id]);
+    $createdInvIds[] = (int)$pdo->lastInsertId();
+
+    $insertSale = static function (int $empId, ?int $custId, string $saleDateSql, float $total, string $method, string $payStatus, bool|float|null $childRefund = false, array $customItems = []) use ($pdo, $branchId, $bpId, &$createdSaleIds, &$createdPaymentIds): int {
         $pdo->exec("INSERT INTO sale (business_unit_id, branch_id, customer_id, employee_id, sale_date, total_amount, sale_status)
                     VALUES (1, {$branchId}, " . ($custId ? $custId : 'NULL') . ", {$empId}, {$saleDateSql}, {$total}, 'completed')");
         $saleId = (int)$pdo->lastInsertId();
         $createdSaleIds[] = $saleId;
 
-        $pdo->prepare("INSERT INTO sale_item (sale_id, business_product_id, quantity, unit_price) VALUES (?, ?, 1, ?)")
-            ->execute([$saleId, $bpId, $total]);
+        $items = !empty($customItems) ? $customItems : [[$bpId, 1, $total]];
+        $stmtSaleItem = $pdo->prepare("INSERT INTO sale_item (sale_id, business_product_id, quantity, unit_price) VALUES (?, ?, ?, ?)");
+        foreach ($items as [$itemBpId, $qty, $unitPrice]) {
+            $stmtSaleItem->execute([$saleId, $itemBpId, $qty, $unitPrice]);
+        }
 
         $pdo->prepare("INSERT INTO payment (sale_id, payment_type, amount, payment_method, payment_status, collection_channel, collected_by_employee_id, collected_at)
                        VALUES (?, 'payment', ?, ?, ?, 'in_store_pos', ?, UTC_TIMESTAMP())")
@@ -269,10 +294,11 @@ try {
         $payId = (int)$pdo->lastInsertId();
         $createdPaymentIds[] = $payId;
 
-        if ($withChildRefund) {
+        $refundAmt = $childRefund === true ? $total : (is_numeric($childRefund) && (float)$childRefund > 0 ? (float)$childRefund : null);
+        if ($refundAmt !== null) {
             $pdo->prepare("INSERT INTO payment (sale_id, original_payment_id, payment_type, amount, payment_method, payment_status)
                            VALUES (?, ?, 'refund', ?, ?, 'completed')")
-                ->execute([$saleId, $payId, $total, $method]);
+                ->execute([$saleId, $payId, $refundAmt, $method]);
             $createdPaymentIds[] = (int)$pdo->lastInsertId();
         }
         return $saleId;
@@ -306,8 +332,11 @@ try {
         $orderId = (int)$pdo->lastInsertId();
         $createdOrderIds[] = $orderId;
 
-        $pdo->prepare("INSERT INTO order_item (order_id, business_product_id, quantity, unit_price) VALUES (?, ?, 1, ?)")
-            ->execute([$orderId, $bpId, $sub]);
+        $items = !empty($opts['items']) && is_array($opts['items']) ? $opts['items'] : [[$bpId, 1, $sub]];
+        $stmtOrdItem = $pdo->prepare("INSERT INTO order_item (order_id, business_product_id, quantity, unit_price) VALUES (?, ?, ?, ?)");
+        foreach ($items as [$itemBpId, $qty, $unitPrice]) {
+            $stmtOrdItem->execute([$orderId, $itemBpId, $qty, $unitPrice]);
+        }
 
         $payId = null;
         if (!empty($opts['payment_status'])) {
@@ -353,6 +382,26 @@ try {
     $saleTodayId = $insertSale($recEmpId, $custAliceId, 'NOW()', 120.00, 'Cash', 'completed', false);
     $saleTodayRefundedId = $insertSale($recEmpId, $custBobId, 'NOW()', 120.00, 'GCash', 'completed', true);
     $salePastId = $insertSale($recEmpId, $custAliceId, 'DATE_SUB(NOW(), INTERVAL 2 DAY)', 120.00, 'Cash', 'completed', false);
+    $salePartialRefundId = $insertSale(
+        $recEmpId,
+        $custBobId,
+        'DATE_SUB(NOW(), INTERVAL 1 DAY)',
+        200.00,
+        'GCash',
+        'completed',
+        80.00,
+        [[$bpId, 1, 120.00], [$bp2Id, 1, 80.00]]
+    );
+    $saleRecordedRefundOnlyId = $insertSale(
+        $recEmpId,
+        $custAliceId,
+        'DATE_SUB(NOW(), INTERVAL 1 DAY)',
+        200.00,
+        'Cash',
+        'refunded',
+        false,
+        [[$bpId, 1, 120.00], [$bp2Id, 1, 80.00]]
+    );
 
     // -----------------------------------------------------------------
     // Fixtures: Orders for Receptionist Orders & BM Sales
@@ -510,6 +559,50 @@ try {
     $oDeliveryRefunded = $oDeliveryRefundedRes['order_id'];
     $oDeliveryRefundedPayId = $oDeliveryRefundedRes['payment_id'];
 
+    // 13. Online Delivery multi-item PARTIAL refund (refund amount 80.00 equals item 2 price -> must NOT mark item 2 as refunded)
+    $oDeliveryPartialRefunded = $insertOrder([
+        'customer_id' => $custBobId,
+        'fulfillment_method' => 'delivery',
+        'order_status' => 'completed',
+        'order_date_sql' => 'DATE_SUB(NOW(), INTERVAL 2 DAY)',
+        'updated_at_sql' => 'DATE_SUB(NOW(), INTERVAL 2 DAY)',
+        'subtotal' => 200.00,
+        'delivery_fee' => 50.00,
+        'items' => [[$bpId, 1, 120.00], [$bp2Id, 1, 80.00]],
+        'payment_method' => 'GCash',
+        'payment_status' => 'completed',
+        'refund_payment_amount' => 80.00,
+    ])['order_id'];
+
+    // 14. Online Delivery multi-item FULL refund (250.00 of 250.00 paid)
+    $oDeliveryFullMultiRefunded = $insertOrder([
+        'customer_id' => $custAliceId,
+        'fulfillment_method' => 'delivery',
+        'order_status' => 'completed',
+        'order_date_sql' => 'DATE_SUB(NOW(), INTERVAL 2 DAY)',
+        'updated_at_sql' => 'DATE_SUB(NOW(), INTERVAL 2 DAY)',
+        'subtotal' => 200.00,
+        'delivery_fee' => 50.00,
+        'items' => [[$bpId, 1, 120.00], [$bp2Id, 1, 80.00]],
+        'payment_method' => 'GCash',
+        'payment_status' => 'completed',
+        'refund_payment_amount' => 250.00,
+    ])['order_id'];
+
+    // 15. Online Pick-up transaction-level refund without child refund-amount row (payment_status = 'refunded' only)
+    $oPickupRecordedRefundOnly = $insertOrder([
+        'customer_id' => $custBobId,
+        'fulfillment_method' => 'pickup',
+        'order_status' => 'completed',
+        'order_date_sql' => 'DATE_SUB(NOW(), INTERVAL 2 DAY)',
+        'updated_at_sql' => 'DATE_SUB(NOW(), INTERVAL 2 DAY)',
+        'subtotal' => 200.00,
+        'delivery_fee' => 0.00,
+        'items' => [[$bpId, 1, 120.00], [$bp2Id, 1, 80.00]],
+        'payment_method' => 'GCash',
+        'payment_status' => 'refunded',
+    ])['order_id'];
+
     // -----------------------------------------------------------------
     // Fixtures: Refund Requests (pending, approved, rejected with distinct dates & amounts)
     // -----------------------------------------------------------------
@@ -663,31 +756,82 @@ try {
     $salesWalk = $bm->get('/manager/sales?tab=walkin');
     $walkTable = extractMainTable($salesWalk['body']);
     check(
-        'BM Sales Walk-in includes successful & refunded walk-in sales (with accurate Sale Status)',
+        'BM Sales Walk-in includes successful, partial, full, and transaction-recorded refunded walk-in sales',
         $salesWalk['status'] === 200
             && str_contains($walkTable, "#REC-S-{$saleTodayId}")
             && str_contains($walkTable, "#REC-S-{$saleTodayRefundedId}")
             && str_contains($walkTable, "#REC-S-{$salePastId}")
+            && str_contains($walkTable, "#REC-S-{$salePartialRefundId}")
+            && str_contains($walkTable, "#REC-S-{$saleRecordedRefundOnlyId}")
+            && str_contains($walkTable, 'Partially Refunded')
     );
     $nonRefSaleModal = extractModal($salesWalk['body'], "walkin-modal-{$saleTodayId}");
     $refSaleModal = extractModal($salesWalk['body'], "walkin-modal-{$saleTodayRefundedId}");
+    $partialSaleModal = extractModal($salesWalk['body'], "walkin-modal-{$salePartialRefundId}");
+    $recordedSaleModal = extractModal($salesWalk['body'], "walkin-modal-{$saleRecordedRefundOnlyId}");
+
+    $nonRefSaleItemsBody = extractProductsTbody($nonRefSaleModal);
+    $refSaleItemsBody = extractProductsTbody($refSaleModal);
+    $partialSaleItemsBody = extractProductsTbody($partialSaleModal);
+    $recordedSaleItemsBody = extractProductsTbody($recordedSaleModal);
+
     check(
-        'Walk-in item-level refund indicator appears ONLY inside refunded sale modal (never in non-refunded modal)',
+        'Walk-in non-refunded modal displays no refund notice or per-item refund badges',
         !str_contains($nonRefSaleModal, 'Refund Status')
+            && !str_contains($nonRefSaleModal, 'refund-notice')
+            && !str_contains($nonRefSaleModal, 'Refund Recorded')
             && !str_contains($nonRefSaleModal, 'Refunded')
-            && str_contains($refSaleModal, 'Refund Status')
-            && str_contains($refSaleModal, 'Refunded')
+            && str_contains($nonRefSaleItemsBody, "PSR Kibble {$suffix}")
+    );
+    check(
+        'Walk-in full refund modal shows transaction-level Full Refund Recorded notice without marking individual product rows',
+        !str_contains($refSaleModal, 'Refund Status')
+            && str_contains($refSaleModal, 'refund-notice')
+            && str_contains($refSaleModal, 'Full Refund Recorded')
+            && str_contains($refSaleModal, '120.00 refunded of')
+            && str_contains($refSaleModal, 'item-level refund attribution is not stored')
+            && !str_contains($refSaleItemsBody, 'Refund')
+            && !str_contains($refSaleItemsBody, 'badge-danger')
+            && !str_contains($refSaleItemsBody, 'badge-warning')
+    );
+    check(
+        'Walk-in partial refund modal shows Partial Refund Recorded notice (80.00 of 200.00) without attributing refund to either product row',
+        !str_contains($partialSaleModal, 'Refund Status')
+            && str_contains($partialSaleModal, 'Partially Refunded')
+            && str_contains($partialSaleModal, 'Partial Refund Recorded')
+            && str_contains($partialSaleModal, '80.00 refunded of')
+            && str_contains($partialSaleModal, '200.00 paid')
+            && str_contains($partialSaleModal, 'item-level refund attribution is not stored')
+            && str_contains($partialSaleItemsBody, "PSR Kibble {$suffix}")
+            && str_contains($partialSaleItemsBody, "PSR Leash {$suffix}")
+            && !str_contains($partialSaleItemsBody, 'Refund')
+            && !str_contains($partialSaleItemsBody, 'badge-danger')
+            && !str_contains($partialSaleItemsBody, 'badge-warning')
+    );
+    check(
+        'Walk-in transaction-level refund without refund amount row shows Refund Recorded notice without guessing partial vs full or items',
+        !str_contains($recordedSaleModal, 'Refund Status')
+            && str_contains($recordedSaleModal, 'Refund Recorded')
+            && str_contains($recordedSaleModal, 'without a separate refund amount or item-level breakdown')
+            && !str_contains($recordedSaleModal, 'Partial Refund Recorded')
+            && !str_contains($recordedSaleModal, 'Full Refund Recorded')
+            && str_contains($recordedSaleItemsBody, "PSR Kibble {$suffix}")
+            && str_contains($recordedSaleItemsBody, "PSR Leash {$suffix}")
+            && !str_contains($recordedSaleItemsBody, 'Refund')
     );
 
     $salesDeliv = $bm->get('/manager/sales?tab=delivery');
     $delivTable = extractMainTable($salesDeliv['body']);
     check(
-        'BM Sales Online — Delivery includes completed payments (in-progress, COD without remittance, refunded) and excludes pending COD & failed payment & pickup orders',
+        'BM Sales Online — Delivery includes completed, partial-refunded, and full-refunded payments (excludes pending COD, failed payment, pickup)',
         $salesDeliv['status'] === 200
             && str_contains($delivTable, "#ORD-{$oTodayCompletedOnline}")
             && str_contains($delivTable, "#ORD-{$oPastRedeliveryActive}")
             && str_contains($delivTable, "#ORD-{$oPastRedeliveryCompletedToday}")
             && str_contains($delivTable, "#ORD-{$oDeliveryRefunded}")
+            && str_contains($delivTable, "#ORD-{$oDeliveryPartialRefunded}")
+            && str_contains($delivTable, "#ORD-{$oDeliveryFullMultiRefunded}")
+            && str_contains($delivTable, 'Partially Refunded')
             && !str_contains($delivTable, "#ORD-{$oTodayUnpaidCod}")
             && !str_contains($delivTable, "#ORD-{$oFailedPayDelivery}")
             && !str_contains($delivTable, "#ORD-{$oPickupPaidInProgress}")
@@ -697,29 +841,83 @@ try {
     $salesPickup = $bm->get('/manager/sales?tab=pickup');
     $pickupTable = extractMainTable($salesPickup['body']);
     check(
-        'BM Sales Online — Pick-up includes completed-payment in-progress, completed COD awaiting receipt, and past completed pickup orders (excludes delivery orders)',
+        'BM Sales Online — Pick-up includes completed-payment in-progress, COD awaiting receipt, past completed, and refunded pickup orders',
         $salesPickup['status'] === 200
             && str_contains($pickupTable, "#ORD-{$oPickupPaidInProgress}")
             && str_contains($pickupTable, "#ORD-{$oPickupCodPaidInProgress}")
             && str_contains($pickupTable, "#ORD-{$oOldCompleted}")
+            && str_contains($pickupTable, "#ORD-{$oPickupRecordedRefundOnly}")
             && !str_contains($pickupTable, "#ORD-{$oTodayCompletedOnline}")
             && !str_contains($pickupTable, "#ORD-{$oFutureOrder}")
     );
 
-    // Check independent order status & item-level refund indicator rules on Delivery
+    // Check independent order status & transaction-level refund indicators on Online Delivery & Pick-up
     $nonRefDelivModal = extractModal($salesDeliv['body'], "online-modal-{$oTodayCompletedOnline}");
     $refDelivModal = extractModal($salesDeliv['body'], "online-modal-{$oDeliveryRefunded}");
+    $partialDelivModal = extractModal($salesDeliv['body'], "online-modal-{$oDeliveryPartialRefunded}");
+    $fullMultiDelivModal = extractModal($salesDeliv['body'], "online-modal-{$oDeliveryFullMultiRefunded}");
+    $recordedPickupModal = extractModal($salesPickup['body'], "online-modal-{$oPickupRecordedRefundOnly}");
+
+    $nonRefDelivItemsBody = extractProductsTbody($nonRefDelivModal);
+    $refDelivItemsBody = extractProductsTbody($refDelivModal);
+    $partialDelivItemsBody = extractProductsTbody($partialDelivModal);
+    $fullMultiDelivItemsBody = extractProductsTbody($fullMultiDelivModal);
+    $recordedPickupItemsBody = extractProductsTbody($recordedPickupModal);
+
     $dbOrdRefundedStatus = (string)$pdo->query("SELECT order_status FROM customer_order WHERE order_id = {$oDeliveryRefunded}")->fetchColumn();
     check(
-        'Refunded order retains real order_status (not refunded) and shows item-level refund indicator ONLY inside its details modal',
+        'Online refunded order retains real order_status (not refunded) and shows transaction-level notice without Refund Status item column',
         $dbOrdRefundedStatus === 'completed'
             && !str_contains($delivTable, 'Refund Status')
-            && !str_contains($delivTable, 'Refund Recorded')
+            && !str_contains($delivTable, 'Full Refund Recorded')
             && !str_contains($nonRefDelivModal, 'Refund Status')
+            && !str_contains($nonRefDelivModal, 'refund-notice')
             && !str_contains($nonRefDelivModal, 'Refunded')
-            && str_contains($refDelivModal, 'Refund Status')
+            && !str_contains($nonRefDelivItemsBody, 'Refund')
+            && !str_contains($refDelivModal, 'Refund Status')
+            && str_contains($refDelivModal, 'Full Refund Recorded')
+            && str_contains($refDelivModal, '170.00 refunded of')
             && preg_match('/badge-success">\s*Completed\s*</s', $refDelivModal) === 1
             && preg_match('/badge-danger">\s*Refunded\s*</s', $refDelivModal) === 1
+            && !str_contains($refDelivItemsBody, 'Refund')
+            && !str_contains($refDelivItemsBody, 'badge-danger')
+    );
+    check(
+        'Online multi-item partial refund shows Partial Refund Recorded notice (80.00 of 250.00) without marking unrelated or amount-matching items',
+        !str_contains($partialDelivModal, 'Refund Status')
+            && str_contains($partialDelivModal, 'Partially Refunded')
+            && str_contains($partialDelivModal, 'Partial Refund Recorded')
+            && str_contains($partialDelivModal, '80.00 refunded of')
+            && str_contains($partialDelivModal, '250.00 paid')
+            && str_contains($partialDelivModal, 'item-level refund attribution is not stored')
+            && preg_match('/badge-success">\s*Completed\s*</s', $partialDelivModal) === 1
+            && str_contains($partialDelivItemsBody, "PSR Kibble {$suffix}")
+            && str_contains($partialDelivItemsBody, "PSR Leash {$suffix}")
+            && !str_contains($partialDelivItemsBody, 'Refund')
+            && !str_contains($partialDelivItemsBody, 'badge-danger')
+            && !str_contains($partialDelivItemsBody, 'badge-warning')
+    );
+    check(
+        'Online multi-item full refund shows Full Refund Recorded notice (250.00 of 250.00) without per-item refund badges',
+        !str_contains($fullMultiDelivModal, 'Refund Status')
+            && str_contains($fullMultiDelivModal, 'Full Refund Recorded')
+            && str_contains($fullMultiDelivModal, '250.00 refunded of')
+            && str_contains($fullMultiDelivItemsBody, "PSR Kibble {$suffix}")
+            && str_contains($fullMultiDelivItemsBody, "PSR Leash {$suffix}")
+            && !str_contains($fullMultiDelivItemsBody, 'Refund')
+            && !str_contains($fullMultiDelivItemsBody, 'badge-danger')
+    );
+    check(
+        'Online transaction-level refund without child refund row shows Refund Recorded notice cleanly without per-item badges or guessed partial/full',
+        !str_contains($recordedPickupModal, 'Refund Status')
+            && str_contains($recordedPickupModal, 'Refund Recorded')
+            && str_contains($recordedPickupModal, 'without a separate refund amount or item-level breakdown')
+            && !str_contains($recordedPickupModal, 'Partial Refund Recorded')
+            && !str_contains($recordedPickupModal, 'Full Refund Recorded')
+            && preg_match('/badge-success">\s*Completed\s*</s', $recordedPickupModal) === 1
+            && str_contains($recordedPickupItemsBody, "PSR Kibble {$suffix}")
+            && str_contains($recordedPickupItemsBody, "PSR Leash {$suffix}")
+            && !str_contains($recordedPickupItemsBody, 'Refund')
     );
 
     // =================================================================

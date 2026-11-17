@@ -176,6 +176,7 @@ final class ManagerController extends Controller
         return "LEFT JOIN (
                     SELECT p_sub.{$foreignKey},
                            MAX(CASE WHEN (p_sub.payment_type = 'refund' AND p_sub.payment_status = 'completed') OR p_sub.payment_status = 'refunded' THEN 1 ELSE 0 END) AS has_refunded,
+                           COALESCE(SUM(CASE WHEN p_sub.payment_type = 'payment' AND p_sub.payment_status IN ('completed', 'refunded') THEN p_sub.amount ELSE 0 END), 0) AS paid_amount,
                            COALESCE(SUM(CASE WHEN p_sub.payment_type = 'refund' AND p_sub.payment_status = 'completed' THEN p_sub.amount ELSE 0 END), 0) AS refunded_amount,
                            MAX(CASE WHEN p_sub.payment_type = 'payment' AND p_sub.payment_status IN ('completed', 'refunded') THEN p_sub.payment_id END) AS latest_completed_payment_id,
                            MAX(CASE WHEN p_sub.payment_type = 'payment' THEN p_sub.payment_id END) AS latest_payment_id
@@ -3048,6 +3049,7 @@ final class ManagerController extends Controller
                            (SELECT COUNT(*) FROM sale_item si WHERE si.sale_id = s.sale_id) AS item_count,
                            p.payment_method,
                            COALESCE(ps.has_refunded, 0) AS has_refunded,
+                           COALESCE(ps.paid_amount, 0) AS paid_amount,
                            COALESCE(ps.refunded_amount, 0) AS refunded_amount,
                            CASE WHEN COALESCE(ps.has_refunded, 0) = 1 THEN 'refunded' ELSE p.payment_status END AS payment_status
                     FROM sale s
@@ -3092,6 +3094,7 @@ final class ManagerController extends Controller
         foreach ($rows as &$ws) {
             $itStmt->execute([(int)$ws['sale_id']]);
             $ws['items'] = $itStmt->fetchAll();
+            $ws = array_merge($ws, self::summarizeTransactionRefund($ws));
         }
         unset($ws);
 
@@ -3110,6 +3113,7 @@ final class ManagerController extends Controller
                          ua.email AS customer_email, c.phone AS customer_phone,
                          p.payment_method,
                          COALESCE(ps.has_refunded, 0) AS has_refunded,
+                         COALESCE(ps.paid_amount, 0) AS paid_amount,
                          COALESCE(ps.refunded_amount, 0) AS refunded_amount,
                          CASE WHEN COALESCE(ps.has_refunded, 0) = 1 THEN 'refunded' ELSE p.payment_status END AS payment_status,
                          CONCAT(deliv_emp.first_name, ' ', deliv_emp.last_name) AS delivery_employee_name
@@ -3158,10 +3162,49 @@ final class ManagerController extends Controller
         foreach ($rows as &$oo) {
             $itStmt->execute([(int)$oo['order_id']]);
             $oo['items'] = $itStmt->fetchAll();
+            $oo = array_merge($oo, self::summarizeTransactionRefund($oo));
         }
         unset($oo);
 
         return $rows;
+    }
+
+    /**
+     * Derive honest transaction-level refund indicators strictly from stored payment rows.
+     * The current schema stores refunds at the transaction level (without item-level attribution).
+     *
+     * @return array{refund_scope:string, payment_status:string}
+     */
+    private static function summarizeTransactionRefund(array $row): array
+    {
+        $hasRefund = !empty($row['has_refunded']);
+        $baseStatus = (string)($row['payment_status'] ?? 'completed');
+        if (!$hasRefund) {
+            return [
+                'refund_scope' => 'none',
+                'payment_status' => $baseStatus,
+            ];
+        }
+
+        $paidCents = (int)round(((float)($row['paid_amount'] ?? 0)) * 100);
+        $refundedCents = (int)round(((float)($row['refunded_amount'] ?? 0)) * 100);
+        if ($refundedCents > 0 && $paidCents > 0) {
+            if ($refundedCents < $paidCents) {
+                return [
+                    'refund_scope' => 'partial',
+                    'payment_status' => 'partially_refunded',
+                ];
+            }
+            return [
+                'refund_scope' => 'full',
+                'payment_status' => 'refunded',
+            ];
+        }
+
+        return [
+            'refund_scope' => 'recorded',
+            'payment_status' => 'refunded',
+        ];
     }
 
     /**

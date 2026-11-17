@@ -30,6 +30,50 @@ $paymentStatusBadgeClass = static function (string $pStatus): string {
     }
     return 'badge-warning';
 };
+
+$formatPaymentStatus = static function (string $pStatus): string {
+    return ucwords(str_replace('_', ' ', strtolower(trim($pStatus))));
+};
+
+$renderRefundNotice = static function (array $tx): string {
+    $scope = (string)($tx['refund_scope'] ?? 'none');
+    if ($scope === 'none') {
+        return '';
+    }
+    $refundedAmt = (float)($tx['refunded_amount'] ?? 0.0);
+    $paidAmt = (float)($tx['paid_amount'] ?? 0.0);
+
+    if ($scope === 'partial') {
+        $badgeClass = 'badge-warning';
+        $badgeText = 'Partial Refund Recorded';
+        $headline = peso($refundedAmt) . ' refunded of ' . peso($paidAmt) . ' paid';
+        $detail = 'Refunds are recorded at the transaction level; item-level refund attribution is not stored in the current schema, so individual product rows are not marked.';
+        $boxBg = '#fffbeb';
+        $boxBorder = '#f59e0b';
+    } elseif ($scope === 'full') {
+        $badgeClass = 'badge-danger';
+        $badgeText = 'Full Refund Recorded';
+        $headline = peso($refundedAmt) . ' refunded of ' . peso($paidAmt) . ' paid';
+        $detail = 'Refunds are recorded at the transaction level; item-level refund attribution is not stored in the current schema, so individual product rows are not marked.';
+        $boxBg = '#fef2f2';
+        $boxBorder = '#ef4444';
+    } else {
+        $badgeClass = 'badge-danger';
+        $badgeText = 'Refund Recorded';
+        $headline = 'Transaction-level refund recorded';
+        $detail = 'This transaction payment is marked refunded without a separate refund amount or item-level breakdown in the current schema, so partial vs. full distinction and individual product attribution are unavailable.';
+        $boxBg = '#fef2f2';
+        $boxBorder = '#ef4444';
+    }
+
+    return '<div class="refund-notice" style="margin-bottom: 1rem; padding: 0.75rem 1rem; border-radius: 6px; background: ' . $boxBg . '; border-left: 4px solid ' . $boxBorder . ';">'
+        . '<div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">'
+        . '<span class="badge ' . $badgeClass . '">' . e($badgeText) . '</span>'
+        . '<strong>' . e($headline) . '</strong>'
+        . '</div>'
+        . '<p class="caption" style="margin: 0.4rem 0 0 0;">' . e($detail) . '</p>'
+        . '</div>';
+};
 ?>
 
 <div class="page-head">
@@ -129,7 +173,7 @@ $paymentStatusBadgeClass = static function (string $pStatus): string {
                 <td>
                   <span class="badge secondary"><?= e($s['payment_method'] ?? 'Cash') ?></span>
                   <div style="margin-top: 0.2rem;">
-                    <span class="badge <?= $paymentStatusBadgeClass($pStat) ?>" style="font-size: 0.72rem;"><?= e(ucfirst($pStat)) ?></span>
+                    <span class="badge <?= $paymentStatusBadgeClass($pStat) ?>" style="font-size: 0.72rem;"><?= e($formatPaymentStatus($pStat)) ?></span>
                   </div>
                 </td>
                 <td>
@@ -153,7 +197,6 @@ $paymentStatusBadgeClass = static function (string $pStatus): string {
   <!-- Walk-in Sale Details Modals -->
   <?php foreach ($walkInSales as $s):
     $pStat = (string)($s['payment_status'] ?? 'completed');
-    $hasRefund = !empty($s['has_refunded']);
   ?>
     <dialog class="modal modal-wide" id="walkin-modal-<?= (int)$s['sale_id'] ?>" aria-labelledby="walkin-title-<?= (int)$s['sale_id'] ?>" <?= (!empty($viewId) && (int)$viewId === (int)$s['sale_id']) ? 'data-open-on-load="true"' : '' ?>>
       <div class="modal-head">
@@ -187,10 +230,12 @@ $paymentStatusBadgeClass = static function (string $pStatus): string {
             <p style="margin: 0.5rem 0 0.25rem 0;" class="caption">Payment Method &amp; Status</p>
             <div>
               <span class="badge secondary"><?= e($s['payment_method'] ?? 'Cash (In-store)') ?></span>
-              <span class="badge <?= $paymentStatusBadgeClass($pStat) ?>"><?= e(ucfirst($pStat)) ?></span>
+              <span class="badge <?= $paymentStatusBadgeClass($pStat) ?>"><?= e($formatPaymentStatus($pStat)) ?></span>
             </div>
           </div>
         </div>
+
+        <?= $renderRefundNotice($s) ?>
 
         <h4 style="margin: 1rem 0 0.5rem 0;">Purchased Products</h4>
         <div class="table-wrap" style="margin-bottom: 1.5rem;">
@@ -201,9 +246,6 @@ $paymentStatusBadgeClass = static function (string $pStatus): string {
                 <th>SKU</th>
                 <th>Unit Price</th>
                 <th>Qty</th>
-                <?php if ($hasRefund): ?>
-                  <th>Refund Status</th>
-                <?php endif; ?>
                 <th style="text-align: right;">Line Total</th>
               </tr>
             </thead>
@@ -219,9 +261,6 @@ $paymentStatusBadgeClass = static function (string $pStatus): string {
                   <td><code><?= e($item['sku'] ?: '—') ?></code></td>
                   <td><?= peso((float)$item['unit_price']) ?></td>
                   <td><?= (int)$item['quantity'] ?></td>
-                  <?php if ($hasRefund): ?>
-                    <td><span class="badge badge-danger">Refunded</span></td>
-                  <?php endif; ?>
                   <td style="text-align: right;"><?= peso($lineTotal) ?></td>
                 </tr>
               <?php endforeach; ?>
@@ -314,7 +353,7 @@ $paymentStatusBadgeClass = static function (string $pStatus): string {
                 <td>
                   <span class="badge secondary"><?= e($o['payment_method'] ?? 'COD') ?></span>
                   <div style="margin-top: 0.2rem;">
-                    <span class="badge <?= $paymentStatusBadgeClass($pStat) ?>" style="font-size: 0.72rem;"><?= e(ucfirst($pStat)) ?></span>
+                    <span class="badge <?= $paymentStatusBadgeClass($pStat) ?>" style="font-size: 0.72rem;"><?= e($formatPaymentStatus($pStat)) ?></span>
                   </div>
                 </td>
                 <td>
@@ -339,10 +378,7 @@ $paymentStatusBadgeClass = static function (string $pStatus): string {
   <?php foreach ($ordersList as $o):
     $pStat = (string)($o['payment_status'] ?? 'completed');
     $oStat = (string)$o['order_status'];
-    $hasRefund = !empty($o['has_refunded']);
-    $refundedAmt = (float)($o['refunded_amount'] ?? 0.0);
     $orderTotalAmt = (float)$o['total_amount'];
-    $isPartialRefund = $hasRefund && $refundedAmt > 0 && $refundedAmt < $orderTotalAmt;
   ?>
     <dialog class="modal modal-wide" id="online-modal-<?= (int)$o['order_id'] ?>" aria-labelledby="online-title-<?= (int)$o['order_id'] ?>" <?= (!empty($viewId) && (int)$viewId === (int)$o['order_id']) ? 'data-open-on-load="true"' : '' ?>>
       <div class="modal-head">
@@ -392,10 +428,12 @@ $paymentStatusBadgeClass = static function (string $pStatus): string {
             <p style="margin: 0.5rem 0 0.25rem 0;" class="caption">Payment Method &amp; Status</p>
             <div>
               <span class="badge secondary"><?= e($o['payment_method'] ?? 'COD') ?></span>
-              <span class="badge <?= $paymentStatusBadgeClass($pStat) ?>"><?= e(ucfirst($pStat)) ?></span>
+              <span class="badge <?= $paymentStatusBadgeClass($pStat) ?>"><?= e($formatPaymentStatus($pStat)) ?></span>
             </div>
           </div>
         </div>
+
+        <?= $renderRefundNotice($o) ?>
 
         <h4 style="margin: 1rem 0 0.5rem 0;">Purchased Products</h4>
         <div class="table-wrap" style="margin-bottom: 1.5rem;">
@@ -406,9 +444,6 @@ $paymentStatusBadgeClass = static function (string $pStatus): string {
                 <th>SKU</th>
                 <th>Unit Price</th>
                 <th>Qty</th>
-                <?php if ($hasRefund): ?>
-                  <th>Refund Status</th>
-                <?php endif; ?>
                 <th style="text-align: right;">Line Total</th>
               </tr>
             </thead>
@@ -424,13 +459,6 @@ $paymentStatusBadgeClass = static function (string $pStatus): string {
                   <td><code><?= e($item['sku'] ?: '—') ?></code></td>
                   <td><?= peso((float)$item['unit_price']) ?></td>
                   <td><?= (int)$item['quantity'] ?></td>
-                  <?php if ($hasRefund): ?>
-                    <td>
-                      <span class="badge <?= $isPartialRefund ? 'badge-warning' : 'badge-danger' ?>">
-                        <?= $isPartialRefund ? 'Refund Recorded' : 'Refunded' ?>
-                      </span>
-                    </td>
-                  <?php endif; ?>
                   <td style="text-align: right;"><?= peso($lineTotal) ?></td>
                 </tr>
               <?php endforeach; ?>
