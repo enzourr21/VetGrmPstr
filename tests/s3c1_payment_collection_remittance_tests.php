@@ -110,21 +110,29 @@ try {
     $custId = (int)$pdo->lastInsertId();
     $cleanup['customers'][] = $custId;
 
-    $createStaff = static function (string $email, int $buId, string $first, string $last, string $pos) use ($pdo, &$cleanup): array {
-        $pdo->prepare("INSERT INTO user_account (email, password_hash) VALUES (?, 'hash')")->execute([$email]);
+    $pdo->exec("INSERT IGNORE INTO role (role_name, description) VALUES ('RECEPTIONIST', 'Receptionist'), ('DELIVERY_PERSONNEL', 'Delivery Personnel')");
+    $roleIdsByName = [];
+    foreach ($pdo->query("SELECT role_id, role_name FROM role WHERE role_name IN ('RECEPTIONIST', 'DELIVERY_PERSONNEL')")->fetchAll(PDO::FETCH_ASSOC) as $rRow) {
+        $roleIdsByName[(string)$rRow['role_name']] = (int)$rRow['role_id'];
+    }
+
+    $createStaff = static function (string $email, int $buId, string $first, string $last, string $pos, string $roleName) use ($pdo, $roleIdsByName, &$cleanup): array {
+        $pdo->prepare("INSERT INTO user_account (email, password_hash, account_status) VALUES (?, 'hash', 'active')")->execute([$email]);
         $u = (int)$pdo->lastInsertId();
         $cleanup['users'][] = $u;
         $pdo->prepare("INSERT INTO employee (user_account_id, business_unit_id, first_name, last_name, position, employee_status) VALUES (?, ?, ?, ?, ?, 'active')")
             ->execute([$u, $buId, $first, $last, $pos]);
         $e = (int)$pdo->lastInsertId();
         $cleanup['employees'][] = $e;
+        $pdo->prepare("INSERT INTO account_role (user_account_id, role_id, business_unit_id) VALUES (?, ?, ?)")
+            ->execute([$u, $roleIdsByName[$roleName], $buId]);
         return [$u, $e];
     };
 
-    [$recepUid, $recepEmpId] = $createStaff('chks3c1_recep@test.invalid', $unitId, 'Store', 'Receptionist', 'Pet Store Receptionist');
-    [$courier1Uid, $courier1EmpId] = $createStaff('chks3c1_c1@test.invalid', $unitId, 'Courier', 'Alpha', 'Delivery Personnel');
-    [$courier2Uid, $courier2EmpId] = $createStaff('chks3c1_c2@test.invalid', $unitId, 'Courier', 'Beta', 'Delivery Personnel');
-    [$foreignStaffUid, $foreignStaffEmpId] = $createStaff('chks3c1_for@test.invalid', $foreignUnitId, 'Foreign', 'Staff', 'Pet Store Receptionist');
+    [$recepUid, $recepEmpId] = $createStaff('chks3c1_recep@test.invalid', $unitId, 'Store', 'Receptionist', 'Pet Store Receptionist', 'RECEPTIONIST');
+    [$courier1Uid, $courier1EmpId] = $createStaff('chks3c1_c1@test.invalid', $unitId, 'Courier', 'Alpha', 'Delivery Personnel', 'DELIVERY_PERSONNEL');
+    [$courier2Uid, $courier2EmpId] = $createStaff('chks3c1_c2@test.invalid', $unitId, 'Courier', 'Beta', 'Delivery Personnel', 'DELIVERY_PERSONNEL');
+    [$foreignStaffUid, $foreignStaffEmpId] = $createStaff('chks3c1_for@test.invalid', $foreignUnitId, 'Foreign', 'Staff', 'Pet Store Receptionist', 'RECEPTIONIST');
 
     $pdo->prepare("INSERT INTO product (product_name, product_category) VALUES ('ChkS3C1 Treat', 'Treats')")->execute();
     $prodId = (int)$pdo->lastInsertId();
@@ -861,7 +869,9 @@ try {
         $pdo->exec('DELETE FROM employee WHERE employee_id IN (' . implode(',', $cleanup['employees']) . ')');
     }
     if ($cleanup['users']) {
-        $pdo->exec('DELETE FROM user_account WHERE user_account_id IN (' . implode(',', $cleanup['users']) . ')');
+        $uList = implode(',', $cleanup['users']);
+        $pdo->exec("DELETE FROM account_role WHERE user_account_id IN ({$uList})");
+        $pdo->exec("DELETE FROM user_account WHERE user_account_id IN ({$uList})");
     }
     if ($cleanup['business_units']) {
         $pdo->exec('DELETE FROM audit_log WHERE business_unit_id IN (' . implode(',', $cleanup['business_units']) . ')');

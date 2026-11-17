@@ -114,6 +114,47 @@ final class OrderPaymentService
     }
 
     /**
+     * Reject delivery completion without explicit COD confirmation when a pending COD/cash payment exists.
+     */
+    public function assertNoPendingDeliveryCodInTransaction(int $orderId): void
+    {
+        $this->assertInTransaction('Delivery payment verification');
+
+        $payStmt = $this->db->prepare(
+            "SELECT payment_id, payment_type, payment_method, payment_status
+             FROM payment
+             WHERE order_id = ?
+             ORDER BY payment_id ASC
+             FOR UPDATE"
+        );
+        $payStmt->execute([$orderId]);
+        $payments = $payStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $hasCompletedPayment = false;
+        $hasPendingCod = false;
+        foreach ($payments as $p) {
+            if ((string)$p['payment_type'] !== 'payment') {
+                continue;
+            }
+            $status = (string)$p['payment_status'];
+            if ($status === 'completed') {
+                $hasCompletedPayment = true;
+                break;
+            }
+            if ($status === 'pending' && in_array(strtolower(trim((string)$p['payment_method'])), ['cod', 'cash'], true)) {
+                $hasPendingCod = true;
+            }
+        }
+
+        if (!$hasCompletedPayment && $hasPendingCod) {
+            throw new RuntimeException(
+                "COD cash collection confirmation is required before marking Order #ORD-{$orderId} as completed.",
+                self::ERR_UNPROCESSABLE
+            );
+        }
+    }
+
+    /**
      * Submit an exact-amount courier COD remittance batch in 'submitted' status for collected
      * courier_cod payments owned by the submitting courier within the same business unit.
      * Remittable amounts use customer_order.subtotal_amount (excluding delivery_fee).
@@ -465,8 +506,8 @@ final class OrderPaymentService
             );
         }
 
-        // 2. Lock employee record and verify active status & business-unit authorization.
-        $this->lockAuthorizedCollectorEmployee($collectorEmployeeId, $businessUnitId);
+        // 2. Lock employee record and verify active account, employee, business-unit, and role authorization.
+        $this->lockAuthorizedCollectorEmployee($collectorEmployeeId, $businessUnitId, $actorUserId, $collectionChannel);
 
         // 3. Lock payment rows for this order in ascending payment_id order.
         $payStmt = $this->db->prepare(
@@ -561,17 +602,29 @@ final class OrderPaymentService
         ];
     }
 
-    private function lockAuthorizedCollectorEmployee(int $employeeId, int $businessUnitId): void
-    {
+    private function lockAuthorizedCollectorEmployee(
+        int $employeeId,
+        int $businessUnitId,
+        int $actorUserId,
+        string $collectionChannel
+    ): void {
         if ($employeeId <= 0) {
             throw new RuntimeException('A valid active staff employee record is required to record payment collection.', self::ERR_FORBIDDEN);
         }
+        if ($actorUserId <= 0) {
+            throw new RuntimeException('A valid authenticated user account is required to record payment collection.', self::ERR_FORBIDDEN);
+        }
+        if ($businessUnitId <= 0) {
+            throw new RuntimeException('A valid business unit is required to record payment collection.', self::ERR_FORBIDDEN);
+        }
 
         $empStmt = $this->db->prepare(
-            "SELECT e.employee_id, e.business_unit_id, e.employee_status,
-                    COALESCE(ua.is_super_admin, 0) AS is_super_admin
+            "SELECT e.employee_id, e.user_account_id, e.business_unit_id, e.employee_status,
+                    ua.account_status, COALESCE(ua.is_super_admin, 0) AS is_super_admin,
+                    bu.business_unit_status
              FROM employee e
-             LEFT JOIN user_account ua ON ua.user_account_id = e.user_account_id AND ua.account_status = 'active'
+             LEFT JOIN user_account ua ON ua.user_account_id = e.user_account_id
+             LEFT JOIN business_unit bu ON bu.business_unit_id = e.business_unit_id
              WHERE e.employee_id = ?
              FOR UPDATE"
         );
@@ -582,10 +635,55 @@ final class OrderPaymentService
             throw new RuntimeException("Employee #{$employeeId} is missing or inactive.", self::ERR_FORBIDDEN);
         }
 
+        $empUserId = $emp['user_account_id'] !== null ? (int)$emp['user_account_id'] : 0;
+        if ($empUserId <= 0 || $empUserId !== $actorUserId) {
+            throw new RuntimeException(
+                "Employee #{$employeeId} does not belong to authenticated user #{$actorUserId}.",
+                self::ERR_FORBIDDEN
+            );
+        }
+
+        if ((string)($emp['account_status'] ?? '') !== 'active') {
+            throw new RuntimeException("User account #{$actorUserId} is inactive or suspended.", self::ERR_FORBIDDEN);
+        }
+
         $empBuId = $emp['business_unit_id'] !== null ? (int)$emp['business_unit_id'] : 0;
-        $isSuper = !empty($emp['is_super_admin']);
-        if ($empBuId !== $businessUnitId && !$isSuper) {
+
+        if ($collectionChannel === 'courier_cod') {
+            if ($empBuId !== $businessUnitId) {
+                throw new RuntimeException("Employee #{$employeeId} does not belong to business unit #{$businessUnitId}.", self::ERR_FORBIDDEN);
+            }
+            if ((string)($emp['business_unit_status'] ?? '') !== 'active') {
+                throw new RuntimeException("Business unit #{$businessUnitId} is inactive.", self::ERR_FORBIDDEN);
+            }
+            if (!$this->userHasUnitRole($actorUserId, $businessUnitId, 'DELIVERY_PERSONNEL')) {
+                throw new RuntimeException(
+                    "Operational courier COD collection requires an active Delivery Personnel role assignment in business unit #{$businessUnitId}.",
+                    self::ERR_FORBIDDEN
+                );
+            }
+            return;
+        }
+
+        $isSuper = !empty($emp['is_super_admin']) || $this->userHasAnyRole($actorUserId, 'SUPER_ADMINISTRATOR');
+        if ($isSuper) {
+            if (!$this->isBusinessUnitActive($businessUnitId)) {
+                throw new RuntimeException("Business unit #{$businessUnitId} is inactive.", self::ERR_FORBIDDEN);
+            }
+            return;
+        }
+
+        if ($empBuId !== $businessUnitId) {
             throw new RuntimeException("Employee #{$employeeId} does not belong to business unit #{$businessUnitId}.", self::ERR_FORBIDDEN);
+        }
+        if ((string)($emp['business_unit_status'] ?? '') !== 'active') {
+            throw new RuntimeException("Business unit #{$businessUnitId} is inactive.", self::ERR_FORBIDDEN);
+        }
+        if (!$this->userHasUnitRole($actorUserId, $businessUnitId, 'RECEPTIONIST')) {
+            throw new RuntimeException(
+                "In-store pickup COD collection requires an active Receptionist role assignment in business unit #{$businessUnitId}.",
+                self::ERR_FORBIDDEN
+            );
         }
     }
 
@@ -644,9 +742,12 @@ final class OrderPaymentService
         }
 
         $empStmt = $this->db->prepare(
-            "SELECT employee_id, user_account_id, business_unit_id, employee_status
-             FROM employee
-             WHERE employee_id = ?
+            "SELECT e.employee_id, e.user_account_id, e.business_unit_id, e.employee_status,
+                    ua.account_status, bu.business_unit_status
+             FROM employee e
+             LEFT JOIN user_account ua ON ua.user_account_id = e.user_account_id
+             LEFT JOIN business_unit bu ON bu.business_unit_id = e.business_unit_id
+             WHERE e.employee_id = ?
              FOR UPDATE"
         );
         $empStmt->execute([$employeeId]);
@@ -664,10 +765,64 @@ final class OrderPaymentService
             );
         }
 
+        if ((string)($emp['account_status'] ?? '') !== 'active') {
+            throw new RuntimeException("User account #{$actorUserId} is inactive or suspended.", self::ERR_FORBIDDEN);
+        }
+
         $empBuId = $emp['business_unit_id'] !== null ? (int)$emp['business_unit_id'] : 0;
         if ($empBuId !== $businessUnitId) {
             throw new RuntimeException("Employee #{$employeeId} does not belong to business unit #{$businessUnitId}.", self::ERR_FORBIDDEN);
         }
+
+        if ((string)($emp['business_unit_status'] ?? '') !== 'active') {
+            throw new RuntimeException("Business unit #{$businessUnitId} is inactive.", self::ERR_FORBIDDEN);
+        }
+
+        if (!$this->userHasUnitRole($actorUserId, $businessUnitId, 'DELIVERY_PERSONNEL')) {
+            throw new RuntimeException(
+                "COD remittance submission requires an active Delivery Personnel role assignment in business unit #{$businessUnitId}.",
+                self::ERR_FORBIDDEN
+            );
+        }
+    }
+
+    private function userHasUnitRole(int $userId, int $businessUnitId, string $roleName): bool
+    {
+        $stmt = $this->db->prepare(
+            "SELECT 1
+             FROM account_role ar
+             JOIN role r ON r.role_id = ar.role_id
+             JOIN business_unit bu ON bu.business_unit_id = ar.business_unit_id AND bu.business_unit_status = 'active'
+             WHERE ar.user_account_id = ?
+               AND ar.business_unit_id = ?
+               AND r.role_name = ?
+             LIMIT 1"
+        );
+        $stmt->execute([$userId, $businessUnitId, $roleName]);
+        return (bool)$stmt->fetchColumn();
+    }
+
+    private function userHasAnyRole(int $userId, string $roleName): bool
+    {
+        $stmt = $this->db->prepare(
+            "SELECT 1
+             FROM account_role ar
+             JOIN role r ON r.role_id = ar.role_id
+             WHERE ar.user_account_id = ?
+               AND r.role_name = ?
+             LIMIT 1"
+        );
+        $stmt->execute([$userId, $roleName]);
+        return (bool)$stmt->fetchColumn();
+    }
+
+    private function isBusinessUnitActive(int $businessUnitId): bool
+    {
+        $stmt = $this->db->prepare(
+            "SELECT 1 FROM business_unit WHERE business_unit_id = ? AND business_unit_status = 'active' LIMIT 1"
+        );
+        $stmt->execute([$businessUnitId]);
+        return (bool)$stmt->fetchColumn();
     }
 
     /**

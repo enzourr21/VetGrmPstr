@@ -481,13 +481,18 @@ final class AuthController extends Controller
             $this->forbidden('Customer-only sessions cannot access administrative or employee workspaces.');
         }
 
-        // Determine if account is Super Administrator from trusted base session or database
-        $isSuper = (bool)Session::get('is_super_admin');
-        if (!$isSuper) {
-            $s = $this->db->prepare('SELECT is_super_admin FROM user_account WHERE user_account_id = ?');
-            $s->execute([(int)$uid]);
-            $isSuper = (bool)$s->fetchColumn();
-        }
+        // Determine if active account is Super Administrator from database
+        $s = $this->db->prepare(
+            "SELECT 1
+             FROM user_account ua
+             LEFT JOIN account_role ar ON ar.user_account_id = ua.user_account_id
+             LEFT JOIN role r ON r.role_id = ar.role_id
+             WHERE ua.user_account_id = ? AND ua.account_status = 'active'
+               AND (ua.is_super_admin = 1 OR r.role_name = 'SUPER_ADMINISTRATOR')
+             LIMIT 1"
+        );
+        $s->execute([(int)$uid]);
+        $isSuper = (bool)$s->fetchColumn();
 
         // 2. Super Administrator Interface
         if ($target === 'super-admin' || $target === 'super_admin') {
@@ -683,10 +688,17 @@ final class AuthController extends Controller
         if ($target === 'delivery' || $target === 'delivery-personnel' || $target === 'delivery_personnel') {
             if (!$isSuper) {
                 $stmt = $this->db->prepare(
-                    "SELECT 1 FROM account_role ar
-                     JOIN role r ON r.role_id = ar.role_id
-                     JOIN employee e ON e.user_account_id = ar.user_account_id AND e.employee_status = 'active'
-                     WHERE ar.user_account_id = ? AND ar.business_unit_id = 1 AND r.role_name = 'DELIVERY_PERSONNEL'
+                    "SELECT 1
+                     FROM user_account ua
+                     JOIN employee e ON e.user_account_id = ua.user_account_id
+                                      AND e.employee_status = 'active'
+                                      AND e.business_unit_id = 1
+                     JOIN account_role ar ON ar.user_account_id = ua.user_account_id
+                                          AND ar.business_unit_id = e.business_unit_id
+                     JOIN role r ON r.role_id = ar.role_id AND r.role_name = 'DELIVERY_PERSONNEL'
+                     JOIN business_unit bu ON bu.business_unit_id = ar.business_unit_id
+                                          AND bu.business_unit_status = 'active'
+                     WHERE ua.user_account_id = ? AND ua.account_status = 'active'
                      LIMIT 1"
                 );
                 $stmt->execute([(int)$uid]);

@@ -60,14 +60,17 @@ final class DeliveryController extends Controller
         $stmt = $this->db->prepare(
             "SELECT e.employee_id
              FROM user_account ua
-             JOIN employee e ON e.user_account_id = ua.user_account_id AND e.employee_status = 'active'
+             JOIN employee e ON e.user_account_id = ua.user_account_id
+                              AND e.employee_status = 'active'
+                              AND e.business_unit_id = ?
              JOIN account_role ar ON ar.user_account_id = ua.user_account_id
+                                  AND ar.business_unit_id = e.business_unit_id
              JOIN role r ON r.role_id = ar.role_id AND r.role_name = 'DELIVERY_PERSONNEL'
              JOIN business_unit bu ON bu.business_unit_id = ar.business_unit_id AND bu.business_unit_status = 'active'
-             WHERE ua.user_account_id = ? AND ar.business_unit_id = ? AND ua.account_status = 'active'
+             WHERE ua.user_account_id = ? AND ua.account_status = 'active'
              LIMIT 1"
         );
-        $stmt->execute([(int)$uid, self::PET_STORE_UNIT_ID]);
+        $stmt->execute([self::PET_STORE_UNIT_ID, (int)$uid]);
         $empId = $stmt->fetchColumn();
 
         if ($empId !== false && (int)$empId > 0) {
@@ -453,13 +456,14 @@ final class DeliveryController extends Controller
 
         try {
             $reservationService = new OrderReservationService($this->db);
-            $onCompleted = null;
-            if ($confirmCodCollected) {
-                $paymentService = new OrderPaymentService($this->db);
-                $onCompleted = static function () use ($paymentService, $orderId, $empId, $uid): void {
+            $paymentService = new OrderPaymentService($this->db);
+            $onCompleted = static function () use ($paymentService, $orderId, $empId, $uid, $confirmCodCollected): void {
+                if ($confirmCodCollected) {
                     $paymentService->collectDeliveryCodInTransaction($orderId, self::PET_STORE_UNIT_ID, $empId, $uid);
-                };
-            }
+                } else {
+                    $paymentService->assertNoPendingDeliveryCodInTransaction($orderId);
+                }
+            };
             $reservationService->completeDeliveryOrder($orderId, self::PET_STORE_UNIT_ID, $empId, $uid, $onCompleted);
 
             $msg = $confirmCodCollected

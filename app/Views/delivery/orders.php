@@ -459,8 +459,8 @@ if (!empty($selectedOrder)) {
                 <?= \App\Core\CSRF::field() ?>
                 <?php if ($isPendingCod): ?>
                   <label class="caption" style="display: flex; align-items: center; gap: 0.45rem; cursor: pointer; font-weight: 600;">
-                    <input type="checkbox" name="confirm_cod_collected" value="1">
-                    Confirm COD cash collected from customer (₱<?= number_format((float)$orderModal['total_amount'], 2) ?>)
+                    <input type="checkbox" name="confirm_cod_collected" value="1" required>
+                    Confirm COD cash collected from customer (₱<?= number_format((float)$orderModal['total_amount'], 2) ?>) <span style="color: #b91c1c;">*</span>
                   </label>
                 <?php endif; ?>
                 <button type="submit" class="btn primary btn-sm">✓ Mark Delivered (Completed)</button>
