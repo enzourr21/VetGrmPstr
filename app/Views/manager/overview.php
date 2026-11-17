@@ -128,7 +128,7 @@
           <div style="padding: 0.75rem 0.25rem; border-bottom: 1px solid var(--border, #e5e7eb); display: flex; flex-direction: column; gap: 0.4rem;">
             <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; flex-wrap: wrap;">
               <div>
-                <a href="/manager/sales<?= $unitQuery ?><?= !empty($unitQuery) ? '&' : '?' ?>tab=refunds&view=<?= (int)$rf['refund_request_id'] ?>">
+                <a href="/manager/refunds<?= $unitQuery ?><?= !empty($unitQuery) ? '&' : '?' ?>view=<?= (int)$rf['refund_request_id'] ?>">
                   <strong><?= e($rf['refund_reference']) ?></strong>
                 </a>
                 <span class="badge secondary" style="font-size: 0.75rem; margin-left: 0.35rem;"><?= e($rf['channel_label']) ?></span>
@@ -145,7 +145,7 @@
         <?php endforeach; ?>
       </div>
       <div style="margin-top: auto; padding-top: 1rem;">
-        <a href="/manager/sales<?= $unitQuery ?><?= !empty($unitQuery) ? '&' : '?' ?>tab=refunds" class="btn secondary btn-sm" style="width: 100%; text-align: center; justify-content: center;">
+        <a href="/manager/refunds<?= $unitQuery ?>" class="btn secondary btn-sm" style="width: 100%; text-align: center; justify-content: center;">
           Open Refund Requests Workspace &rarr;
         </a>
       </div>

@@ -114,8 +114,12 @@ $r->post('/manager/units/{unit_id}/services/{id}/status', 'ManagerController', '
 $r->post('/manager/units/{unit_id}/services/{id}/toggle-status', 'ManagerController', 'toggleServiceStatusUnit');
 $r->get('/manager/sales', 'ManagerController', 'sales');
 $r->get('/manager/units/{id}/sales', 'ManagerController', 'sales');
+$r->get('/manager/refunds', 'ManagerController', 'refunds');
+$r->get('/manager/units/{id}/refunds', 'ManagerController', 'refunds');
 $r->get('/manager/orders', 'ManagerController', 'orders');
 $r->get('/manager/units/{id}/orders', 'ManagerController', 'orders');
+$r->post('/manager/refunds/{id}/approve', 'ManagerController', 'approveRefund');
+$r->post('/manager/refunds/{id}/reject', 'ManagerController', 'rejectRefund');
 $r->post('/manager/sales/refunds/{id}/approve', 'ManagerController', 'approveRefund');
 $r->post('/manager/sales/refunds/{id}/reject', 'ManagerController', 'rejectRefund');
 $r->post('/manager/units/{id}/sales/refunds/{ref_id}/approve', 'ManagerController', 'approveRefundUnit');
@@ -164,6 +168,8 @@ $r->post('/manager/units/{id}/settings/overlap', 'ManagerController', 'updateOve
 
 // Pet Store Receptionist Interface
 $r->get('/petstore/receptionist', 'PetStoreReceptionistController', 'sales');
+$r->get('/petstore/receptionist/overview', 'PetStoreReceptionistController', 'sales');
+$r->post('/petstore/receptionist/overview', 'PetStoreReceptionistController', 'createSale');
 $r->get('/petstore/receptionist/sales', 'PetStoreReceptionistController', 'sales');
 $r->post('/petstore/receptionist/sales', 'PetStoreReceptionistController', 'createSale');
 $r->get('/petstore/receptionist/customers/search', 'PetStoreReceptionistController', 'searchCustomers');

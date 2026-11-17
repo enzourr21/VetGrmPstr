@@ -136,7 +136,7 @@ check('Navigation contains 6 standard tabs',
 );
 
 $salesReq = request('GET', '/manager/sales', [], $bmCookies);
-check('2. Sales page renders for Business Manager (200)', $salesReq['status'] === 200 && str_contains($salesReq['body'], 'Walk-in Sales') && str_contains($salesReq['body'], 'Online Orders'));
+check('2. Sales page renders for Business Manager (200)', $salesReq['status'] === 200 && str_contains($salesReq['body'], 'Walk-in') && str_contains($salesReq['body'], 'Online — Delivery') && str_contains($salesReq['body'], 'Online — Pick-up'));
 
 $productsReq = request('GET', '/manager/products', [], $bmCookies);
 check('3. Products page renders for Business Manager (200)', $productsReq['status'] === 200 && str_contains($productsReq['body'], 'Product Catalog'));
@@ -740,23 +740,25 @@ check('Overview contains Stocks Running Low card and removes Employees On Duty',
 check('Overview excludes Confirmed Appointments card', !str_contains($ov['body'], 'Confirmed Appointments'));
 check('Overview Stocks Running Low displays low stock items', str_contains($ov['body'], 'Organic Catnip Ball (Deluxe)') || str_contains($ov['body'], 'Premium Rubber Chew Bone (Large)'));
 check('Overview Pending Refund Requests displays pending reference', str_contains($ov['body'], 'REF-REQ-1001') || str_contains($ov['body'], 'REF-REQ-1002'));
-check('Overview Pending Refund Requests links to Sales refunds view', str_contains($ov['body'], 'tab=refunds&amp;view=') || str_contains($ov['body'], 'tab=refunds&view='));
+check('Overview Pending Refund Requests links to Refunds page', str_contains($ov['body'], '/manager/refunds'));
 check('Overview Recent Sales unified record is preserved', str_contains($ov['body'], 'Recent Sales') && str_contains($ov['body'], 'Sales Channel'));
 
-// 2. Sales Page Structure (3 Views: Walk-in, Online, Refund Requests)
+// 2. Sales Page Structure (3 Views: Walk-in, Online — Delivery, Online — Pick-up) & Dedicated Refunds Page
 $salesWalk = request('GET', '/manager/sales?tab=walkin', [], $bmCookies);
 check('Sales page Walk-in tab has is-active class', (bool)preg_match('/tab=walkin[^>]*class="[^"]*segmented-pill[^"]*is-active/s', $salesWalk['body']));
 
-$salesOnline = request('GET', '/manager/sales?tab=online', [], $bmCookies);
-check('Sales page Online tab has is-active class', (bool)preg_match('/tab=online[^>]*class="[^"]*segmented-pill[^"]*is-active/s', $salesOnline['body']));
+$salesDelivery = request('GET', '/manager/sales?tab=delivery', [], $bmCookies);
+check('Sales page Online — Delivery tab has is-active class', (bool)preg_match('/tab=delivery[^>]*class="[^"]*segmented-pill[^"]*is-active/s', $salesDelivery['body']));
 
-$salesRefunds = request('GET', '/manager/sales?tab=refunds', [], $bmCookies);
-check('Sales page Refund Requests tab renders (200)', $salesRefunds['status'] === 200);
-check('Sales page Refund Requests tab has is-active class', (bool)preg_match('/tab=refunds[^>]*class="[^"]*segmented-pill[^"]*is-active/s', $salesRefunds['body']));
-check('Sales page Refund Requests active treatment uses emerald color', str_contains($salesRefunds['body'], 'var(--brand-soft') || str_contains($salesRefunds['body'], 'var(--brand'));
-check('Sales page Refund Requests has automatic status filter dropdown', str_contains($salesRefunds['body'], '<select name="status" onchange="this.form.submit()"'));
-check('Sales page Refund Requests has search input', str_contains($salesRefunds['body'], 'type="search"') && str_contains($salesRefunds['body'], 'name="q"'));
-check('Sales page does not contain green Apply Filter button', !preg_match('/<button[^>]+class="btn secondary[^>]*>Filter<\/button>/i', $salesRefunds['body']));
+$salesPickup = request('GET', '/manager/sales?tab=pickup', [], $bmCookies);
+check('Sales page Online — Pick-up tab has is-active class', (bool)preg_match('/tab=pickup[^>]*class="[^"]*segmented-pill[^"]*is-active/s', $salesPickup['body']));
+
+$salesRefunds = request('GET', '/manager/refunds', [], $bmCookies);
+check('Dedicated Refunds page renders (200)', $salesRefunds['status'] === 200);
+check('Refunds page has automatic status filter dropdown', str_contains($salesRefunds['body'], 'name="status" onchange="this.form.submit()"'));
+check('Refunds page has sort dropdown for date and amount', str_contains($salesRefunds['body'], 'name="sort" onchange="this.form.submit()"'));
+check('Refunds page has search input', str_contains($salesRefunds['body'], 'type="search"') && str_contains($salesRefunds['body'], 'name="q"'));
+check('Refunds page does not contain green Apply Filter button', !preg_match('/<button[^>]+class="btn secondary[^>]*>Filter<\/button>/i', $salesRefunds['body']));
 
 // 3. Refund Requests List & Details
 check('Refund requests list displays pending request REF-REQ-1001', str_contains($salesRefunds['body'], 'REF-REQ-1001'));

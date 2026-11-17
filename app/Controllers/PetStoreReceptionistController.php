@@ -170,9 +170,9 @@ final class PetStoreReceptionistController extends Controller
         $dailyOutDeliveryOrders = (int)$orderCounts['out_for_delivery_count'];
         $totalDailyOrders = (int)$orderCounts['total_daily_orders'];
 
-        // 3. Recent Sales (Paginated server-side directly inside the card, sorted newest first)
+        // 3. Recent Sales (Today's walk-in sales only, paginated server-side, sorted newest first)
         $countStmt = $this->db->prepare(
-            "SELECT COUNT(*) FROM sale s WHERE s.business_unit_id = ? AND s.sale_status = 'completed'"
+            "SELECT COUNT(*) FROM sale s WHERE s.business_unit_id = ? AND s.sale_status = 'completed' AND DATE(s.sale_date) = CURDATE()"
         );
         $countStmt->execute([$unitId]);
         $totalSalesCount = (int)$countStmt->fetchColumn();
@@ -195,7 +195,7 @@ final class PetStoreReceptionistController extends Controller
              FROM sale s
              LEFT JOIN customer c ON c.customer_id = s.customer_id
              {$this->paymentSummaryJoinSql('sale_id', 's')}
-             WHERE s.business_unit_id = ? AND s.sale_status = 'completed'
+             WHERE s.business_unit_id = ? AND s.sale_status = 'completed' AND DATE(s.sale_date) = CURDATE()
              ORDER BY s.sale_date DESC, s.sale_id DESC
              LIMIT ? OFFSET ?"
         );
@@ -237,7 +237,7 @@ final class PetStoreReceptionistController extends Controller
         $availableProducts = $prodStmt->fetchAll();
 
         $this->render('petstore_receptionist/sales', [
-            'title' => 'Sales · Pet Store Receptionist',
+            'title' => 'Overview · Pet Store Receptionist',
             'unitId' => $unitId,
             'unitName' => $unitName,
             'isSuper' => $isSuper,
@@ -387,7 +387,7 @@ final class PetStoreReceptionistController extends Controller
         if ($customerType === 'registered') {
             if ($rawCustId === '' || !ctype_digit($rawCustId)) {
                 $this->flash('error', 'Please search and select a valid registered customer before confirming the sale.');
-                $this->redirect('/petstore/receptionist/sales');
+                $this->redirect('/petstore/receptionist/overview');
                 return;
             }
             $chkCust = $this->db->prepare("SELECT customer_id, first_name, last_name FROM customer WHERE customer_id = ? AND customer_status = 'active' LIMIT 1");
@@ -395,7 +395,7 @@ final class PetStoreReceptionistController extends Controller
             $foundCust = $chkCust->fetch(PDO::FETCH_ASSOC);
             if (!$foundCust) {
                 $this->flash('error', 'The selected registered customer could not be found or is inactive.');
-                $this->redirect('/petstore/receptionist/sales');
+                $this->redirect('/petstore/receptionist/overview');
                 return;
             }
             $customerId = (int)$foundCust['customer_id'];
@@ -414,7 +414,7 @@ final class PetStoreReceptionistController extends Controller
 
         if (!is_array($productIds) || !is_array($quantities) || empty($productIds)) {
             $this->flash('error', 'Please add at least one product to the sale.');
-            $this->redirect('/petstore/receptionist/sales');
+            $this->redirect('/petstore/receptionist/overview');
             return;
         }
 
@@ -425,7 +425,7 @@ final class PetStoreReceptionistController extends Controller
 
             if ($qty < 0) {
                 $this->flash('error', 'Sale product quantities must be greater than zero.');
-                $this->redirect('/petstore/receptionist/sales');
+                $this->redirect('/petstore/receptionist/overview');
                 return;
             }
             if ($bpId <= 0 || $qty === 0) {
@@ -440,7 +440,7 @@ final class PetStoreReceptionistController extends Controller
 
         if (empty($rawLines)) {
             $this->flash('error', 'At least one valid product line with quantity greater than zero is required.');
-            $this->redirect('/petstore/receptionist/sales');
+            $this->redirect('/petstore/receptionist/overview');
             return;
         }
 
@@ -464,7 +464,7 @@ final class PetStoreReceptionistController extends Controller
             $this->flash('error', 'Failed to confirm sale: ' . $e->getMessage());
         }
 
-        $this->redirect('/petstore/receptionist/sales');
+        $this->redirect('/petstore/receptionist/overview');
     }
 
     // ==========================================
@@ -505,7 +505,24 @@ final class PetStoreReceptionistController extends Controller
                 LEFT JOIN user_account ua ON ua.user_account_id = c.user_account_id
                 {$this->paymentSummaryJoinSql('order_id', 'co')}
                 LEFT JOIN employee deliv_emp ON deliv_emp.employee_id = co.delivery_employee_id
-                WHERE co.business_unit_id = ?";
+                WHERE co.business_unit_id = ?
+                  AND (
+                      DATE(co.order_date) = CURDATE()
+                      OR (
+                          co.fulfillment_method = 'delivery'
+                          AND (co.delivery_failed_at IS NOT NULL OR co.delivery_failure_reason IS NOT NULL)
+                          AND (
+                              (co.order_status IN ('processing', 'out_for_delivery')
+                               AND DATE(co.updated_at) = CURDATE()
+                               AND (co.rescheduled_date IS NULL OR co.rescheduled_date <= CURDATE()))
+                              OR (co.order_status = 'delivery_failed' AND co.rescheduled_date = CURDATE())
+                          )
+                      )
+                      OR (
+                          co.order_status = 'completed'
+                          AND DATE(co.updated_at) = CURDATE()
+                      )
+                  )";
         $params = [$unitId];
 
         if ($tab === 'delivery') {

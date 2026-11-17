@@ -17,7 +17,7 @@ $totalOrders = count($ordersList);
   </div>
   <?php if (empty($isInventoryManagerOnly)): ?>
     <div>
-      <a href="/manager/sales<?= $unitQuery ?>" class="btn secondary btn-sm">Walk-in Sales &amp; Refunds &rarr;</a>
+      <a href="/manager/sales<?= $unitQuery ?>" class="btn secondary btn-sm">Sales &rarr;</a>
     </div>
   <?php endif; ?>
 </div>

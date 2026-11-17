@@ -238,9 +238,10 @@ $renderProfileMenu = static function (string $adminInitials, array $authorizedIn
         <a href="/manager/employees<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/employees') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Employees</a>
       <?php endif; ?>
     <?php else: /* Business Manager */ ?>
-      <?php if ((int)$currentUnitId === 1): /* Pet Store Business Manager: 5 Main Pages */ ?>
+      <?php if ((int)$currentUnitId === 1): /* Pet Store Business Manager */ ?>
         <a href="/manager<?= $unitQuery ?>" class="<?= ($curPath === '/manager' || preg_match('#^/manager/units/\d+(/overview)?$#', $curPath) || $curPath === '/manager/overview') ? 'is-current' : '' ?>">Overview</a>
-        <a href="/manager/orders<?= $unitQuery ?>" class="<?= ((str_contains($curPath, '/orders') || str_contains($curPath, '/sales')) && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Orders</a>
+        <a href="/manager/sales<?= $unitQuery ?>" class="<?= ((str_contains($curPath, '/sales') || str_contains($curPath, '/orders')) && !str_contains($curPath, '/refunds') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Sales</a>
+        <a href="/manager/refunds<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/refunds') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Refunds</a>
         <a href="/manager/employees<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/employees') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Employees</a>
         <a href="/manager/products<?= $unitQuery ?>" class="<?= ((str_contains($curPath, '/products') || str_contains($curPath, '/inventory')) && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Products &amp; Inventory</a>
         <a href="/manager/settings<?= $unitQuery ?>" class="<?= (str_contains($curPath, '/settings') && str_starts_with($curPath, '/manager')) ? 'is-current' : '' ?>">Business Settings</a>
@@ -263,7 +264,7 @@ $renderProfileMenu = static function (string $adminInitials, array $authorizedIn
     <?php endif; ?>
 
   <?php elseif (str_starts_with($curPath, '/petstore/receptionist')): ?>
-      <a href="/petstore/receptionist/sales" class="<?= str_starts_with($curPath, '/petstore/receptionist/sales') ? 'is-current' : '' ?>">Sales</a>
+      <a href="/petstore/receptionist/overview" class="<?= ($curPath === '/petstore/receptionist' || str_starts_with($curPath, '/petstore/receptionist/overview') || str_starts_with($curPath, '/petstore/receptionist/sales')) ? 'is-current' : '' ?>">Overview</a>
       <a href="/petstore/receptionist/orders" class="<?= str_starts_with($curPath, '/petstore/receptionist/orders') ? 'is-current' : '' ?>">Orders</a>
       <a href="/petstore/receptionist/employees" class="<?= str_starts_with($curPath, '/petstore/receptionist/employees') ? 'is-current' : '' ?>">Employees</a>
 

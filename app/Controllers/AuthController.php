@@ -108,7 +108,7 @@ final class AuthController extends Controller
         foreach ($roles as $r) {
             if ($r['role_name'] === 'RECEPTIONIST') {
                 if ($r['business_unit_name'] === Units::PET_STORE || (int)($r['business_unit_id'] ?? 0) === 1) {
-                    return '/petstore/receptionist/sales';
+                    return '/petstore/receptionist/overview';
                 }
                 if ($r['business_unit_name'] === Units::VET_CLINIC || (int)($r['business_unit_id'] ?? 0) === 2) {
                     return '/vetclinic/receptionist/overview';
@@ -584,7 +584,7 @@ final class AuthController extends Controller
             Session::set('active_context', 'employee');
             Session::forget('inventory_manager_mode');
             Session::forget('active_workspace_interface');
-            $this->redirect('/petstore/receptionist/sales');
+            $this->redirect('/petstore/receptionist/overview');
             return;
         }
 

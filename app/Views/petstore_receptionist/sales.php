@@ -1,16 +1,16 @@
 <?php
-$title = $title ?? 'Sales · Pet Store Receptionist';
+$title = $title ?? 'Overview · Pet Store Receptionist';
 ?>
 
 <div class="page-head" style="margin-bottom: 1.5rem;">
   <div>
     <p class="eyebrow">Pet Store Workspace</p>
-    <h1>Sales</h1>
-    <p class="muted">Record point-of-sale customer transactions, oversee daily store sales, and monitor pending order fulfillments.</p>
+    <h1>Overview</h1>
+    <p class="muted">Record point-of-sale customer transactions, oversee daily store sales, and monitor today's order fulfillments.</p>
   </div>
 </div>
 
-<!-- Daily Performance Metrics & Daily Sales Orders Breakdown -->
+<!-- Daily Performance Metrics & Orders Today Breakdown -->
 <div class="grid grid-2" style="margin-bottom: 1.5rem; gap: 1.25rem; align-items: stretch;">
   <!-- Card A: Daily Total Sales -->
   <div class="card stat-card" style="padding: 1.25rem 1.5rem; display: flex; flex-direction: column; justify-content: space-between; height: 100%; box-sizing: border-box;">
@@ -28,27 +28,27 @@ $title = $title ?? 'Sales · Pet Store Receptionist';
     </p>
   </div>
 
-  <!-- Card B: Daily Sales Orders Breakdown -->
+  <!-- Card B: Orders Today Breakdown -->
   <div class="card stat-card" style="padding: 1.25rem 1.5rem; display: flex; flex-direction: column; justify-content: space-between; height: 100%; box-sizing: border-box;">
     <div>
       <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem;">
-        <span class="caption muted" style="font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Daily Sales</span>
+        <span class="caption muted" style="font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Orders Today</span>
         <span style="font-size: 1.25rem;" aria-hidden="true">📦</span>
       </div>
-      <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; align-items: center; margin-top: 0.5rem;">
-        <div style="background: var(--color-bg-subtle, #f9fafb); padding: 0.65rem 0.75rem; border-radius: 6px; border: 1px solid var(--color-border, #e5e7eb); text-align: center;">
+      <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; align-items: stretch; margin-top: 0.5rem;">
+        <div class="orders-today-status-box" style="background: var(--color-bg-subtle, #f9fafb); padding: 0.65rem 0.75rem; border-radius: 6px; border: 1px solid var(--color-border, #e5e7eb); text-align: center; display: flex; flex-direction: column; justify-content: center; height: 100%; box-sizing: border-box;">
           <div style="font-size: 1.5rem; font-weight: 700; color: #d97706; line-height: 1.2;">
             <?= (int)$dailyPendingOrders ?>
           </div>
           <div class="caption muted" style="font-size: 0.75rem; font-weight: 600; margin-top: 0.2rem; text-transform: uppercase;">Pending</div>
         </div>
-        <div style="background: var(--color-bg-subtle, #f9fafb); padding: 0.65rem 0.75rem; border-radius: 6px; border: 1px solid var(--color-border, #e5e7eb); text-align: center;">
+        <div class="orders-today-status-box" style="background: var(--color-bg-subtle, #f9fafb); padding: 0.65rem 0.75rem; border-radius: 6px; border: 1px solid var(--color-border, #e5e7eb); text-align: center; display: flex; flex-direction: column; justify-content: center; height: 100%; box-sizing: border-box;">
           <div style="font-size: 1.5rem; font-weight: 700; color: #0284c7; line-height: 1.2;">
             <?= (int)$dailyReadyPickupOrders ?>
           </div>
           <div class="caption muted" style="font-size: 0.75rem; font-weight: 600; margin-top: 0.2rem; text-transform: uppercase;">Ready for Pickup</div>
         </div>
-        <div style="background: var(--color-bg-subtle, #f9fafb); padding: 0.65rem 0.75rem; border-radius: 6px; border: 1px solid var(--color-border, #e5e7eb); text-align: center;">
+        <div class="orders-today-status-box" style="background: var(--color-bg-subtle, #f9fafb); padding: 0.65rem 0.75rem; border-radius: 6px; border: 1px solid var(--color-border, #e5e7eb); text-align: center; display: flex; flex-direction: column; justify-content: center; height: 100%; box-sizing: border-box;">
           <div style="font-size: 1.5rem; font-weight: 700; color: #059669; line-height: 1.2;">
             <?= (int)$dailyOutDeliveryOrders ?>
           </div>
@@ -62,7 +62,7 @@ $title = $title ?? 'Sales · Pet Store Receptionist';
   </div>
 </div>
 
-<!-- Card C: Recent Sales Card with In-Card Pagination -->
+<!-- Card C: Recent Sales Card (Today's Walk-in Sales Only) with In-Card Pagination -->
 <section class="card" style="margin-bottom: 2rem;">
   <div class="row" style="justify-content: space-between; align-items: baseline; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.75rem;">
     <div>
@@ -70,7 +70,7 @@ $title = $title ?? 'Sales · Pet Store Receptionist';
         Recent Sales Transactions
       </h2>
       <p class="caption muted" style="margin: 0.25rem 0 0 0;">
-        Displaying recent confirmed sales transactions sorted newest first.
+        Displaying today's completed walk-in sales transactions sorted newest first.
       </p>
     </div>
     <div style="display: flex; gap: 0.5rem; align-items: center;">
@@ -83,7 +83,7 @@ $title = $title ?? 'Sales · Pet Store Receptionist';
   <?php if (empty($recentSales)): ?>
     <div class="empty" style="padding: 2.5rem 1rem; text-align: center;">
       <p style="margin: 0; font-size: 1rem; color: var(--color-muted, #6b7280);">
-        No successful sales transactions recorded yet.
+        No walk-in sales transactions recorded today yet.
       </p>
       <button type="button" class="btn primary btn-sm" data-modal-open="new-sale-modal" style="margin-top: 1rem;">
         New Sale
@@ -153,13 +153,13 @@ $title = $title ?? 'Sales · Pet Store Receptionist';
         </span>
         <div style="display: flex; gap: 0.5rem; align-items: center;">
           <?php if ($currentPage > 1): ?>
-            <a href="/petstore/receptionist/sales?page=<?= (int)($currentPage - 1) ?>" class="btn secondary btn-sm" id="sales-prev-btn">&lsaquo; Previous</a>
+            <a href="/petstore/receptionist/overview?page=<?= (int)($currentPage - 1) ?>" class="btn secondary btn-sm" id="sales-prev-btn">&lsaquo; Previous</a>
           <?php else: ?>
             <button type="button" class="btn secondary btn-sm is-disabled" id="sales-prev-btn" disabled aria-disabled="true" style="opacity: 0.5; cursor: not-allowed;">&lsaquo; Previous</button>
           <?php endif; ?>
 
           <?php if ($currentPage < $totalPages): ?>
-            <a href="/petstore/receptionist/sales?page=<?= (int)($currentPage + 1) ?>" class="btn secondary btn-sm" id="sales-next-btn">Next &rsaquo;</a>
+            <a href="/petstore/receptionist/overview?page=<?= (int)($currentPage + 1) ?>" class="btn secondary btn-sm" id="sales-next-btn">Next &rsaquo;</a>
           <?php else: ?>
             <button type="button" class="btn secondary btn-sm is-disabled" id="sales-next-btn" disabled aria-disabled="true" style="opacity: 0.5; cursor: not-allowed;">Next &rsaquo;</button>
           <?php endif; ?>

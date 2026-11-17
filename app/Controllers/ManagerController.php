@@ -176,7 +176,8 @@ final class ManagerController extends Controller
         return "LEFT JOIN (
                     SELECT p_sub.{$foreignKey},
                            MAX(CASE WHEN (p_sub.payment_type = 'refund' AND p_sub.payment_status = 'completed') OR p_sub.payment_status = 'refunded' THEN 1 ELSE 0 END) AS has_refunded,
-                           MAX(CASE WHEN p_sub.payment_type = 'payment' AND p_sub.payment_status = 'completed' THEN p_sub.payment_id END) AS latest_completed_payment_id,
+                           COALESCE(SUM(CASE WHEN p_sub.payment_type = 'refund' AND p_sub.payment_status = 'completed' THEN p_sub.amount ELSE 0 END), 0) AS refunded_amount,
+                           MAX(CASE WHEN p_sub.payment_type = 'payment' AND p_sub.payment_status IN ('completed', 'refunded') THEN p_sub.payment_id END) AS latest_completed_payment_id,
                            MAX(CASE WHEN p_sub.payment_type = 'payment' THEN p_sub.payment_id END) AS latest_payment_id
                     FROM payment p_sub
                     WHERE p_sub.{$foreignKey} IS NOT NULL
@@ -349,7 +350,7 @@ final class ManagerController extends Controller
                 'channel' => 'Online',
                 'ref_code' => '#ORD-' . $oo['order_id'],
                 'ref_id' => (int)$oo['order_id'],
-                'tab' => 'online',
+                'tab' => ($oo['fulfillment_method'] === 'pickup' ? 'pickup' : 'delivery'),
                 'customer_name' => $oo['customer_name'],
                 'item_count' => (int)$oo['item_count'],
                 'total_amount' => (float)$oo['total_amount'],
@@ -2944,65 +2945,198 @@ final class ManagerController extends Controller
             $this->forbidden('Sales and refunds management is exclusively available to Pet Store.');
         }
 
-        $tab = isset($_GET['tab']) && in_array($_GET['tab'], ['online', 'refunds'], true) ? $_GET['tab'] : 'walkin';
+        $rawTab = strtolower(trim((string)($_GET['tab'] ?? 'walkin')));
+        if ($rawTab === 'refunds') {
+            $redirParams = [];
+            if ($isSuper && $routeUnitId !== null) {
+                $redirBase = "/manager/units/{$routeUnitId}/refunds";
+            } else {
+                $redirBase = '/manager/refunds';
+                if ($isSuper) {
+                    $redirParams['unit_id'] = (int)$unitId;
+                }
+            }
+            foreach (['status', 'q', 'view', 'sort', 'dir'] as $k) {
+                if (isset($_GET[$k]) && (string)$_GET[$k] !== '') {
+                    $redirParams[$k] = (string)$_GET[$k];
+                }
+            }
+            $qs = $redirParams ? ('?' . http_build_query($redirParams)) : '';
+            $this->redirect($redirBase . $qs);
+        }
+
+        if ($rawTab === 'online') {
+            $rawTab = 'delivery';
+        }
+        $tab = in_array($rawTab, ['walkin', 'delivery', 'pickup'], true) ? $rawTab : 'walkin';
         $q = trim((string)($_GET['q'] ?? ''));
-        $statusFilter = trim((string)($_GET['status'] ?? ''));
         $viewId = isset($_GET['view']) && ctype_digit((string)$_GET['view']) ? (int)$_GET['view'] : null;
 
-        // Fetch Walk-in Sales
-        $walkInSales = [];
-        $walkSql = "SELECT s.sale_id, s.sale_date, s.total_amount, s.sale_status,
+        $walkInSales = $this->fetchSuccessfulWalkInSales($unitId, $tab === 'walkin' ? $q : '');
+        $onlineDeliveryOrders = $this->fetchSuccessfulOnlineOrders($unitId, 'delivery', $tab === 'delivery' ? $q : '');
+        $onlinePickupOrders = $this->fetchSuccessfulOnlineOrders($unitId, 'pickup', $tab === 'pickup' ? $q : '');
+
+        $this->render('manager/sales', [
+            'title' => "Sales · $unitName",
+            'activeTab' => 'sales',
+            'salesTab' => $tab,
+            'unitId' => $unitId,
+            'unitName' => $unitName,
+            'isSuper' => $isSuper,
+            'allUnits' => $isSuper ? Units::all() : [],
+            'walkInSales' => $walkInSales,
+            'onlineDeliveryOrders' => $onlineDeliveryOrders,
+            'onlinePickupOrders' => $onlinePickupOrders,
+            'searchQuery' => $q,
+            'viewId' => $viewId,
+        ]);
+    }
+
+    public function refunds(?int $routeUnitId = null): void
+    {
+        [, , $unitId, $unitName, $isSuper] = $this->checkBusinessManager($routeUnitId);
+
+        if ((int)$unitId !== Units::petStoreId()) {
+            $this->forbidden('Sales and refunds management is exclusively available to Pet Store.');
+        }
+
+        $q = trim((string)($_GET['q'] ?? ''));
+        $statusFilter = strtolower(trim((string)($_GET['status'] ?? '')));
+        if (!in_array($statusFilter, ['pending', 'approved', 'rejected'], true)) {
+            $statusFilter = '';
+        }
+
+        $sortSpec = $this->resolveRefundSort((string)($_GET['sort'] ?? 'default'), (string)($_GET['dir'] ?? ''));
+        $viewId = isset($_GET['view']) && ctype_digit((string)$_GET['view']) ? (int)$_GET['view'] : null;
+
+        $refundRequests = $this->fetchRefundRequests($unitId, $q, $statusFilter, $sortSpec['order_by']);
+
+        $pendingCntStmt = $this->db->prepare("SELECT COUNT(*) FROM refund_request WHERE business_unit_id = ? AND request_status = 'pending'");
+        $pendingCntStmt->execute([$unitId]);
+        $pendingRefundsCount = (int)$pendingCntStmt->fetchColumn();
+
+        $totalCntStmt = $this->db->prepare("SELECT COUNT(*) FROM refund_request WHERE business_unit_id = ?");
+        $totalCntStmt->execute([$unitId]);
+        $totalRefundsCount = (int)$totalCntStmt->fetchColumn();
+
+        $this->render('manager/refunds', [
+            'title' => "Refunds · $unitName",
+            'activeTab' => 'refunds',
+            'unitId' => $unitId,
+            'unitName' => $unitName,
+            'isSuper' => $isSuper,
+            'allUnits' => $isSuper ? Units::all() : [],
+            'refundRequests' => $refundRequests,
+            'pendingRefundsCount' => $pendingRefundsCount,
+            'totalRefundsCount' => $totalRefundsCount,
+            'searchQuery' => $q,
+            'statusFilter' => $statusFilter,
+            'sortKey' => $sortSpec['key'],
+            'viewId' => $viewId,
+        ]);
+    }
+
+    /**
+     * Fetch successful Pet Store walk-in sales (inclusion based on successful customer payment).
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function fetchSuccessfulWalkInSales(int $unitId, string $q): array
+    {
+        $walkSql = "SELECT s.sale_id, s.sale_date, s.total_amount, s.sale_status, s.customer_id,
                            COALESCE(CONCAT(c.first_name, ' ', c.last_name), 'Walk-in Customer') AS customer_name,
                            (SELECT COUNT(*) FROM sale_item si WHERE si.sale_id = s.sale_id) AS item_count,
                            p.payment_method,
+                           COALESCE(ps.has_refunded, 0) AS has_refunded,
+                           COALESCE(ps.refunded_amount, 0) AS refunded_amount,
                            CASE WHEN COALESCE(ps.has_refunded, 0) = 1 THEN 'refunded' ELSE p.payment_status END AS payment_status
                     FROM sale s
                     LEFT JOIN customer c ON c.customer_id = s.customer_id
                     {$this->paymentSummaryJoinSql('sale_id', 's')}
-                    WHERE s.business_unit_id = ?";
+                    WHERE s.business_unit_id = ?
+                      AND s.sale_status = 'completed'
+                      AND EXISTS (
+                          SELECT 1 FROM payment p_ok
+                          WHERE p_ok.sale_id = s.sale_id
+                            AND p_ok.payment_type = 'payment'
+                            AND p_ok.payment_status IN ('completed', 'refunded')
+                      )";
         $walkParams = [$unitId];
-        if ($tab === 'walkin' && $q !== '') {
-            $walkSql .= " AND (s.sale_id = ? OR c.first_name LIKE ? OR c.last_name LIKE ?)";
-            $walkParams[] = ctype_digit($q) ? (int)$q : 0;
+        if ($q !== '') {
+            $cleanQ = ltrim($q, '#');
+            if (str_starts_with(strtoupper($cleanQ), 'REC-S-')) {
+                $cleanQ = substr($cleanQ, 6);
+            }
+            $numId = ctype_digit($cleanQ) ? (int)$cleanQ : 0;
+            $walkSql .= " AND (s.sale_id = ? OR s.customer_id = ? OR c.first_name LIKE ? OR c.last_name LIKE ? OR CONCAT(c.first_name, ' ', c.last_name) LIKE ?)";
+            $walkParams[] = $numId;
+            $walkParams[] = $numId;
+            $walkParams[] = "%$q%";
             $walkParams[] = "%$q%";
             $walkParams[] = "%$q%";
         }
         $walkSql .= " ORDER BY s.sale_date DESC, s.sale_id DESC";
         $wStmt = $this->db->prepare($walkSql);
         $wStmt->execute($walkParams);
-        $walkInSales = $wStmt->fetchAll();
+        $rows = $wStmt->fetchAll();
 
-        // Attach items for each walk-in sale
-        foreach ($walkInSales as &$ws) {
-            $itStmt = $this->db->prepare(
-                "SELECT si.sale_item_id, si.quantity, si.unit_price,
-                        p.product_name, p.sku
-                 FROM sale_item si
-                 JOIN business_product bp ON bp.business_product_id = si.business_product_id
-                 JOIN product p ON p.product_id = bp.product_id
-                 WHERE si.sale_id = ?
-                 ORDER BY si.sale_item_id"
-            );
+        $itStmt = $this->db->prepare(
+            "SELECT si.sale_item_id, si.quantity, si.unit_price,
+                    p.product_name, p.sku
+             FROM sale_item si
+             JOIN business_product bp ON bp.business_product_id = si.business_product_id
+             JOIN product p ON p.product_id = bp.product_id
+             WHERE si.sale_id = ?
+             ORDER BY si.sale_item_id"
+        );
+        foreach ($rows as &$ws) {
             $itStmt->execute([(int)$ws['sale_id']]);
             $ws['items'] = $itStmt->fetchAll();
         }
         unset($ws);
 
-        // Fetch Online Orders
-        $onlineOrders = [];
+        return $rows;
+    }
+
+    /**
+     * Fetch successful Pet Store online orders by fulfillment method (inclusion based on successful
+     * customer payment status only, independent of order_status and courier remittance status).
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function fetchSuccessfulOnlineOrders(int $unitId, string $fulfillmentMethod, string $q): array
+    {
         $onSql = "SELECT co.*, CONCAT(c.first_name, ' ', c.last_name) AS customer_name,
                          ua.email AS customer_email, c.phone AS customer_phone,
                          p.payment_method,
-                         CASE WHEN COALESCE(ps.has_refunded, 0) = 1 THEN 'refunded' ELSE p.payment_status END AS payment_status
+                         COALESCE(ps.has_refunded, 0) AS has_refunded,
+                         COALESCE(ps.refunded_amount, 0) AS refunded_amount,
+                         CASE WHEN COALESCE(ps.has_refunded, 0) = 1 THEN 'refunded' ELSE p.payment_status END AS payment_status,
+                         CONCAT(deliv_emp.first_name, ' ', deliv_emp.last_name) AS delivery_employee_name
                   FROM customer_order co
                   JOIN customer c ON c.customer_id = co.customer_id
                   LEFT JOIN user_account ua ON ua.user_account_id = c.user_account_id
                   {$this->paymentSummaryJoinSql('order_id', 'co')}
-                  WHERE co.business_unit_id = ?";
-        $onParams = [$unitId];
-        if ($tab === 'online' && $q !== '') {
-            $onSql .= " AND (co.order_id = ? OR c.first_name LIKE ? OR c.last_name LIKE ? OR ua.email LIKE ?)";
-            $onParams[] = ctype_digit($q) ? (int)$q : 0;
+                  LEFT JOIN employee deliv_emp ON deliv_emp.employee_id = co.delivery_employee_id
+                  WHERE co.business_unit_id = ?
+                    AND co.fulfillment_method = ?
+                    AND EXISTS (
+                        SELECT 1 FROM payment p_ok
+                        WHERE p_ok.order_id = co.order_id
+                          AND p_ok.payment_type = 'payment'
+                          AND p_ok.payment_status IN ('completed', 'refunded')
+                    )";
+        $onParams = [$unitId, $fulfillmentMethod];
+        if ($q !== '') {
+            $cleanQ = ltrim($q, '#');
+            if (str_starts_with(strtoupper($cleanQ), 'ORD-')) {
+                $cleanQ = substr($cleanQ, 4);
+            }
+            $numId = ctype_digit($cleanQ) ? (int)$cleanQ : 0;
+            $onSql .= " AND (co.order_id = ? OR co.customer_id = ? OR c.first_name LIKE ? OR c.last_name LIKE ? OR CONCAT(c.first_name, ' ', c.last_name) LIKE ? OR ua.email LIKE ?)";
+            $onParams[] = $numId;
+            $onParams[] = $numId;
+            $onParams[] = "%$q%";
             $onParams[] = "%$q%";
             $onParams[] = "%$q%";
             $onParams[] = "%$q%";
@@ -3010,32 +3144,77 @@ final class ManagerController extends Controller
         $onSql .= " ORDER BY co.order_date DESC, co.order_id DESC";
         $oStmt = $this->db->prepare($onSql);
         $oStmt->execute($onParams);
-        $onlineOrders = $oStmt->fetchAll();
+        $rows = $oStmt->fetchAll();
 
-        // Attach items for each online order
-        foreach ($onlineOrders as &$oo) {
-            $itStmt = $this->db->prepare(
-                "SELECT oi.order_item_id, oi.quantity, oi.unit_price,
-                        p.product_name, p.sku
-                 FROM order_item oi
-                 JOIN business_product bp ON bp.business_product_id = oi.business_product_id
-                 JOIN product p ON p.product_id = bp.product_id
-                 WHERE oi.order_id = ?
-                 ORDER BY oi.order_item_id"
-            );
+        $itStmt = $this->db->prepare(
+            "SELECT oi.order_item_id, oi.quantity, oi.unit_price,
+                    p.product_name, p.sku
+             FROM order_item oi
+             JOIN business_product bp ON bp.business_product_id = oi.business_product_id
+             JOIN product p ON p.product_id = bp.product_id
+             WHERE oi.order_id = ?
+             ORDER BY oi.order_item_id"
+        );
+        foreach ($rows as &$oo) {
             $itStmt->execute([(int)$oo['order_id']]);
             $oo['items'] = $itStmt->fetchAll();
         }
         unset($oo);
 
-        // Fetch Refund Requests
-        $refundRequests = [];
+        return $rows;
+    }
+
+    /**
+     * @return array{key:string, order_by:string}
+     */
+    private function resolveRefundSort(string $sort, string $dir): array
+    {
+        $sort = strtolower(trim($sort));
+        $dir = strtolower(trim($dir));
+        if ($sort === 'date') {
+            $sort = $dir === 'asc' ? 'date_asc' : 'date_desc';
+        } elseif ($sort === 'amount') {
+            $sort = $dir === 'asc' ? 'amount_asc' : 'amount_desc';
+        }
+
+        return match ($sort) {
+            'date_desc' => [
+                'key' => 'date_desc',
+                'order_by' => 'rr.created_at DESC, rr.refund_request_id DESC',
+            ],
+            'date_asc' => [
+                'key' => 'date_asc',
+                'order_by' => 'rr.created_at ASC, rr.refund_request_id ASC',
+            ],
+            'amount_desc' => [
+                'key' => 'amount_desc',
+                'order_by' => 'rr.requested_amount DESC, rr.created_at DESC, rr.refund_request_id DESC',
+            ],
+            'amount_asc' => [
+                'key' => 'amount_asc',
+                'order_by' => 'rr.requested_amount ASC, rr.created_at DESC, rr.refund_request_id DESC',
+            ],
+            default => [
+                'key' => 'default',
+                'order_by' => "CASE WHEN rr.request_status = 'pending' THEN 0 ELSE 1 END, rr.created_at DESC, rr.refund_request_id DESC",
+            ],
+        };
+    }
+
+    /**
+     * Fetch Pet Store refund requests across all statuses with search (customer name/ID, order ID, ref) and sort.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function fetchRefundRequests(int $unitId, string $q, string $statusFilter, string $orderByClause): array
+    {
         $refSql = "SELECT rr.*,
                           CONCAT(c.first_name, ' ', c.last_name) AS customer_name,
                           c.phone AS customer_phone,
                           ua.email AS customer_email,
                           CONCAT(emp.first_name, ' ', emp.last_name) AS decided_by_name,
                           emp.position AS decided_by_position,
+                          co.fulfillment_method AS order_fulfillment_method,
                           CASE WHEN rr.channel = 'online' THEN CONCAT('#ORD-', rr.order_id)
                                ELSE CONCAT('#REC-S-', rr.sale_id) END AS transaction_ref,
                           CASE WHEN rr.channel = 'online' THEN co.total_amount
@@ -3051,74 +3230,65 @@ final class ManagerController extends Controller
                    LEFT JOIN sale s ON s.sale_id = rr.sale_id
                    WHERE rr.business_unit_id = ?";
         $refParams = [$unitId];
-        if ($tab === 'refunds' && $q !== '') {
-            $refSql .= " AND (rr.refund_reference LIKE ? OR c.first_name LIKE ? OR c.last_name LIKE ? OR rr.order_id = ? OR rr.sale_id = ?)";
+        if ($q !== '') {
+            $cleanQ = ltrim($q, '#');
+            if (str_starts_with(strtoupper($cleanQ), 'ORD-')) {
+                $cleanQ = substr($cleanQ, 4);
+            } elseif (str_starts_with(strtoupper($cleanQ), 'CUST-')) {
+                $cleanQ = substr($cleanQ, 5);
+            }
+            $numId = ctype_digit($cleanQ) ? (int)$cleanQ : 0;
+            $refSql .= " AND (rr.refund_reference LIKE ? OR c.first_name LIKE ? OR c.last_name LIKE ? OR CONCAT(c.first_name, ' ', c.last_name) LIKE ? OR ua.email LIKE ? OR rr.customer_id = ? OR rr.order_id = ? OR rr.sale_id = ?)";
             $refParams[] = "%$q%";
             $refParams[] = "%$q%";
             $refParams[] = "%$q%";
-            $refParams[] = ctype_digit($q) ? (int)$q : 0;
-            $refParams[] = ctype_digit($q) ? (int)$q : 0;
+            $refParams[] = "%$q%";
+            $refParams[] = "%$q%";
+            $refParams[] = $numId;
+            $refParams[] = $numId;
+            $refParams[] = $numId;
         }
-        if ($tab === 'refunds' && $statusFilter !== '' && in_array($statusFilter, ['pending', 'approved', 'rejected'], true)) {
+        if ($statusFilter !== '' && in_array($statusFilter, ['pending', 'approved', 'rejected'], true)) {
             $refSql .= " AND rr.request_status = ?";
             $refParams[] = $statusFilter;
         }
-        $refSql .= " ORDER BY CASE WHEN rr.request_status = 'pending' THEN 0 ELSE 1 END, rr.created_at DESC, rr.refund_request_id DESC";
+        $refSql .= " ORDER BY {$orderByClause}";
         $rStmt = $this->db->prepare($refSql);
         $rStmt->execute($refParams);
         $refundRequests = $rStmt->fetchAll();
 
-        // Attach line items to refund requests
+        $ordItStmt = $this->db->prepare(
+            "SELECT oi.order_item_id AS line_item_id, oi.quantity, oi.unit_price,
+                    p.product_name, p.sku
+             FROM order_item oi
+             JOIN business_product bp ON bp.business_product_id = oi.business_product_id
+             JOIN product p ON p.product_id = bp.product_id
+             WHERE oi.order_id = ?
+             ORDER BY oi.order_item_id"
+        );
+        $saleItStmt = $this->db->prepare(
+            "SELECT si.sale_item_id AS line_item_id, si.quantity, si.unit_price,
+                    p.product_name, p.sku
+             FROM sale_item si
+             JOIN business_product bp ON bp.business_product_id = si.business_product_id
+             JOIN product p ON p.product_id = bp.product_id
+             WHERE si.sale_id = ?
+             ORDER BY si.sale_item_id"
+        );
+
         foreach ($refundRequests as &$rf) {
             $rf['items'] = [];
             if (!empty($rf['order_id'])) {
-                $itStmt = $this->db->prepare(
-                    "SELECT oi.order_item_id AS line_item_id, oi.quantity, oi.unit_price,
-                            p.product_name, p.sku
-                     FROM order_item oi
-                     JOIN business_product bp ON bp.business_product_id = oi.business_product_id
-                     JOIN product p ON p.product_id = bp.product_id
-                     WHERE oi.order_id = ?
-                     ORDER BY oi.order_item_id"
-                );
-                $itStmt->execute([(int)$rf['order_id']]);
-                $rf['items'] = $itStmt->fetchAll();
+                $ordItStmt->execute([(int)$rf['order_id']]);
+                $rf['items'] = $ordItStmt->fetchAll();
             } elseif (!empty($rf['sale_id'])) {
-                $itStmt = $this->db->prepare(
-                    "SELECT si.sale_item_id AS line_item_id, si.quantity, si.unit_price,
-                            p.product_name, p.sku
-                     FROM sale_item si
-                     JOIN business_product bp ON bp.business_product_id = si.business_product_id
-                     JOIN product p ON p.product_id = bp.product_id
-                     WHERE si.sale_id = ?
-                     ORDER BY si.sale_item_id"
-                );
-                $itStmt->execute([(int)$rf['sale_id']]);
-                $rf['items'] = $itStmt->fetchAll();
+                $saleItStmt->execute([(int)$rf['sale_id']]);
+                $rf['items'] = $saleItStmt->fetchAll();
             }
         }
         unset($rf);
 
-        $pendingCntStmt = $this->db->prepare("SELECT COUNT(*) FROM refund_request WHERE business_unit_id = ? AND request_status = 'pending'");
-        $pendingCntStmt->execute([$unitId]);
-        $pendingRefundsCount = (int)$pendingCntStmt->fetchColumn();
-
-        $this->render('manager/sales', [
-            'title' => "Sales · $unitName",
-            'activeTab' => 'sales',
-            'salesTab' => $tab,
-            'unitId' => $unitId,
-            'unitName' => $unitName,
-            'isSuper' => $isSuper,
-            'allUnits' => $isSuper ? Units::all() : [],
-            'walkInSales' => $walkInSales,
-            'onlineOrders' => $onlineOrders,
-            'refundRequests' => $refundRequests,
-            'pendingRefundsCount' => $pendingRefundsCount,
-            'searchQuery' => $q,
-            'statusFilter' => $statusFilter,
-            'viewId' => $viewId,
-        ]);
+        return $refundRequests;
     }
 
     public function approveRefund(int $id): void
@@ -3152,17 +3322,18 @@ final class ManagerController extends Controller
         $stmt->execute([$id, $unitId]);
         $req = $stmt->fetch();
 
-        $redirectQuery = !empty($routeUnitId) ? "?unit_id=$routeUnitId&tab=refunds" : "?tab=refunds";
+        $redirectQuery = !empty($routeUnitId) ? "?unit_id=$routeUnitId" : "";
+        $viewQuery = !empty($redirectQuery) ? "{$redirectQuery}&view=$id" : "?view=$id";
 
         if (!$req) {
             $this->flash('error', 'Refund request not found or does not belong to your business unit.');
-            $this->redirect("/manager/sales" . $redirectQuery);
+            $this->redirect("/manager/refunds" . $redirectQuery);
         }
 
         // Prevent duplicate approval/rejection or modification of already finalized decisions
         if ($req['request_status'] !== 'pending') {
             $this->flash('error', "This refund request has already been finalized as " . ucfirst((string)$req['request_status']) . ".");
-            $this->redirect("/manager/sales{$redirectQuery}&view=$id");
+            $this->redirect("/manager/refunds{$viewQuery}");
         }
 
         if ($decision === 'approved') {
@@ -3188,7 +3359,7 @@ final class ManagerController extends Controller
             $reason = trim((string)($_POST['rejection_reason'] ?? ''));
             if ($reason === '') {
                 $this->flash('error', 'A rejection reason is required before rejecting a refund request.');
-                $this->redirect("/manager/sales{$redirectQuery}&view=$id");
+                $this->redirect("/manager/refunds{$viewQuery}");
             }
 
             $upd = $this->db->prepare(
@@ -3206,7 +3377,7 @@ final class ManagerController extends Controller
             $this->flash('success', "Refund request {$req['refund_reference']} has been rejected.");
         }
 
-        $this->redirect("/manager/sales{$redirectQuery}&view=$id");
+        $this->redirect("/manager/refunds{$viewQuery}");
     }
 
     // ==========================================
