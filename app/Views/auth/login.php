@@ -12,7 +12,7 @@
       </div>
     </div>
 
-    <h1>Sign in to VETGRPET</h1>
+    <h1>Sign in to PawCariño</h1>
     <p class="muted" style="margin-bottom:1.35rem">Enter your email address or username and click Continue. Staff and administrators must sign in with their email address to enter their workspace; signing in with a username opens a customer-only session.</p>
 
     <form method="post" action="/login" data-progressive-login novalidate>
@@ -53,23 +53,5 @@
     </form>
 
     <p class="muted center" style="margin-top:1.5rem">Don't have an account yet? <a href="/register">Create an account</a></p>
-
-    <div class="demo-access-panel">
-      <div class="demo-access-header">
-        <span class="section-kicker" style="margin:0">Project Demonstration</span>
-        <span class="caption">Controlled Entry Point</span>
-      </div>
-      <p class="caption" style="margin-bottom:0.75rem">Access the Super Administrator interface directly for project evaluation. Protected by backend authentication and restricted to local demo environments.</p>
-      <div class="row">
-        <?php if (\App\Controllers\AuthController::isDemoEnvironmentAllowed()): ?>
-          <form method="post" action="/demo/super-admin" class="inline" style="flex:1">
-            <?= \App\Core\CSRF::field() ?>
-            <button type="submit" class="btn secondary full" data-demo-super-admin>Super Administrator Demo Portal &rarr;</button>
-          </form>
-        <?php else: ?>
-          <a href="/super-admin" class="btn secondary full" data-demo-super-admin>Super Administrator Entry Point &rarr;</a>
-        <?php endif; ?>
-      </div>
-    </div>
   </div>
 </section>

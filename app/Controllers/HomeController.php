@@ -17,7 +17,7 @@ final class HomeController extends Controller
         $reviews = $this->fetchReviews(3);
 
         $this->render('home', [
-            'title' => 'Veterinary Care, Grooming & Pet Supplies',
+            'title' => 'PawCariño',
             'staffs' => $staffs,
             'reviews' => $reviews,
         ]);

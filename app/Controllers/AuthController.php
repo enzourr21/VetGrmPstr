@@ -430,7 +430,7 @@ final class AuthController extends Controller
         Cart::mergeGuestCarts($cid);
         Session::set('active_context', 'customer');
         Session::forget('active_workspace_interface');
-        Session::flash('info', 'Viewing VETGRPET in Customer interface mode.');
+        Session::flash('info', 'Viewing PawCariño in Customer interface mode.');
         $this->redirect('/');
     }
 

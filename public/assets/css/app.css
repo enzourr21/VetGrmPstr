@@ -4722,13 +4722,67 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   }
 }
 
-/* Temporary Brand Wordmark & Guest Customer Homepage Structure */
-.brand-wordmark {
-  font-size: 1.18rem;
-  font-weight: 800;
-  letter-spacing: -0.028em;
-  color: var(--brand);
-  line-height: 1;
+/* Global PawCariño Branding & Guest Customer Homepage Structure */
+.brand-logo-horizontal {
+  height: 2.35rem;
+  width: auto;
+  max-width: 175px;
+  display: block;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.auth-header-row {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  margin-bottom: 1.35rem;
+}
+
+.auth-header-row .step-tracker {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.auth-brand-header {
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: 0.9rem;
+}
+
+.auth-brand-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  text-decoration: none;
+  flex-shrink: 0;
+}
+
+.auth-logo-stacked {
+  width: 4.75rem;
+  height: auto;
+  max-height: 2.8rem;
+  display: block;
+  object-fit: contain;
+}
+
+.otp-brand-row {
+  align-items: center;
+}
+
+.otp-brand-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.otp-brand-emblem {
+  width: 1.5rem;
+  height: 1.38rem;
+  display: block;
+  object-fit: contain;
+  flex-shrink: 0;
 }
 
 .home-hero-split {
@@ -4739,6 +4793,33 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   text-align: left;
   padding: clamp(1.85rem, 3.8vw, 3rem);
   margin-bottom: 2.5rem;
+}
+
+.home-hero-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.32rem 0.78rem 0.32rem 0.42rem;
+  margin-bottom: 0.9rem;
+  background: var(--surface-tint);
+  border: 1px solid rgba(13, 110, 87, 0.16);
+  border-radius: 999px;
+}
+
+.home-hero-emblem {
+  width: 1.85rem;
+  height: 1.75rem;
+  display: block;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.home-hero-brand-label {
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--brand);
+  line-height: 1.2;
 }
 
 .home-hero-title {
@@ -5139,14 +5220,41 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   gap: 1rem 2rem;
 }
 
-.foot-wordmark {
-  display: inline-block;
-  font-size: 1.1rem;
-  font-weight: 800;
-  letter-spacing: -0.024em;
-  color: var(--brand);
+.foot-logo-link {
+  display: inline-flex;
+  align-items: center;
   text-decoration: none;
-  margin-bottom: 0.25rem;
+  margin-bottom: 0.35rem;
+}
+
+.foot-logo-horizontal {
+  height: 2.2rem;
+  width: auto;
+  max-width: 156px;
+  display: block;
+  object-fit: contain;
+}
+
+.foot-workspace-inner {
+  max-width: 1080px;
+  margin: 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem 0.9rem;
+}
+
+.foot-workspace-inner .foot-logo-link {
+  margin-bottom: 0;
+}
+
+.foot-logo-compact {
+  height: 1.75rem;
+  width: auto;
+  max-width: 130px;
+  display: block;
+  object-fit: contain;
 }
 
 .foot-tagline {
@@ -5192,8 +5300,12 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   border-color: var(--line-strong);
 }
 
-[data-theme="dark"] .brand-wordmark,
-[data-theme="dark"] .foot-wordmark {
+[data-theme="dark"] .home-hero-brand {
+  background: rgba(16, 185, 129, 0.14);
+  border-color: rgba(52, 211, 153, 0.28);
+}
+
+[data-theme="dark"] .home-hero-brand-label {
   color: #34d399;
 }
 
@@ -5245,6 +5357,11 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
 }
 
 @media (max-width: 640px) {
+  .brand-logo-horizontal {
+    height: 2.05rem;
+    max-width: 148px;
+  }
+
   .home-hero-split {
     padding: 1.45rem 1.1rem;
     margin-bottom: 1.75rem;

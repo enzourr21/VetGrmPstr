@@ -184,7 +184,16 @@ $renderProfileMenu = static function (string $adminInitials, array $authorizedIn
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title><?= e($title) ?> · <?= $inStaffWorkspace ? 'VETGRPET' : 'PawCariño' ?></title>
+<?php
+$rawTitle = trim((string)($title ?? ''));
+$docTitle = ($curPath === '/' || $rawTitle === '' || $rawTitle === 'PawCariño')
+    ? 'PawCariño'
+    : ($rawTitle . ' | PawCariño');
+?>
+<title><?= e($docTitle) ?></title>
+<link rel="icon" type="image/svg+xml" href="/assets/images/branding/favicon.svg">
+<link rel="shortcut icon" href="/assets/images/branding/favicon.svg">
+<link rel="apple-touch-icon" href="/assets/images/branding/pawcarino-emblem.svg">
 <script>
   (function() {
     try {
@@ -200,13 +209,15 @@ $renderProfileMenu = static function (string $adminInitials, array $authorizedIn
 <a class="skip" href="#main">Skip to content</a>
 <header class="topbar">
   <div class="topbar-inner">
-    <a class="brand" href="/">
-      <?php if ($inStaffWorkspace): ?>
-        <span class="brand-mark" aria-hidden="true">VP</span>
-        <span>VETGRPET</span>
-      <?php else: ?>
-        <span class="brand-wordmark">PawCariño</span>
-      <?php endif; ?>
+    <a class="brand" href="/" aria-label="PawCariño Home">
+      <img
+        class="brand-logo-horizontal"
+        src="/assets/images/branding/pawcarino-logo-horizontal.svg"
+        alt="PawCariño"
+        width="165"
+        height="44"
+        decoding="async"
+      >
     </a>
     <nav aria-label="Main">
 <?php if ($inStaffWorkspace): ?>
@@ -332,12 +343,21 @@ $renderProfileMenu = static function (string $adminInitials, array $authorizedIn
 <?= $content ?>
 </main>
 <?php if ($inStaffWorkspace): ?>
-<footer class="foot">VETGRPET · Pet Store · Veterinary Clinic · Grooming Services · Sample data marked [SAMPLE]</footer>
+<footer class="foot foot-workspace">
+  <div class="foot-workspace-inner">
+    <a class="foot-logo-link" href="/" aria-label="PawCariño Home">
+      <img class="foot-logo-compact" src="/assets/images/branding/pawcarino-logo-horizontal.svg" alt="PawCariño" width="126" height="34" loading="lazy" decoding="async">
+    </a>
+    <span>PawCariño · Pet Store · Veterinary Clinic · Grooming Services · Sample data marked [SAMPLE]</span>
+  </div>
+</footer>
 <?php else: ?>
 <footer class="foot foot-customer">
   <div class="foot-customer-inner">
     <div class="foot-brand-col">
-      <a class="foot-wordmark" href="/">PawCariño</a>
+      <a class="foot-logo-link" href="/" aria-label="PawCariño Home">
+        <img class="foot-logo-horizontal" src="/assets/images/branding/pawcarino-logo-horizontal.svg" alt="PawCariño" width="150" height="40" loading="lazy" decoding="async">
+      </a>
       <p class="foot-tagline">Veterinary Clinic · Grooming Services · Pet Store</p>
     </div>
     <nav class="foot-links" aria-label="Footer">

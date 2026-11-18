@@ -155,7 +155,7 @@ abstract class Controller
         require dirname(__DIR__) . "/Views/$view.php";
         $content = ob_get_clean();
         $flashes = Session::pullFlash();
-        $title = $title ?? 'VETGRPET';
+        $title = $title ?? 'PawCariño';
         require dirname(__DIR__) . '/Views/layout.php';
     }
 
