@@ -4204,6 +4204,136 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   display: none !important;
 }
 
+/* Guest Customer Services Page */
+.services-page-header {
+  align-items: center;
+  margin-bottom: 1.75rem;
+}
+
+.services-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  max-width: 100%;
+}
+
+.services-controls .segmented-bar {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.services-controls .segmented-pill {
+  min-height: 2.25rem;
+  white-space: nowrap;
+}
+
+.service-section {
+  margin-bottom: 2.75rem;
+  scroll-margin-top: 5rem;
+}
+
+.service-section[hidden] {
+  display: none !important;
+}
+
+.service-section:last-child {
+  margin-bottom: 0;
+}
+
+.service-section-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem 1rem;
+  padding-bottom: 0.75rem;
+  margin-bottom: 1.25rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.service-section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.service-section-title h2 {
+  margin: 0;
+}
+
+.service-section-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.15rem;
+  height: 2.15rem;
+  border-radius: var(--radius-sm);
+  background: var(--brand-soft);
+  color: var(--brand);
+  border: 1px solid rgba(13, 110, 87, 0.16);
+  flex-shrink: 0;
+}
+
+[data-theme="dark"] .service-section-icon {
+  background: rgba(16, 185, 129, 0.14);
+  color: #34d399;
+  border-color: rgba(52, 211, 153, 0.28);
+}
+
+.service-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.service-card-head h3 {
+  margin: 0;
+  overflow-wrap: break-word;
+}
+
+.service-duration {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.835rem;
+  font-weight: 600;
+  color: var(--ink-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
+  margin-top: 0.12rem;
+}
+
+.service-desc {
+  margin: 0;
+  color: var(--ink-secondary);
+  font-size: 0.94rem;
+  line-height: 1.56;
+}
+
+.service-price {
+  font-size: 1.125rem;
+  font-weight: 740;
+  letter-spacing: -0.015em;
+}
+
+.service-book-link {
+  min-height: 2.5rem;
+  padding: 0.25rem 0;
+}
+
+@media (max-width: 640px) {
+  .services-controls {
+    width: 100%;
+  }
+
+  .services-controls .btn {
+    width: 100%;
+  }
+}
+
 
 
 
