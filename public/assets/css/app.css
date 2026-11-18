@@ -670,6 +670,7 @@ main {
   padding-top: 0.85rem;
   border-top: 1px solid var(--line);
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
@@ -4095,6 +4096,112 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
 [data-theme="dark"] .inventory-stock-table th {
   background: #1e293b;
   color: var(--muted);
+}
+
+/* Guest Customer Products Page — Business Unit Cards & Purchase Modals */
+.unit-browse-card {
+  padding: 0;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.unit-card-media {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--line);
+}
+
+.unit-card-media img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 24%;
+  display: block;
+  transition: transform var(--dur-scene) var(--ease-apple);
+}
+
+.unit-card-body {
+  padding: 1.2rem 1.4rem 0;
+}
+
+.unit-card-footer {
+  margin-top: 1rem;
+  padding: 0.9rem 1.4rem 1.25rem;
+}
+
+.unit-card-browse-btn {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .unit-browse-card:hover {
+    border-color: rgba(13, 110, 87, 0.28);
+  }
+
+  .unit-browse-card:hover .unit-card-media img {
+    transform: scale(1.03);
+  }
+
+  .unit-browse-card:hover .unit-card-browse-btn .arrow {
+    transform: translateX(3px);
+  }
+}
+
+.modal-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.9rem 1.25rem;
+  border-top: 1px solid var(--line);
+  background: var(--surface-raised);
+  flex-shrink: 0;
+}
+
+.unit-products-modal .modal-body {
+  max-height: calc(82vh - 8.5rem);
+}
+
+.unit-modal-grid {
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+}
+
+.unit-modal-product-thumb {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--bg-subtle);
+  margin-bottom: 0.75rem;
+}
+
+.unit-modal-product-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.unit-add-cart-btn {
+  gap: 0.4rem;
+  white-space: nowrap;
+}
+
+.unit-modal-feedback {
+  margin-bottom: 1rem;
+}
+
+.unit-modal-feedback[hidden] {
+  display: none !important;
 }
 
 

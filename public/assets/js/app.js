@@ -2762,4 +2762,242 @@
   }
 
   initAdminProfileDropdown();
+
+  // =========================================================================
+  // Guest & Customer Products Page — Business Unit Modal, Add-to-Cart & Checkout
+  // =========================================================================
+  var productsRoot = document.querySelector('[data-products-root]');
+  if (productsRoot) {
+    var isCustomerSignedIn = productsRoot.getAttribute('data-signed-in') === '1';
+    var signinModal = document.getElementById('guest-checkout-signin-modal');
+    var signinTitleEl = signinModal ? signinModal.querySelector('[data-signin-modal-title]') : null;
+    var signinMessageEl = signinModal ? signinModal.querySelector('[data-signin-modal-message]') : null;
+    var signinProceedLink = signinModal ? signinModal.querySelector('[data-signin-proceed-link]') : null;
+
+    function openDialogModal(dlg, triggerEl) {
+      if (!dlg || typeof dlg.showModal !== 'function') return;
+      if (dlg.open) return;
+      dlg._triggerBtn = triggerEl || null;
+      document.body.classList.add('has-modal-open');
+      dlg.showModal();
+      var closeBtn = dlg.querySelector('[data-modal-close]');
+      if (closeBtn && typeof closeBtn.focus === 'function') {
+        setTimeout(function () { closeBtn.focus(); }, 40);
+      }
+    }
+
+    function openUnitModal(modalId, triggerEl, focusProductId) {
+      var dlg = modalId ? document.getElementById(modalId) : null;
+      if (!dlg) return;
+      openDialogModal(dlg, triggerEl);
+      if (focusProductId) {
+        var prodCard = dlg.querySelector('[data-modal-product="' + focusProductId + '"]');
+        if (prodCard && typeof prodCard.scrollIntoView === 'function') {
+          setTimeout(function () {
+            prodCard.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'nearest' });
+          }, 60);
+        }
+      }
+    }
+
+    function openGuestSigninPrompt(options) {
+      if (!signinModal) return;
+      if (signinTitleEl) {
+        signinTitleEl.textContent = options.title || 'Sign in required';
+      }
+      if (signinMessageEl) {
+        signinMessageEl.textContent = '';
+        if (options.mode === 'add') {
+          signinMessageEl.appendChild(document.createTextNode('Please sign in first to add '));
+          var strongProd = document.createElement('strong');
+          strongProd.textContent = options.productName || 'this item';
+          signinMessageEl.appendChild(strongProd);
+          signinMessageEl.appendChild(document.createTextNode(' to your '));
+          var strongUnitAdd = document.createElement('strong');
+          strongUnitAdd.textContent = options.unitName || 'business unit';
+          signinMessageEl.appendChild(strongUnitAdd);
+          signinMessageEl.appendChild(document.createTextNode(' cart.'));
+        } else {
+          signinMessageEl.appendChild(document.createTextNode('Please sign in to proceed to checkout for '));
+          var strongUnit = document.createElement('strong');
+          strongUnit.textContent = options.unitName || 'this business unit';
+          signinMessageEl.appendChild(strongUnit);
+          signinMessageEl.appendChild(document.createTextNode(' (' + (options.countText || '0 items') + '). Your cart items will be preserved when you sign in.'));
+        }
+      }
+      if (signinProceedLink) {
+        signinProceedLink.setAttribute('href', options.signinHref || '/login');
+      }
+      openDialogModal(signinModal, options.triggerEl || null);
+    }
+
+    function updateUnitCheckoutControls(unitId, count) {
+      var safeCount = Math.max(0, parseInt(count, 10) || 0);
+      productsRoot.querySelectorAll('[data-unit-checkout="' + unitId + '"]').forEach(function (btn) {
+        btn.setAttribute('data-unit-count', String(safeCount));
+        btn.textContent = 'Checkout (' + safeCount + ')';
+        if (safeCount > 0) {
+          btn.removeAttribute('disabled');
+          btn.disabled = false;
+        } else {
+          btn.setAttribute('disabled', 'disabled');
+          btn.disabled = true;
+        }
+      });
+
+      var summaryEl = productsRoot.querySelector('[data-unit-modal-cart-summary="' + unitId + '"]');
+      if (summaryEl) {
+        var unitBtn = productsRoot.querySelector('[data-unit-checkout="' + unitId + '"]');
+        var unitLabel = unitBtn ? (unitBtn.getAttribute('data-unit-name') || 'unit') : 'unit';
+        summaryEl.textContent = safeCount + ' item' + (safeCount === 1 ? '' : 's') + ' in ' + unitLabel + ' cart';
+      }
+    }
+
+    function showUnitFeedback(unitId, message, isError) {
+      var box = productsRoot.querySelector('[data-unit-modal-feedback="' + unitId + '"]');
+      if (!box) return;
+      box.textContent = message;
+      box.classList.remove('flash-info', 'flash-success', 'flash-error');
+      box.classList.add(isError ? 'flash-error' : 'flash-success');
+      box.removeAttribute('hidden');
+    }
+
+    // Clicking a business card opens that unit's product modal
+    productsRoot.querySelectorAll('[data-unit-card]').forEach(function (card) {
+      card.addEventListener('click', function () {
+        var modalId = card.getAttribute('data-unit-modal-open');
+        var browseBtn = card.querySelector('.unit-card-browse-btn') || card;
+        openUnitModal(modalId, browseBtn);
+      });
+    });
+
+    // Clicking "Browse products" or product "View details" opens the corresponding business unit modal
+    productsRoot.querySelectorAll('[data-unit-modal-open]').forEach(function (btn) {
+      if (btn.hasAttribute('data-unit-card')) return;
+      btn.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        var modalId = btn.getAttribute('data-unit-modal-open');
+        var focusProductId = btn.getAttribute('data-focus-product');
+        openUnitModal(modalId, btn, focusProductId);
+      });
+    });
+
+    // Checkout (n) button click handling inside unit product modals
+    productsRoot.querySelectorAll('[data-unit-checkout]').forEach(function (btn) {
+      btn.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        var unitId = parseInt(btn.getAttribute('data-unit-checkout') || '0', 10);
+        var count = parseInt(btn.getAttribute('data-unit-count') || '0', 10);
+        if (!unitId || count <= 0 || btn.disabled) {
+          return;
+        }
+
+        if (isCustomerSignedIn) {
+          window.location.href = '/checkout/' + unitId;
+          return;
+        }
+
+        var parentModal = btn.closest('dialog.modal');
+        if (parentModal && parentModal.open) {
+          parentModal._triggerBtn = null;
+          parentModal.close();
+        }
+
+        var unitName = btn.getAttribute('data-unit-name') || 'this business unit';
+        var cardBrowseBtn = productsRoot.querySelector('[data-unit-card="' + unitId + '"] .unit-card-browse-btn');
+        openGuestSigninPrompt({
+          mode: 'checkout',
+          title: 'Sign in required for checkout',
+          unitName: unitName,
+          countText: count + ' item' + (count === 1 ? '' : 's'),
+          signinHref: '/checkout/' + unitId,
+          triggerEl: cardBrowseBtn || btn
+        });
+      });
+    });
+
+    // Add-to-Cart inside modals and product grid
+    productsRoot.querySelectorAll('[data-unit-add-cart-form]').forEach(function (form) {
+      form.addEventListener('submit', function (ev) {
+        ev.preventDefault();
+        if (form._submitting) return;
+
+        var unitId = parseInt(form.getAttribute('data-unit-id') || '0', 10);
+        var submitBtn = form.querySelector('button[type="submit"]');
+        var qtyInput = form.querySelector('input[name="quantity"]');
+        if (!unitId || !submitBtn || submitBtn.disabled) return;
+
+        if (!isCustomerSignedIn) {
+          var parentModal = form.closest('dialog.modal');
+          if (parentModal && parentModal.open) {
+            parentModal._triggerBtn = null;
+            parentModal.close();
+          }
+          var cardBrowseBtn = productsRoot.querySelector('[data-unit-card="' + unitId + '"] .unit-card-browse-btn');
+          openGuestSigninPrompt({
+            mode: 'add',
+            title: 'Sign in required',
+            productName: form.getAttribute('data-product-name') || 'this product',
+            unitName: form.getAttribute('data-unit-name') || 'business unit',
+            signinHref: '/login',
+            triggerEl: cardBrowseBtn || submitBtn
+          });
+          return;
+        }
+
+        var qtyVal = qtyInput ? parseInt(qtyInput.value || '1', 10) : 1;
+        if (!qtyVal || qtyVal < 1 || qtyVal > 99) {
+          showUnitFeedback(unitId, 'Enter a quantity between 1 and 99.', true);
+          if (qtyInput && qtyInput.type !== 'hidden') qtyInput.focus();
+          return;
+        }
+
+        form._submitting = true;
+        submitBtn.disabled = true;
+
+        var body = new URLSearchParams(new FormData(form));
+        fetch(form.getAttribute('action'), {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Accept': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest'
+          },
+          body: body.toString()
+        })
+          .then(function (resp) {
+            return resp.json().catch(function () {
+              return { ok: false, error: 'Unable to update cart right now. Please try again.' };
+            });
+          })
+          .then(function (data) {
+            form._submitting = false;
+            submitBtn.disabled = false;
+
+            if (data && typeof data.csrf_token === 'string' && data.csrf_token !== '') {
+              productsRoot.querySelectorAll('input[name="csrf_token"]').forEach(function (inp) {
+                inp.value = data.csrf_token;
+              });
+            }
+
+            if (data && data.ok) {
+              var nextCount = typeof data.count === 'number' ? data.count : 0;
+              updateUnitCheckoutControls(unitId, nextCount);
+              var prodName = form.getAttribute('data-product-name') || 'Item';
+              showUnitFeedback(unitId, 'Added ' + prodName + ' to your cart.', false);
+              if (qtyInput && qtyInput.type !== 'hidden') qtyInput.value = '1';
+              return;
+            }
+
+            var errMsg = (data && data.error) ? data.error : 'Unable to add item to cart.';
+            showUnitFeedback(unitId, errMsg, true);
+          })
+          .catch(function () {
+            form._submitting = false;
+            submitBtn.disabled = false;
+            showUnitFeedback(unitId, 'Network error while updating your cart. Please try again.', true);
+          });
+      });
+    });
+  }
 })();

@@ -14,11 +14,11 @@ final class ShopController extends Controller
     public function index(): void
     {
         $cid = Session::get('customer_id');
-        $counts = $cid ? Cart::countsByUnit((int)$cid) : [];
+        $counts = $cid ? Cart::countsByUnit((int)$cid) : Cart::guestCountsByUnit();
         $availSql = CheckoutHoldService::availableStockSql('i', 'bp');
         $allProducts = $this->db->query(
             "SELECT bp.business_product_id, bp.business_unit_id, bp.selling_price,
-                    bu.business_unit_name, p.product_name, p.description, p.product_category,
+                    bu.business_unit_name, p.product_name, p.description, p.product_category, p.image_url,
                     {$availSql} AS available
              FROM business_product bp
              JOIN product p ON p.product_id = bp.product_id
@@ -28,11 +28,17 @@ final class ShopController extends Controller
              ORDER BY bu.business_unit_id, p.product_name"
         )->fetchAll();
 
+        $productsByUnit = [];
+        foreach ($allProducts as $product) {
+            $productsByUnit[(int)$product['business_unit_id']][] = $product;
+        }
+
         $this->render('shop/index', [
             'title' => 'Products & Business Catalogs',
             'units' => Units::all(),
             'counts' => $counts,
             'allProducts' => $allProducts,
+            'productsByUnit' => $productsByUnit,
         ]);
     }
 
@@ -47,7 +53,7 @@ final class ShopController extends Controller
             LEFT JOIN inventory i ON i.business_product_id=bp.business_product_id
             WHERE bp.business_unit_id=? AND bp.product_status='active' ORDER BY p.product_name");
         $s->execute([$bu]);
-        $cartCount = $cid ? (int)(Cart::countsByUnit((int)$cid)[$bu] ?? 0) : 0;
+        $cartCount = $cid ? (int)(Cart::countsByUnit((int)$cid)[$bu] ?? 0) : (int)(Cart::guestCountsByUnit()[$bu] ?? 0);
         $this->render('shop/catalog', [
             'title' => $unit['business_unit_name'] . ' products',
             'unit' => $unit,

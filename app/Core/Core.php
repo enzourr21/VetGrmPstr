@@ -51,6 +51,7 @@ final class Session
     {
         $flashes = $_SESSION['_flash'] ?? [];
         $returnTo = $_SESSION['return_to'] ?? null;
+        $guestCarts = $_SESSION['guest_carts'] ?? null;
         session_regenerate_id(true);
         $_SESSION = [];
         if ($flashes) {
@@ -58,6 +59,9 @@ final class Session
         }
         if ($returnTo !== null) {
             $_SESSION['return_to'] = $returnTo;
+        }
+        if ($guestCarts !== null) {
+            $_SESSION['guest_carts'] = $guestCarts;
         }
         foreach ($data as $k => $v) {
             $_SESSION[$k] = $v;

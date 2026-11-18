@@ -20,6 +20,22 @@ final class CartController extends Controller
         $this->render('shop/cart', ['title' => 'Cart', 'unit' => $unit, 'items' => $items, 'total' => Cart::total($items)]);
     }
 
+    private function wantsJson(): bool
+    {
+        $accept = $_SERVER['HTTP_ACCEPT'] ?? '';
+        $xhr = $_SERVER['HTTP_X_REQUESTED_WITH'] ?? '';
+        return str_contains($accept, 'application/json') || strtolower($xhr) === 'xmlhttprequest';
+    }
+
+    private function jsonResponse(array $payload, int $status = 200): never
+    {
+        $payload['csrf_token'] = CSRF::token();
+        http_response_code($status);
+        header('Content-Type: application/json; charset=UTF-8');
+        echo json_encode($payload);
+        exit;
+    }
+
     private function qty(): int
     {
         $q = $this->post('quantity', '1');
@@ -28,13 +44,28 @@ final class CartController extends Controller
 
     public function add(int $bu): void
     {
-        [, $cid] = $this->requireCustomer();
+        $wantsJson = $this->wantsJson();
+        if (!$wantsJson) {
+            [, $cid] = $this->requireCustomer();
+        } else {
+            $cid = Session::get('user_id') ? $this->requireCustomer()[1] : null;
+        }
         CSRF::check();
-        Units::find($bu) ?? $this->notFound();
+        $unit = Units::find($bu);
+        if (!$unit) {
+            if ($wantsJson) {
+                $this->jsonResponse(['ok' => false, 'error' => 'Business unit not found.'], 404);
+            }
+            $this->notFound();
+        }
         $bpId = (int)$this->post('business_product_id');
         $qty = $this->qty();
         if ($qty === 0) {
-            Session::flash('error', 'Enter a quantity between 1 and ' . Cart::MAX_QTY . '.');
+            $msg = 'Enter a quantity between 1 and ' . Cart::MAX_QTY . '.';
+            if ($wantsJson) {
+                $this->jsonResponse(['ok' => false, 'error' => $msg], 422);
+            }
+            Session::flash('error', $msg);
             $this->redirect("/shop/$bu");
         }
         // product must be active AND belong to this business unit
@@ -45,16 +76,38 @@ final class CartController extends Controller
         $s->execute([$bpId, $bu]);
         $row = $s->fetch();
         if (!$row) {
-            Session::flash('error', 'That product is not available in this shop.');
+            $msg = 'That product is not available in this shop.';
+            if ($wantsJson) {
+                $this->jsonResponse(['ok' => false, 'error' => $msg], 422);
+            }
+            Session::flash('error', $msg);
             $this->redirect("/shop/$bu");
         }
         if ((int)$row['available'] < 1) {
-            Session::flash('error', 'That product is currently out of stock.');
+            $msg = 'That product is currently out of stock.';
+            if ($wantsJson) {
+                $this->jsonResponse(['ok' => false, 'error' => $msg], 422);
+            }
+            Session::flash('error', $msg);
             $this->redirect("/shop/$bu");
         }
-        $cartId = Cart::id($cid, $bu);
-        $this->db->prepare('INSERT INTO cart_item (cart_id, business_product_id, quantity) VALUES (?,?,?)
-            ON DUPLICATE KEY UPDATE quantity = LEAST(' . Cart::MAX_QTY . ', quantity + VALUES(quantity))')->execute([$cartId, $bpId, $qty]);
+        if ($cid !== null) {
+            Cart::addItem((int)$cid, $bu, $bpId, $qty);
+            $counts = Cart::countsByUnit((int)$cid);
+        } else {
+            Cart::addGuestItem($bu, $bpId, $qty);
+            $counts = Cart::guestCountsByUnit();
+        }
+        if ($wantsJson) {
+            $this->jsonResponse([
+                'ok' => true,
+                'guest' => $cid === null,
+                'business_unit_id' => $bu,
+                'count' => (int)($counts[$bu] ?? 0),
+                'counts' => $counts,
+                'message' => 'Added to your ' . $unit['business_unit_name'] . ' cart.',
+            ]);
+        }
         Session::flash('success', 'Added to your cart. Items in a cart are not reserved.');
         $this->redirect("/cart/$bu");
     }

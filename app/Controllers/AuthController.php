@@ -7,6 +7,7 @@ use App\Core\Controller;
 use App\Core\CSRF;
 use App\Core\Session;
 use App\Models\Audit;
+use App\Models\Cart;
 use App\Models\Units;
 use App\Services\CustomerRegistrationPendingService;
 use App\Services\InterfaceSwitcherService;
@@ -340,6 +341,7 @@ final class AuthController extends Controller
                 'fails' => 0,
             ]);
             Session::forget('pending_email');
+            Cart::mergeGuestCarts($cid);
             Audit::log('auth.login.customer', "Authenticated in customer-only session via " . ($isEmail ? 'email' : 'username') . ".", null, 'user_account', $uid, $uid);
             $this->redirect($this->safeReturn('/'));
         }
@@ -425,6 +427,7 @@ final class AuthController extends Controller
             Session::get('customer_id') ? (int)Session::get('customer_id') : null
         );
         Session::set('customer_id', $cid);
+        Cart::mergeGuestCarts($cid);
         Session::set('active_context', 'customer');
         Session::forget('active_workspace_interface');
         Session::flash('info', 'Viewing VETGRPET in Customer interface mode.');
@@ -1024,6 +1027,7 @@ final class AuthController extends Controller
         ]);
         Session::forget('register_session_token');
         Session::forget('register_email');
+        Cart::mergeGuestCarts((int)$result['customer_id']);
         Session::flash('success', 'Account created. Welcome!');
         $this->redirect('/profile');
     }
