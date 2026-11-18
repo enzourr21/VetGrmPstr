@@ -184,7 +184,7 @@ $renderProfileMenu = static function (string $adminInitials, array $authorizedIn
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title><?= e($title) ?> · VETGRPET</title>
+<title><?= e($title) ?> · <?= $inStaffWorkspace ? 'VETGRPET' : 'PawCariño' ?></title>
 <script>
   (function() {
     try {
@@ -201,8 +201,12 @@ $renderProfileMenu = static function (string $adminInitials, array $authorizedIn
 <header class="topbar">
   <div class="topbar-inner">
     <a class="brand" href="/">
-      <span class="brand-mark" aria-hidden="true">VP</span>
-      <span>VETGRPET</span>
+      <?php if ($inStaffWorkspace): ?>
+        <span class="brand-mark" aria-hidden="true">VP</span>
+        <span>VETGRPET</span>
+      <?php else: ?>
+        <span class="brand-wordmark">PawCariño</span>
+      <?php endif; ?>
     </a>
     <nav aria-label="Main">
 <?php if ($inStaffWorkspace): ?>
@@ -327,7 +331,29 @@ $renderProfileMenu = static function (string $adminInitials, array $authorizedIn
 <?php endforeach; ?>
 <?= $content ?>
 </main>
+<?php if ($inStaffWorkspace): ?>
 <footer class="foot">VETGRPET · Pet Store · Veterinary Clinic · Grooming Services · Sample data marked [SAMPLE]</footer>
+<?php else: ?>
+<footer class="foot foot-customer">
+  <div class="foot-customer-inner">
+    <div class="foot-brand-col">
+      <a class="foot-wordmark" href="/">PawCariño</a>
+      <p class="foot-tagline">Veterinary Clinic · Grooming Services · Pet Store</p>
+    </div>
+    <nav class="foot-links" aria-label="Footer">
+      <a href="/products">Products</a>
+      <a href="/services">Services</a>
+      <a href="/staffs">Staffs</a>
+      <a href="/reviews">Customer Reviews</a>
+      <?php if (!$isSignedIn): ?>
+        <a href="/login">Sign in</a>
+        <a href="/register">Create account</a>
+      <?php endif; ?>
+    </nav>
+  </div>
+  <div class="foot-meta">PawCariño · Pet Store · Veterinary Clinic · Grooming Services · Sample data marked [SAMPLE]</div>
+</footer>
+<?php endif; ?>
 <script src="/assets/js/app.js?v=<?= file_exists(APP_ROOT . '/public/assets/js/app.js') ? filemtime(APP_ROOT . '/public/assets/js/app.js') : time() ?>" defer></script>
 </body>
 </html>

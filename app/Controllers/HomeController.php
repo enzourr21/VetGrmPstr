@@ -17,7 +17,7 @@ final class HomeController extends Controller
         $reviews = $this->fetchReviews(3);
 
         $this->render('home', [
-            'title' => 'Unified Pet Care & Clinic Management',
+            'title' => 'Veterinary Care, Grooming & Pet Supplies',
             'staffs' => $staffs,
             'reviews' => $reviews,
         ]);
@@ -107,7 +107,7 @@ final class HomeController extends Controller
     {
         $this->render('public/reviews', [
             'title' => 'Customer Reviews',
-            'reviews' => $this->fetchReviews(50),
+            'reviews' => $this->buildReviewsList(),
             'units' => Units::all(),
             'errors' => [],
             'old' => [],
@@ -143,7 +143,7 @@ final class HomeController extends Controller
             http_response_code(422);
             $this->render('public/reviews', [
                 'title' => 'Customer Reviews',
-                'reviews' => $this->fetchReviews(50),
+                'reviews' => $this->buildReviewsList(),
                 'units' => Units::all(),
                 'errors' => $errors,
                 'old' => [
@@ -189,6 +189,81 @@ final class HomeController extends Controller
              GROUP BY e.employee_id, e.first_name, e.last_name, e.position, bu_emp.business_unit_name
              ORDER BY FIELD( MIN(r.role_name), 'BUSINESS_MANAGER', 'VETERINARIAN_WORKSPACE', 'VETERINARIAN', 'VETERINARY_NURSE_WORKSPACE', 'NURSE', 'VETERINARY_TECHNICIAN_WORKSPACE', 'TECHNICIAN', 'RECEPTIONIST' ), e.last_name"
         )->fetchAll();
+    }
+
+    private function buildReviewsList(): array
+    {
+        $reviews = $this->fetchReviews(50);
+        if (AuthController::isDemoEnvironmentAllowed()) {
+            $reviews = array_merge($reviews, $this->sampleDevReviews());
+        }
+        return $reviews;
+    }
+
+    /**
+     * Development-only sample review fixtures (never written to customer_review or customer tables).
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function sampleDevReviews(): array
+    {
+        return [
+            [
+                'review_id' => 0,
+                'rating' => 5,
+                'review_title' => 'Fresh kibble stock and fast pickup',
+                'comment' => '[SAMPLE] Ordered a 2kg bag of Adult Dog Kibble online and picked it up the same afternoon. Pricing matched the catalog and the staff had our order ready at the counter.',
+                'created_at' => '2026-11-12 10:15:00',
+                'first_name' => 'Demo Owner',
+                'last_initial' => 'A',
+                'business_unit_name' => Units::PET_STORE,
+                'is_sample' => true,
+            ],
+            [
+                'review_id' => 0,
+                'rating' => 5,
+                'review_title' => 'Gentle full grooming for an anxious terrier',
+                'comment' => '[SAMPLE] Our wire-haired terrier usually gets nervous around clippers, so we added handling notes when requesting the appointment. The stylist took extra time letting him settle in, used the oatmeal bath, and checked his paws and ears thoroughly. His coat came back soft, evenly trimmed, and completely tangle-free without any rushing.',
+                'created_at' => '2026-11-10 15:40:00',
+                'first_name' => 'Demo Owner',
+                'last_initial' => 'M',
+                'business_unit_name' => Units::GROOMING,
+                'is_sample' => true,
+            ],
+            [
+                'review_id' => 0,
+                'rating' => 4,
+                'review_title' => 'Clear wellness checkup',
+                'comment' => '[SAMPLE] Dr. Vance explained every step of the vaccination visit clearly.',
+                'created_at' => '2026-11-08 09:30:00',
+                'first_name' => 'Demo Owner',
+                'last_initial' => 'C',
+                'business_unit_name' => Units::VET_CLINIC,
+                'is_sample' => true,
+            ],
+            [
+                'review_id' => 0,
+                'rating' => 3,
+                'review_title' => 'Good toys, one item was out of stock',
+                'comment' => '[SAMPLE] The feather wand toy has held up well with two cats. The leave-in conditioner spray was out of stock during our visit, though availability was clearly marked beforehand.',
+                'created_at' => '2026-11-05 14:20:00',
+                'first_name' => 'Demo Owner',
+                'last_initial' => 'L',
+                'business_unit_name' => Units::PET_STORE,
+                'is_sample' => true,
+            ],
+            [
+                'review_id' => 0,
+                'rating' => 5,
+                'review_title' => 'Convenient having clinic, grooming, and supplies together',
+                'comment' => '[SAMPLE] Being able to check service rates and durations before booking saved us multiple calls. Everything across the clinic and grooming studio felt organized and transparent.',
+                'created_at' => '2026-11-02 11:05:00',
+                'first_name' => 'Demo Owner',
+                'last_initial' => 'J',
+                'business_unit_name' => null,
+                'is_sample' => true,
+            ],
+        ];
     }
 
     private function fetchReviews(int $limit): array

@@ -797,6 +797,125 @@
     });
   }
 
+  // ---- Customer Reviews Sticky Composer, Validation & Loading State ---
+  var reviewWorkspace = document.querySelector('[data-reviews-workspace]');
+  if (reviewWorkspace) {
+    var reviewDock = reviewWorkspace.querySelector('[data-review-composer]');
+    var reviewToggle = reviewWorkspace.querySelector('[data-review-composer-toggle]');
+    var reviewForm = reviewWorkspace.querySelector('[data-review-form]');
+
+    if (reviewDock && reviewToggle) {
+      reviewToggle.addEventListener('click', function () {
+        var expanded = reviewDock.classList.toggle('is-expanded');
+        reviewToggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        reviewToggle.textContent = expanded ? 'Minimize' : 'Expand';
+      });
+    }
+
+    if (reviewForm) {
+      var titleInput = reviewForm.querySelector('#review_title');
+      var commentInput = reviewForm.querySelector('#comment');
+      var charCounter = reviewForm.querySelector('[data-review-char-count]');
+      var alertBox = reviewForm.querySelector('[data-review-form-alert]');
+      var titleError = reviewForm.querySelector('[data-review-error="review_title"]');
+      var commentError = reviewForm.querySelector('[data-review-error="comment"]');
+      var reviewSubmitBtn = reviewForm.querySelector('[data-review-submit]');
+
+      function syncReviewCharCount() {
+        if (!commentInput || !charCounter) return;
+        charCounter.textContent = (commentInput.value || '').length + ' / 1500';
+      }
+
+      function clearReviewError(errEl) {
+        if (errEl) {
+          errEl.textContent = '';
+          errEl.setAttribute('hidden', 'hidden');
+        }
+      }
+
+      if (titleInput) {
+        titleInput.addEventListener('input', function () {
+          clearReviewError(titleError);
+          if (alertBox) alertBox.setAttribute('hidden', 'hidden');
+        });
+      }
+
+      if (commentInput) {
+        commentInput.addEventListener('input', function () {
+          syncReviewCharCount();
+          clearReviewError(commentError);
+          if (alertBox) alertBox.setAttribute('hidden', 'hidden');
+        });
+        syncReviewCharCount();
+      }
+
+      reviewForm.addEventListener('submit', function (ev) {
+        if (reviewForm._submitting) {
+          ev.preventDefault();
+          return;
+        }
+
+        var titleVal = (titleInput ? titleInput.value : '').trim();
+        var commentVal = (commentInput ? commentInput.value : '').trim();
+        var firstBad = null;
+
+        clearReviewError(titleError);
+        clearReviewError(commentError);
+        if (alertBox) alertBox.setAttribute('hidden', 'hidden');
+
+        if (titleVal === '' || titleVal.length > 150) {
+          showErrorSmooth(titleError, 'Enter a short headline for your review (max 150 characters).');
+          firstBad = firstBad || titleInput;
+        }
+        if (commentVal.length < 5 || commentVal.length > 1500) {
+          showErrorSmooth(commentError, 'Share a few words about your experience (5 to 1500 characters).');
+          firstBad = firstBad || commentInput;
+        }
+
+        if (firstBad) {
+          ev.preventDefault();
+          if (reviewDock && !reviewDock.classList.contains('is-expanded')) {
+            reviewDock.classList.add('is-expanded');
+            if (reviewToggle) {
+              reviewToggle.setAttribute('aria-expanded', 'true');
+              reviewToggle.textContent = 'Minimize';
+            }
+          }
+          if (alertBox) {
+            showErrorSmooth(alertBox, 'Please fix the highlighted review fields before submitting.');
+          }
+          firstBad.focus();
+          return;
+        }
+
+        reviewForm._submitting = true;
+        if (reviewSubmitBtn) {
+          reviewSubmitBtn.disabled = true;
+          reviewSubmitBtn.textContent = 'Submitting review...';
+        }
+      });
+    }
+  }
+
+  // ---- Homepage Business Unit Image Fallback ------------------------
+  document.querySelectorAll('[data-fallback-img]').forEach(function (img) {
+    function revealFallback() {
+      var media = img.closest('[data-unit-media]');
+      if (!media) return;
+      media.classList.add('is-image-error');
+      img.hidden = true;
+      var fallback = media.querySelector('.home-unit-fallback');
+      if (fallback) {
+        fallback.hidden = false;
+      }
+    }
+
+    img.addEventListener('error', revealFallback);
+    if (img.complete && img.naturalWidth === 0) {
+      revealFallback();
+    }
+  });
+
   // ---- Live Grooming Appointment Selection Summary --------------------
   var apptForm = document.querySelector('[data-appointment-form]');
   if (apptForm) {
