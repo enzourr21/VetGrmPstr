@@ -99,6 +99,7 @@ final class HomeController extends Controller
         $this->render('public/staffs', [
             'title' => 'Our Team & Business Managers',
             'staffs' => $this->fetchPublicStaff(),
+            'units' => Units::all(),
         ]);
     }
 
@@ -174,14 +175,18 @@ final class HomeController extends Controller
         return $this->db->query(
             "SELECT e.first_name, e.last_name, e.position,
                     GROUP_CONCAT(DISTINCT r.role_name ORDER BY r.role_name SEPARATOR ', ') AS roles,
-                    GROUP_CONCAT(DISTINCT bu.business_unit_name ORDER BY bu.business_unit_name SEPARATOR ' · ') AS units
+                    COALESCE(
+                      NULLIF(GROUP_CONCAT(DISTINCT bu.business_unit_name ORDER BY bu.business_unit_name SEPARATOR ' · '), ''),
+                      bu_emp.business_unit_name
+                    ) AS units
              FROM employee e
+             LEFT JOIN business_unit bu_emp ON bu_emp.business_unit_id = e.business_unit_id
              LEFT JOIN account_role ar ON ar.user_account_id = e.user_account_id
              LEFT JOIN role r ON r.role_id = ar.role_id
              LEFT JOIN business_unit bu ON bu.business_unit_id = ar.business_unit_id
              WHERE e.employee_status = 'active'
                AND e.position NOT IN ('Super Administrator', 'System Administrator')
-             GROUP BY e.employee_id, e.first_name, e.last_name, e.position
+             GROUP BY e.employee_id, e.first_name, e.last_name, e.position, bu_emp.business_unit_name
              ORDER BY FIELD( MIN(r.role_name), 'BUSINESS_MANAGER', 'VETERINARIAN_WORKSPACE', 'VETERINARIAN', 'VETERINARY_NURSE_WORKSPACE', 'NURSE', 'VETERINARY_TECHNICIAN_WORKSPACE', 'TECHNICIAN', 'RECEPTIONIST' ), e.last_name"
         )->fetchAll();
     }
