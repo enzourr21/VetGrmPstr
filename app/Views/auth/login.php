@@ -13,7 +13,7 @@
     </div>
 
     <h1>Sign in to PawCariño</h1>
-    <p class="muted" style="margin-bottom:1.35rem">Enter your email address or username and click Continue. Staff and administrators must sign in with their email address to enter their workspace; signing in with a username opens a customer-only session.</p>
+    <p class="muted auth-lead">Enter your email address or username and click Continue. Staff and administrators must sign in with their email address to enter their workspace; signing in with a username opens a customer-only session.</p>
 
     <form method="post" action="/login" data-progressive-login novalidate>
       <?= \App\Core\CSRF::field() ?>
@@ -52,6 +52,6 @@
       </div>
     </form>
 
-    <p class="muted center" style="margin-top:1.5rem">Don't have an account yet? <a href="/register">Create an account</a></p>
+    <p class="muted center auth-foot-link">Don't have an account yet? <a href="/register">Create an account</a></p>
   </div>
 </section>

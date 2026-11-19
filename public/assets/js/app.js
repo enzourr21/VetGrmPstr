@@ -291,9 +291,65 @@
       }, 1000);
     }
 
+    function stageHasVisibleError(stageEl) {
+      if (!stageEl) return false;
+      var errs = stageEl.querySelectorAll('.field-error');
+      for (var i = 0; i < errs.length; i++) {
+        if (!errs[i].hasAttribute('hidden') && (errs[i].textContent || '').trim() !== '') {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    function setMobileStageCollapsed(stageEl, editBtn, collapsed) {
+      if (!stageEl) return;
+      stageEl.classList.toggle('is-mobile-collapsed', collapsed);
+      if (editBtn) {
+        editBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        editBtn.textContent = collapsed ? 'Edit' : 'Done';
+      }
+    }
+
+    function syncMobileRegisterStages(activeStageNum) {
+      var stages = [stage1, stage2, stage3, stage4];
+      stages.forEach(function (stEl, idx) {
+        var stepNum = idx + 1;
+        if (!stEl) return;
+        var editBtn = regForm.querySelector('[data-stage-edit="' + stepNum + '"]');
+        if (stepNum < activeStageNum) {
+          if (editBtn) editBtn.removeAttribute('hidden');
+          setMobileStageCollapsed(stEl, editBtn, !stageHasVisibleError(stEl));
+        } else {
+          if (editBtn) editBtn.setAttribute('hidden', 'hidden');
+          setMobileStageCollapsed(stEl, editBtn, false);
+        }
+      });
+    }
+
+    regForm.querySelectorAll('[data-stage-edit]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var stepNum = btn.getAttribute('data-stage-edit');
+        var stEl = regForm.querySelector('[data-progressive-stage="' + stepNum + '"]');
+        if (!stEl) return;
+        var willCollapse = !stEl.classList.contains('is-mobile-collapsed');
+        setMobileStageCollapsed(stEl, btn, willCollapse);
+      });
+    });
+
+    // Initialize mobile collapse state if PHP rendered at a later stage (e.g., server validation error reload)
+    var initialActiveStage = 1;
+    if (stage4 && !stage4.hasAttribute('hidden')) initialActiveStage = 4;
+    else if (stage3 && !stage3.hasAttribute('hidden')) initialActiveStage = 3;
+    else if (stage2 && !stage2.hasAttribute('hidden')) initialActiveStage = 2;
+    if (initialActiveStage > 1) {
+      syncMobileRegisterStages(initialActiveStage);
+    }
+
     function unlockStep4Ui() {
       if (step3Actions) step3Actions.setAttribute('hidden', 'hidden');
       if (step3Badge) animateStageIn(step3Badge);
+      syncMobileRegisterStages(4);
       animateStageIn(stage4, '#password');
       updateStepTracker(regCard, 4);
       evaluatePasswordState();
@@ -338,6 +394,7 @@
       if (regNameError) regNameError.setAttribute('hidden', 'hidden');
       if (step1Actions) step1Actions.setAttribute('hidden', 'hidden');
       if (step1Badge) animateStageIn(step1Badge);
+      syncMobileRegisterStages(2);
       animateStageIn(stage2, '#phone');
       updateStepTracker(regCard, 2);
       return true;
@@ -360,6 +417,7 @@
       if (regPostalError) regPostalError.setAttribute('hidden', 'hidden');
       if (step2Actions) step2Actions.setAttribute('hidden', 'hidden');
       if (step2Badge) animateStageIn(step2Badge);
+      syncMobileRegisterStages(3);
       animateStageIn(stage3, '#email');
       updateStepTracker(regCard, 3);
       return true;

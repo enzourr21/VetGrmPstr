@@ -26,16 +26,19 @@ if (!empty($errors)) {
     </div>
 
     <h1>Create your account</h1>
-    <p class="muted" style="margin-bottom:1.35rem">Complete each step and click Continue to unlock the next section.</p>
+    <p class="muted auth-lead">Complete each step and click Continue to unlock the next section.</p>
 
     <form method="post" action="/register" data-progressive-register novalidate>
       <?= \App\Core\CSRF::field() ?>
 
       <!-- Step 1: Full Name (First, Middle, Last aligned evenly) -->
-      <div id="reg-stage-1" data-progressive-stage="1">
+      <div id="reg-stage-1" class="progressive-stage-first" data-progressive-stage="1">
         <div class="progressive-stage-header">
           <span class="stage-label">Step 1 · Full Name</span>
-          <span class="status ok" data-stage1-done <?= $stage > 1 ? '' : 'hidden' ?>>Completed</span>
+          <span class="stage-header-meta">
+            <span class="status ok" data-stage1-done <?= $stage > 1 ? '' : 'hidden' ?>>Completed</span>
+            <button type="button" class="stage-mobile-edit" data-stage-edit="1" aria-expanded="false" <?= $stage > 1 ? '' : 'hidden' ?>>Edit</button>
+          </span>
         </div>
         <div class="form-grid-3">
           <div class="field">
@@ -73,7 +76,10 @@ if (!empty($errors)) {
       <div id="reg-stage-2" class="progressive-stage" data-progressive-stage="2" <?= $stage >= 2 ? '' : 'hidden' ?>>
         <div class="progressive-stage-header">
           <span class="stage-label">Step 2 · Additional Details</span>
-          <span class="status ok" data-stage2-done <?= $stage > 2 ? '' : 'hidden' ?>>Completed</span>
+          <span class="stage-header-meta">
+            <span class="status ok" data-stage2-done <?= $stage > 2 ? '' : 'hidden' ?>>Completed</span>
+            <button type="button" class="stage-mobile-edit" data-stage-edit="2" aria-expanded="false" <?= $stage > 2 ? '' : 'hidden' ?>>Edit</button>
+          </span>
         </div>
         <div class="form-grid-2">
           <div class="field">
@@ -93,7 +99,7 @@ if (!empty($errors)) {
             <?php if (isset($errors['address_line1'])): ?><div class="field-error"><?= e($errors['address_line1']) ?></div><?php endif; ?>
           </div>
         </div>
-        <div class="form-grid-3" style="margin-top:0.85rem">
+        <div class="form-grid-3 reg-location-grid" style="margin-top:0.85rem">
           <div class="field">
             <div class="field-label-row">
               <label for="city" style="margin:0">City</label>
@@ -128,7 +134,10 @@ if (!empty($errors)) {
       <div id="reg-stage-3" class="progressive-stage" data-progressive-stage="3" <?= $stage >= 3 ? '' : 'hidden' ?>>
         <div class="progressive-stage-header">
           <span class="stage-label">Step 3 · Set and Verify Email</span>
-          <span class="status ok" data-stage3-done <?= $stage > 3 ? '' : 'hidden' ?>>Completed</span>
+          <span class="stage-header-meta">
+            <span class="status ok" data-stage3-done <?= $stage > 3 ? '' : 'hidden' ?>>Completed</span>
+            <button type="button" class="stage-mobile-edit" data-stage-edit="3" aria-expanded="false" <?= $stage > 3 ? '' : 'hidden' ?>>Edit</button>
+          </span>
         </div>
         <div class="field">
           <div class="field-label-row">
@@ -211,6 +220,6 @@ if (!empty($errors)) {
       </div>
     </form>
 
-    <p class="muted center" style="margin-top:1.5rem">Already have an account? <a href="/login">Sign in</a></p>
+    <p class="muted center auth-foot-link">Already have an account? <a href="/login">Sign in</a></p>
   </div>
 </section>
