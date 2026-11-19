@@ -207,7 +207,7 @@ $docTitle = ($curPath === '/' || $rawTitle === '' || $rawTitle === 'PawCariño')
 </head>
 <body class="<?= !empty($isCalendarView) ? 'has-calendar-view' : '' ?>">
 <a class="skip" href="#main">Skip to content</a>
-<header class="topbar">
+<header class="topbar" data-topbar>
   <div class="topbar-inner">
     <a class="brand" href="/" aria-label="PawCariño Home">
       <img
@@ -219,7 +219,25 @@ $docTitle = ($curPath === '/' || $rawTitle === '' || $rawTitle === 'PawCariño')
         decoding="async"
       >
     </a>
-    <nav aria-label="Main">
+    <button
+      type="button"
+      class="nav-mobile-toggle"
+      id="mobile-nav-toggle"
+      aria-expanded="false"
+      aria-controls="main-nav"
+      aria-label="Open navigation menu"
+    >
+      <svg class="nav-toggle-icon-menu" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <line x1="4" y1="7" x2="20" y2="7"></line>
+        <line x1="4" y1="12" x2="20" y2="12"></line>
+        <line x1="4" y1="17" x2="20" y2="17"></line>
+      </svg>
+      <svg class="nav-toggle-icon-close" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <line x1="6" y1="6" x2="18" y2="18"></line>
+        <line x1="18" y1="6" x2="6" y2="18"></line>
+      </svg>
+    </button>
+    <nav id="main-nav" aria-label="Main">
 <?php if ($inStaffWorkspace): ?>
   <?php if (str_starts_with($curPath, '/super-admin')): ?>
       <a href="/super-admin" class="<?= $curPath === '/super-admin' ? 'is-current' : '' ?>">Dashboard</a>

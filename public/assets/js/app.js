@@ -1618,8 +1618,52 @@
     initActiveNavIndicators();
   }
 
+  // ---- Compact Mobile Navigation Drawer Toggle (<= 768px) ---------------
+  var mobileNavToggle = document.getElementById('mobile-nav-toggle');
+  var topbarEl = document.querySelector('[data-topbar]') || document.querySelector('.topbar');
+  var mainNavEl = document.getElementById('main-nav');
+  if (mobileNavToggle && topbarEl && mainNavEl) {
+    function setMobileNavOpen(open) {
+      topbarEl.classList.toggle('is-nav-open', open);
+      mobileNavToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      mobileNavToggle.setAttribute('aria-label', open ? 'Close navigation menu' : 'Open navigation menu');
+    }
+
+    mobileNavToggle.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      var isOpen = topbarEl.classList.contains('is-nav-open');
+      setMobileNavOpen(!isOpen);
+    });
+
+    mainNavEl.addEventListener('click', function (ev) {
+      if (ev.target.closest('a[href]')) {
+        setMobileNavOpen(false);
+      }
+    });
+
+    document.addEventListener('click', function (ev) {
+      if (topbarEl.classList.contains('is-nav-open') && !topbarEl.contains(ev.target)) {
+        setMobileNavOpen(false);
+      }
+    });
+
+    document.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Escape' && topbarEl.classList.contains('is-nav-open')) {
+        setMobileNavOpen(false);
+        mobileNavToggle.focus();
+      }
+    });
+
+    window.addEventListener('resize', function () {
+      if (window.innerWidth > 768 && topbarEl.classList.contains('is-nav-open')) {
+        setMobileNavOpen(false);
+      }
+    });
+  }
+
   // ---- Full-Height Living Woodland & Animated Pet World Engine ----------
   var sceneFigures = document.querySelectorAll('[data-scene-target]');
+  var mobileAnimalFigures = document.querySelectorAll('[data-mobile-animal]');
   var sceneSections = document.querySelectorAll('[data-scene]');
 
   // Helper: Build exact SVG transform around an explicit (cx, cy) pivot point in SVG user-space
@@ -1700,7 +1744,7 @@
     });
   }
 
-  if (sceneFigures.length > 0) {
+  if (sceneFigures.length > 0 || mobileAnimalFigures.length > 0) {
     document.body.classList.add('js-pet-world-ready');
 
     // Animate the 2 active animals and their woodland props on initial page arrival
@@ -1738,28 +1782,48 @@
 
     // ---- Build Per-Animal Articulated Rigs & Independent State Machines ----
     var rigs = {};
-    sceneFigures.forEach(function (fig, index) {
-      var name = fig.getAttribute('data-animal') || ('animal-' + index);
+    var mobileRigs = {};
+    var mobileCompanionMq = window.matchMedia ? window.matchMedia('(max-width: 480px)') : null;
+
+    function buildAnimalRig(fig, index, isMobile) {
       var parts = {};
       fig.querySelectorAll('[data-part]').forEach(function (p) {
         parts[p.getAttribute('data-part')] = p;
       });
-      rigs[name] = {
+      var nowInit = performance.now();
+      return {
         el: fig,
         parts: parts,
+        isMobile: !!isMobile,
         phase: index * 1.37,
         // Independent blink state machine for each animal
         blinkStart: 0,
         blinkDuration: 165,
         doubleBlink: false,
-        nextBlinkAt: performance.now() + 900 + index * 520 + Math.random() * 1800,
-        // Independent behavior action state machine (panting, barking, meowing/purring, ear perks, chirping)
+        nextBlinkAt: nowInit + 900 + index * 520 + Math.random() * 1800,
+        // Independent behavior action state machine (panting, barking, meowing/purring, ear perks, chirping, gnawing)
         actionType: 'idle',
         actionStart: 0,
         actionDuration: 0,
-        nextActionAt: performance.now() + 700 + index * 480 + Math.random() * 1400,
+        nextActionAt: isMobile ? (nowInit + 650) : (nowInit + 700 + index * 480 + Math.random() * 1400),
         cycleCount: 0
       };
+    }
+
+    sceneFigures.forEach(function (fig, index) {
+      var name = fig.getAttribute('data-animal') || ('animal-' + index);
+      rigs[name] = buildAnimalRig(fig, index, false);
+    });
+
+    mobileAnimalFigures.forEach(function (fig, index) {
+      var name = fig.getAttribute('data-mobile-animal') || ('mobile-animal-' + index);
+      var rig = buildAnimalRig(fig, index + 10, true);
+      if (name === 'clover') {
+        rig.actionType = 'gnawing';
+        rig.actionStart = performance.now();
+        rig.actionDuration = 2200;
+      }
+      mobileRigs[name] = rig;
     });
 
     // Helper: Update natural blinking (scales eyes & shows fur-colored eyelids during blink)
@@ -2012,33 +2076,36 @@
         updateAnimalBlink(coco, now);
       }
 
-      // 4. CAT: LUNA (Silver Tabby — Meowing & Purring with Temporary "Meow~" & "Purr… zzz" Indicators)
-      var luna = rigs['luna'];
-      if (luna) {
-        updateWoodlandFoliage(luna, t);
+      // Helper: Shared Luna Silver Tabby animation (desktop rail + mobile reviews companion)
+      function animateLunaRig(lunaRig, nowTs, sec) {
+        updateWoodlandFoliage(lunaRig, sec);
 
-        if (luna.actionType === 'idle' && now >= luna.nextActionAt) {
-          luna.cycleCount += 1;
-          luna.actionType = luna.cycleCount % 2 === 1 ? 'meowing' : 'purring';
-          luna.actionStart = now;
-          luna.actionDuration = luna.actionType === 'meowing' ? 1500 : 2400;
-        } else if (luna.actionType !== 'idle' && now - luna.actionStart >= luna.actionDuration) {
-          luna.actionType = 'idle';
-          luna.nextActionAt = now + 3200 + Math.random() * 2800;
+        if (lunaRig.actionType === 'idle' && nowTs >= lunaRig.nextActionAt) {
+          lunaRig.cycleCount += 1;
+          lunaRig.actionType = lunaRig.isMobile
+            ? (lunaRig.cycleCount % 3 !== 0 ? 'meowing' : 'purring')
+            : (lunaRig.cycleCount % 2 === 1 ? 'meowing' : 'purring');
+          lunaRig.actionStart = nowTs;
+          lunaRig.actionDuration = lunaRig.actionType === 'meowing'
+            ? (lunaRig.isMobile ? 1750 : 1500)
+            : 2400;
+        } else if (lunaRig.actionType !== 'idle' && nowTs - lunaRig.actionStart >= lunaRig.actionDuration) {
+          lunaRig.actionType = 'idle';
+          lunaRig.nextActionAt = nowTs + (lunaRig.isMobile ? (1800 + Math.random() * 1200) : (3200 + Math.random() * 2800));
         }
 
-        var isMeowing = luna.actionType === 'meowing';
-        var isPurring = luna.actionType === 'purring';
+        var isMeowing = lunaRig.actionType === 'meowing';
+        var isPurring = lunaRig.actionType === 'purring';
 
         // Continuous swishing ringed tail around (180, 378)
-        var tailSwish = Math.sin(t * 2.1 + 0.5) * 14 + Math.sin(t * 0.9) * 4;
-        setSvgPartTransform(luna.parts['tail'], 0, 0, tailSwish, 1, 1);
+        var tailSwish = Math.sin(sec * 2.1 + 0.5) * 14 + Math.sin(sec * 0.9) * 4;
+        setSvgPartTransform(lunaRig.parts['tail'], 0, 0, tailSwish, 1, 1);
 
         // Breathing & purring chest/body
-        var catBreathe = Math.sin(t * 2.2 + 0.8);
-        var purrShimmer = isPurring ? Math.sin(t * 26) * 0.012 : 0;
+        var catBreathe = Math.sin(sec * 2.2 + 0.8);
+        var purrShimmer = isPurring ? Math.sin(sec * 26) * 0.012 : 0;
         setSvgPartTransform(
-          luna.parts['chest'],
+          lunaRig.parts['chest'],
           0,
           -catBreathe * 2.2,
           0,
@@ -2047,68 +2114,195 @@
         );
 
         // Ear twitches & whisker movement
-        var earTwitchL = Math.sin(t * 1.7) > 0.82 ? -8 * Math.sin(t * 9) : Math.sin(t * 1.3) * 2.5;
-        var earTwitchR = Math.sin(t * 1.9 + 1.2) > 0.82 ? 8 * Math.sin(t * 9) : -Math.sin(t * 1.4) * 2.5;
-        setSvgPartTransform(luna.parts['ear-l'], 0, 0, earTwitchL, 1, 1);
-        setSvgPartTransform(luna.parts['ear-r'], 0, 0, earTwitchR, 1, 1);
-        setSvgPartTransform(luna.parts['whiskers'], 0, 0, Math.sin(t * 2.6) * 2.2, 1 + Math.sin(t * 3.1) * 0.025, 1);
+        var earTwitchL = Math.sin(sec * 1.7) > 0.82 ? -8 * Math.sin(sec * 9) : Math.sin(sec * 1.3) * 2.5;
+        var earTwitchR = Math.sin(sec * 1.9 + 1.2) > 0.82 ? 8 * Math.sin(sec * 9) : -Math.sin(sec * 1.4) * 2.5;
+        setSvgPartTransform(lunaRig.parts['ear-l'], 0, 0, earTwitchL, 1, 1);
+        setSvgPartTransform(lunaRig.parts['ear-r'], 0, 0, earTwitchR, 1, 1);
+        setSvgPartTransform(lunaRig.parts['whiskers'], 0, 0, Math.sin(sec * 2.6) * 2.2, 1 + Math.sin(sec * 3.1) * 0.025, 1);
 
         var meowOpen = 0;
         var meowBubbleAlpha = 0;
         var zzzBubbleAlpha = 0;
         var catHeadY = -catBreathe * 1.8;
-        var catHeadRot = Math.sin(t * 1.1) * 1.5;
-        luna.extraEyelidClosure = 0;
+        var catHeadRot = Math.sin(sec * 1.1) * 1.5;
+        lunaRig.extraEyelidClosure = 0;
 
         if (isMeowing) {
-          var mElapsed = now - luna.actionStart;
+          var mElapsed = nowTs - lunaRig.actionStart;
           // Smooth opening and closing mouth during "Meow~"
-          if (mElapsed >= 80 && mElapsed <= 1150) {
-            meowOpen = Math.sin(((mElapsed - 80) / 1070) * Math.PI);
+          var openEnd = lunaRig.actionDuration - 320;
+          if (mElapsed >= 80 && mElapsed <= openEnd) {
+            meowOpen = Math.sin(((mElapsed - 80) / (openEnd - 80)) * Math.PI);
           }
           catHeadY -= meowOpen * 4.5;
           catHeadRot += meowOpen * 3.2;
 
           var mIn = Math.min(1, mElapsed / 200);
-          var mOut = Math.min(1, (luna.actionDuration - mElapsed) / 260);
+          var mOut = Math.min(1, (lunaRig.actionDuration - mElapsed) / 260);
           meowBubbleAlpha = Math.max(0, Math.min(mIn, mOut));
         } else if (isPurring) {
-          var zElapsed = now - luna.actionStart;
+          var zElapsed = nowTs - lunaRig.actionStart;
           var zIn = Math.min(1, zElapsed / 320);
-          var zOut = Math.min(1, (luna.actionDuration - zElapsed) / 360);
+          var zOut = Math.min(1, (lunaRig.actionDuration - zElapsed) / 360);
           zzzBubbleAlpha = Math.max(0, Math.min(zIn, zOut));
           // Contented resting/purring eyes close softly while "Purr… zzz" floats
-          luna.extraEyelidClosure = zzzBubbleAlpha * 0.85;
+          lunaRig.extraEyelidClosure = zzzBubbleAlpha * 0.85;
           catHeadY += zzzBubbleAlpha * 2.2;
           catHeadRot -= zzzBubbleAlpha * 2.0;
         }
 
-        setSvgPartTransform(luna.parts['head'], 0, catHeadY, catHeadRot, 1, 1);
+        setSvgPartTransform(lunaRig.parts['head'], 0, catHeadY, catHeadRot, 1, 1);
 
-        if (luna.parts['mouth-closed']) {
-          luna.parts['mouth-closed'].setAttribute('opacity', meowOpen > 0.15 ? '0' : '1');
+        if (lunaRig.parts['mouth-closed']) {
+          lunaRig.parts['mouth-closed'].setAttribute('opacity', meowOpen > 0.15 ? '0' : '1');
         }
-        if (luna.parts['mouth-open']) {
-          luna.parts['mouth-open'].setAttribute('opacity', meowOpen > 0.15 ? '1' : '0');
-          setSvgPartTransform(luna.parts['mouth-open'], 0, meowOpen * 1.2, 0, 0.85 + meowOpen * 0.25, Math.max(0.15, meowOpen * 1.2));
+        if (lunaRig.parts['mouth-open']) {
+          lunaRig.parts['mouth-open'].setAttribute('opacity', meowOpen > 0.15 ? '1' : '0');
+          setSvgPartTransform(lunaRig.parts['mouth-open'], 0, meowOpen * 1.2, 0, 0.85 + meowOpen * 0.25, Math.max(0.15, meowOpen * 1.2));
         }
 
         setDialogueState(
-          luna.parts['dialogue-meow'],
+          lunaRig.parts['dialogue-meow'],
           meowBubbleAlpha,
           0,
           (1 - meowBubbleAlpha) * 7 - meowOpen * 2.5,
           0.92 + meowBubbleAlpha * 0.08
         );
         setDialogueState(
-          luna.parts['dialogue-zzz'],
+          lunaRig.parts['dialogue-zzz'],
           zzzBubbleAlpha,
-          Math.sin(t * 2.5) * 2,
-          (1 - zzzBubbleAlpha) * 8 - (isPurring ? ((now - luna.actionStart) / luna.actionDuration) * 6 : 0),
+          Math.sin(sec * 2.5) * 2,
+          (1 - zzzBubbleAlpha) * 8 - (isPurring ? ((nowTs - lunaRig.actionStart) / lunaRig.actionDuration) * 6 : 0),
           0.92 + zzzBubbleAlpha * 0.08
         );
 
-        updateAnimalBlink(luna, now);
+        updateAnimalBlink(lunaRig, nowTs);
+      }
+
+      // Helper: Mobile Clover (Meadow Bunny — exact scenic_rails.php artwork) happily nibbling a carrot beside the search bar
+      function animateCloverGnawRig(cloverRig, nowTs, sec) {
+        if (cloverRig.actionType === 'gnawing' && nowTs - cloverRig.actionStart >= cloverRig.actionDuration) {
+          cloverRig.actionType = 'pause';
+          cloverRig.actionStart = nowTs;
+          cloverRig.actionDuration = 1050;
+        } else if (cloverRig.actionType !== 'gnawing' && nowTs - cloverRig.actionStart >= cloverRig.actionDuration) {
+          cloverRig.actionType = 'gnawing';
+          cloverRig.actionStart = nowTs;
+          cloverRig.actionDuration = 2400;
+        }
+
+        var isNibbling = cloverRig.actionType === 'gnawing';
+        var bunnyBreathe = Math.sin(sec * 2.9 + 1.7);
+        var gElapsed = nowTs - cloverRig.actionStart;
+
+        var burstBlend = 0;
+        if (isNibbling) {
+          var fadeIn = Math.min(1, gElapsed / 220);
+          var fadeOut = Math.min(1, (cloverRig.actionDuration - gElapsed) / 220);
+          burstBlend = Math.max(0, Math.min(fadeIn, fadeOut));
+        }
+
+        // Rhythmic happy carrot nibble (~3.4 nibbles/sec)
+        var biteWave = isNibbling ? ((Math.sin(gElapsed * 0.0215) + 1) * 0.5) * burstBlend : 0;
+        var jawOpen = isNibbling ? (1 - biteWave) * burstBlend : 0;
+
+        // Gentle upright breathing torso (exact scenic_rails.php Clover motion)
+        setSvgPartTransform(
+          cloverRig.parts['chest'],
+          0,
+          -bunnyBreathe * 1.8,
+          0,
+          1 + bunnyBreathe * 0.036,
+          1 + bunnyBreathe * 0.044
+        );
+
+        // Fluffy cottontail happy subtle wiggle
+        if (cloverRig.parts['tail']) {
+          setSvgPartTransform(
+            cloverRig.parts['tail'],
+            0,
+            isNibbling ? Math.sin(sec * 13) * 1.4 * burstBlend : -bunnyBreathe * 1.0,
+            isNibbling ? Math.sin(sec * 13) * 4.5 * burstBlend : 0,
+            1,
+            1
+          );
+        }
+
+        // Upright head with a natural gentle downward nibble bob (stays 100% seated on torso)
+        var headBobY = -bunnyBreathe * 1.5 + burstBlend * 2.0 + biteWave * 2.4;
+        var headRot = isNibbling ? (Math.sin(gElapsed * 0.0105) * 2.4 * burstBlend) : (Math.sin(sec * 1.5) * 1.5);
+        setSvgPartTransform(cloverRig.parts['head'], 0, headBobY, headRot, 1, 1);
+
+        // Independent tall pink-lined ears bobbing naturally
+        var earL = Math.sin(sec * 2.1) * 7.0 + Math.cos(sec * 3.4) * 3.0 - biteWave * 6.5;
+        var earR = Math.cos(sec * 1.85 + 0.9) * 8.0 + Math.sin(sec * 2.9) * 3.0 + biteWave * 7.0;
+        setSvgPartTransform(cloverRig.parts['ear-l'], 0, 0, earL, 1, 1);
+        setSvgPartTransform(cloverRig.parts['ear-r'], 0, 0, earR, 1, 1);
+
+        // Crisp toggle between resting smile and open nibbling mouth + white bunny buck tooth
+        var showNibbleMouth = isNibbling && burstBlend > 0.22;
+        if (cloverRig.parts['mouth-closed']) {
+          cloverRig.parts['mouth-closed'].setAttribute('opacity', showNibbleMouth ? '0' : '1');
+        }
+        if (cloverRig.parts['mouth-gnaw']) {
+          cloverRig.parts['mouth-gnaw'].setAttribute('opacity', showNibbleMouth ? '1' : '0');
+        }
+        if (cloverRig.parts['mouth-cavity']) {
+          setSvgPartTransform(
+            cloverRig.parts['mouth-cavity'],
+            0,
+            jawOpen * 1.4,
+            0,
+            0.90 + jawOpen * 0.16,
+            0.46 + jawOpen * 0.66
+          );
+        }
+        if (cloverRig.parts['tooth']) {
+          setSvgPartTransform(
+            cloverRig.parts['tooth'],
+            0,
+            biteWave * 1.8,
+            0,
+            1,
+            0.94 + jawOpen * 0.16
+          );
+        }
+
+        // Carrot held in front paws lifting slightly into each nibble
+        if (cloverRig.parts['carrot']) {
+          var carrotY = -bunnyBreathe * 1.4 - burstBlend * 4.0 + biteWave * 2.2;
+          var carrotRot = burstBlend * -3.5 + biteWave * 4.5;
+          setSvgPartTransform(cloverRig.parts['carrot'], 0, carrotY, carrotRot, 1, 1);
+        }
+
+        // Rapid bunny nose & whisker twitching
+        var noseTwitch = Math.sin(sec * 13.5) * (isNibbling ? 0.95 : Math.max(0, Math.sin(sec * 2.2)));
+        setSvgPartTransform(
+          cloverRig.parts['nose'],
+          0,
+          noseTwitch * -1.6 - jawOpen * 0.9,
+          noseTwitch * 1.6,
+          1 + Math.abs(noseTwitch) * 0.06,
+          1 - Math.abs(noseTwitch) * 0.04
+        );
+
+        updateAnimalBlink(cloverRig, nowTs);
+      }
+
+      // 4. CAT: LUNA (Silver Tabby — Meowing & Purring with Temporary "Meow~" & "Purr… zzz" Indicators)
+      var luna = rigs['luna'];
+      if (luna) {
+        animateLunaRig(luna, now, t);
+      }
+
+      // Mobile Homepage Companions (390 x 844 / <= 480px: Luna at Reviews + Clover gnawing Search)
+      if (mobileCompanionMq && mobileCompanionMq.matches) {
+        if (mobileRigs['luna']) {
+          animateLunaRig(mobileRigs['luna'], now, t);
+        }
+        if (mobileRigs['clover']) {
+          animateCloverGnawRig(mobileRigs['clover'], now, t);
+        }
       }
 
       // 5. BUNNY: CLOVER (Meadow Bunny — Independently Articulated Living Ears, Twitching Nose & Breathing)

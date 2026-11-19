@@ -100,23 +100,122 @@ $businessUnitCards = [
 
   <div class="home-discovery-bar">
     <label for="home-catalog-search" class="home-search-label">Looking for a specific product, veterinary service, or grooming treatment?</label>
-    <form class="hero-search-form home-secondary-search" method="get" action="/search" role="search">
-      <span class="hero-search-icon" aria-hidden="true">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="11" cy="11" r="8"></circle>
-          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+    <div class="home-search-stage">
+      <form class="hero-search-form home-secondary-search" method="get" action="/search" role="search">
+        <span class="hero-search-icon" aria-hidden="true">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          </svg>
+        </span>
+        <input
+          id="home-catalog-search"
+          class="hero-search-input"
+          type="search"
+          name="q"
+          placeholder="Search products, veterinary services, or grooming treatments..."
+          aria-label="Search products, veterinary services, or grooming treatments"
+        >
+        <button class="hero-search-btn" type="submit">Search</button>
+      </form>
+      <!-- Mobile-only Clover (Meadow Bunny — exact scenic_rails.php artwork) nibbling a carrot beside the search bar -->
+      <div class="mobile-pet-companion mobile-clover-companion" data-mobile-animal="clover" aria-hidden="true">
+        <svg viewBox="78 118 136 300" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <g class="mobile-clover-scene">
+            <!-- Soft meadow ground shadow -->
+            <ellipse cx="146" cy="410" rx="56" ry="8" fill="#d8eee6"/>
+
+            <!-- Fluffy Cottontail (exact scenic_rails.php Clover) -->
+            <g data-part="tail" data-pivot="180 372">
+              <circle cx="192" cy="372" r="18" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+            </g>
+
+            <!-- Bunny Breathing Body with Soft Fluffy Chest Fur (exact scenic_rails.php Clover) -->
+            <g class="anim-dog-breathe" data-part="chest" data-pivot="142 396">
+              <ellipse cx="142" cy="348" rx="48" ry="56" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="2.5"/>
+              <ellipse cx="142" cy="348" rx="28" ry="36" fill="#ffffff"/>
+              <path d="M130 326 Q142 336 154 326 M126 344 Q142 356 158 344 M132 362 Q142 372 152 362" stroke="#cbd5e1" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+            </g>
+
+            <!-- Bunny Head, Independently Articulated Living Ears, Blinking Eyes, Twitching Nose & Visible Nibbling Tooth -->
+            <g data-part="head" data-pivot="142 290">
+              <g class="anim-bunny-ear-left" data-part="ear-l" data-pivot="118 226">
+                <ellipse cx="114" cy="176" rx="16" ry="54" transform="rotate(-10 114 176)" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="2.5"/>
+                <ellipse cx="114" cy="180" rx="8.5" ry="39" transform="rotate(-10 114 180)" fill="#f7cad0"/>
+              </g>
+              <g class="anim-bunny-ear-right" data-part="ear-r" data-pivot="166 226">
+                <ellipse cx="170" cy="176" rx="16" ry="54" transform="rotate(10 170 176)" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="2.5"/>
+                <ellipse cx="170" cy="180" rx="8.5" ry="39" transform="rotate(10 170 180)" fill="#f7cad0"/>
+              </g>
+
+              <circle cx="142" cy="256" r="42" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="2.5"/>
+              <ellipse cx="112" cy="262" rx="7" ry="4" fill="#f7cad0" opacity="0.85"/>
+              <ellipse cx="172" cy="262" rx="7" ry="4" fill="#f7cad0" opacity="0.85"/>
+
+              <!-- Blinking Eyes + Eyelids (exact scenic_rails.php Clover) -->
+              <g class="anim-eyes anim-eyes-1" data-part="eyes" data-pivot="142 248">
+                <circle cx="124" cy="248" r="6.5" fill="#1d2a26"/>
+                <circle cx="122" cy="246" r="2.2" fill="#ffffff"/>
+                <circle cx="160" cy="248" r="6.5" fill="#1d2a26"/>
+                <circle cx="158" cy="246" r="2.2" fill="#ffffff"/>
+              </g>
+              <g data-part="eyelids" opacity="0">
+                <ellipse cx="124" cy="248" rx="8" ry="7.5" fill="#f1f5f9"/>
+                <path d="M116 249 Q124 254 132 249" stroke="#1d2a26" stroke-width="2.3" stroke-linecap="round" fill="none"/>
+                <ellipse cx="160" cy="248" rx="8" ry="7.5" fill="#f1f5f9"/>
+                <path d="M152 249 Q160 254 168 249" stroke="#1d2a26" stroke-width="2.3" stroke-linecap="round" fill="none"/>
+              </g>
+
+              <!-- Resting Smile (exact scenic_rails.php Clover, shown between nibbles) -->
+              <path data-part="mouth-closed" d="M133 268 Q142 275 151 268" stroke="#1d2a26" stroke-width="2.2" stroke-linecap="round" fill="none" opacity="0"/>
+
+              <!-- Nibbling Open Mouth Cavity + Crisp White Bunny Buck Tooth -->
+              <g data-part="mouth-gnaw" data-pivot="142 270">
+                <g data-part="mouth-cavity" data-pivot="142 270">
+                  <ellipse cx="142" cy="277.5" rx="9.5" ry="8" fill="#991b1b" stroke="#1d2a26" stroke-width="2"/>
+                  <ellipse cx="142" cy="281.5" rx="5.2" ry="3" fill="#f7cad0"/>
+                </g>
+                <g data-part="tooth" data-pivot="142 270">
+                  <rect x="135.5" y="270" width="13" height="12" rx="3" fill="#ffffff" stroke="#1d2a26" stroke-width="2"/>
+                  <line x1="142" y1="270" x2="142" y2="281.5" stroke="#1d2a26" stroke-width="1.5" stroke-linecap="round"/>
+                </g>
+                <path d="M132 268.5 Q137 272 142 267.5 Q147 272 152 268.5" stroke="#1d2a26" stroke-width="2.1" stroke-linecap="round" fill="none"/>
+              </g>
+
+              <!-- Twitching Pink Nose & Whiskers (exact scenic_rails.php Clover) -->
+              <g class="anim-nose-twitch" data-part="nose" data-pivot="142 260">
+                <ellipse cx="142" cy="260" rx="7.5" ry="5.5" fill="#e07a5f"/>
+                <line x1="94" y1="258" x2="122" y2="261" stroke="#94a3b8" stroke-width="1.8" stroke-linecap="round"/>
+                <line x1="96" y1="266" x2="122" y2="265" stroke="#94a3b8" stroke-width="1.8" stroke-linecap="round"/>
+                <line x1="190" y1="258" x2="162" y2="261" stroke="#94a3b8" stroke-width="1.8" stroke-linecap="round"/>
+                <line x1="188" y1="266" x2="162" y2="265" stroke="#94a3b8" stroke-width="1.8" stroke-linecap="round"/>
+              </g>
+            </g>
+
+            <!-- Crisp Carrot Held by Clover Right Up to Her Mouth -->
+            <g data-part="carrot" data-pivot="142 320">
+              <!-- Leafy Green Carrot Top -->
+              <path d="M158 318 C166 303, 178 298, 184 304 C178 312, 168 317, 158 318 Z" fill="#52997f"/>
+              <path d="M160 321 C174 313, 188 316, 191 324 C180 328, 169 326, 160 321 Z" fill="#64a68d"/>
+              <path d="M157 325 C168 326, 179 334, 178 341 C169 339, 161 333, 157 325 Z" fill="#82bda7"/>
+              <!-- Orange Carrot Body Angled Toward Clover's Tooth -->
+              <path d="M134 286 C140 281, 158 296, 165 316 C168 325, 160 335, 150 333 C131 328, 121 302, 126 291 C128 287, 131 288, 134 286 Z" fill="#f48c42" stroke="#c85a1d" stroke-width="2.2" stroke-linejoin="round"/>
+              <!-- Subtle Carrot Ridge Lines -->
+              <path d="M136 298 Q144 295 148 299 M140 310 Q149 306 155 311 M146 322 Q153 319 158 323" stroke="#c85a1d" stroke-width="1.8" stroke-linecap="round" fill="none" opacity="0.72"/>
+              <!-- Little Front Paws Holding the Carrot -->
+              <ellipse cx="129" cy="322" rx="11.5" ry="8" transform="rotate(-18 129 322)" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+              <ellipse cx="155" cy="330" rx="11.5" ry="8" transform="rotate(14 155 330)" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+            </g>
+
+            <!-- Bunny Sitting Feet (exact scenic_rails.php Clover) -->
+            <g data-part="paws" data-pivot="142 402">
+              <ellipse cx="120" cy="402" rx="14" ry="9" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+              <ellipse cx="164" cy="402" rx="14" ry="9" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+            </g>
+          </g>
         </svg>
-      </span>
-      <input
-        id="home-catalog-search"
-        class="hero-search-input"
-        type="search"
-        name="q"
-        placeholder="Search products, veterinary services, or grooming treatments..."
-        aria-label="Search products, veterinary services, or grooming treatments"
-      >
-      <button class="hero-search-btn" type="submit">Search</button>
-    </form>
+      </div>
+    </div>
   </div>
 </section>
 
@@ -693,11 +792,108 @@ $businessUnitCards = [
 
 <!-- Section 5: Customer Reviews -->
 <section class="home-section" data-scene="community" id="home-reviews" aria-labelledby="home-reviews-heading">
-  <div class="section-header home-section-header">
-    <div>
-      <h2 id="home-reviews-heading">Customer Reviews</h2>
+  <div class="section-header home-section-header home-reviews-header">
+    <div class="home-reviews-heading-wrap">
+      <div>
+        <h2 id="home-reviews-heading">Customer Reviews</h2>
+      </div>
+      <a class="action-link" href="/reviews"><?= $signedIn ? 'Write a review' : 'Explore customer reviews' ?> <span class="arrow" aria-hidden="true">&rarr;</span></a>
     </div>
-    <a class="action-link" href="/reviews"><?= $signedIn ? 'Write a review' : 'Explore customer reviews' ?> <span class="arrow" aria-hidden="true">&rarr;</span></a>
+    <!-- Mobile-only Luna (Silver Tabby) waiting beside Explore Customer Reviews -->
+    <div class="mobile-pet-companion mobile-luna-companion" data-mobile-animal="luna" aria-hidden="true">
+      <svg viewBox="10 140 260 314" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <g class="mobile-luna-scene">
+          <!-- Existing Woodland Backdrop & Oak Branch Perch from scenic_rails.php -->
+          <path d="M262 392 C238 350, 206 322, 172 308" stroke="#6b4f3a" stroke-width="6" stroke-linecap="round"/>
+          <path d="M44 398 C68 362, 92 336, 118 320" stroke="#7c5d46" stroke-width="5" stroke-linecap="round"/>
+          <circle cx="216" cy="390" r="46" fill="#4d9078"/>
+          <circle cx="68" cy="388" r="44" fill="#3b7a63"/>
+          <circle cx="142" cy="372" r="58" fill="#64a68d"/>
+          <ellipse cx="142" cy="432" rx="112" ry="26" fill="#cde8de"/>
+
+          <!-- Swishing Ringed Tabby Tail (Pivots at 180, 378) -->
+          <g class="anim-cat-tail" data-part="tail" data-pivot="180 378">
+            <path d="M180 378 C228 364, 244 304, 214 276" stroke="#7f8c9f" stroke-width="16" stroke-linecap="round" fill="none"/>
+            <path d="M214 342 L226 336 M224 316 L234 312 M220 292 L228 286" stroke="#4a5568" stroke-width="4" stroke-linecap="round"/>
+          </g>
+
+          <!-- Purring & Breathing Cat Torso (Pivots at 142, 396) -->
+          <g class="anim-cat-purr" data-part="chest" data-pivot="142 396">
+            <ellipse cx="142" cy="350" rx="46" ry="58" fill="#8d99ae"/>
+            <path d="M104 334 Q118 338 124 332 M180 334 Q166 338 160 332 M100 354 Q116 358 122 352 M184 354 Q168 358 162 352" stroke="#5c677d" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+            <ellipse cx="142" cy="356" rx="26" ry="38" fill="#edf2f4"/>
+          </g>
+
+          <!-- Articulated Tabby Head, Ears, Blinking Emerald Eyes, Whiskers & Meowing Mouth (Pivots at 142, 286) -->
+          <g class="anim-head-bob-alt" data-part="head" data-pivot="142 286">
+            <g class="anim-ear-perk-left" data-part="ear-l" data-pivot="114 214">
+              <polygon points="94,228 104,174 134,210" fill="#8d99ae"/>
+              <polygon points="100,222 107,184 128,210" fill="#f7cad0"/>
+            </g>
+            <g class="anim-ear-perk-right" data-part="ear-r" data-pivot="170 214">
+              <polygon points="190,228 180,174 150,210" fill="#8d99ae"/>
+              <polygon points="184,222 177,184 156,210" fill="#f7cad0"/>
+            </g>
+            <circle cx="142" cy="244" r="46" fill="#8d99ae"/>
+            <path d="M132 206 L136 220 M142 202 L142 218 M152 206 L148 220" stroke="#4a5568" stroke-width="3.2" stroke-linecap="round"/>
+
+            <!-- Blinking Emerald Eyes + Eyelids -->
+            <g class="anim-eyes anim-eyes-2" data-part="eyes" data-pivot="142 240">
+              <circle cx="122" cy="240" r="8" fill="#a7f3d0"/>
+              <ellipse cx="122" cy="240" rx="3.2" ry="6.5" fill="#1d2a26"/>
+              <circle cx="119.5" cy="237" r="2.2" fill="#ffffff"/>
+              <circle cx="162" cy="240" r="8" fill="#a7f3d0"/>
+              <ellipse cx="162" cy="240" rx="3.2" ry="6.5" fill="#1d2a26"/>
+              <circle cx="159.5" cy="237" r="2.2" fill="#ffffff"/>
+            </g>
+            <g data-part="eyelids" opacity="0">
+              <ellipse cx="122" cy="240" rx="9.5" ry="9" fill="#8d99ae"/>
+              <path d="M113 241 Q122 246 131 241" stroke="#1d2a26" stroke-width="2.4" stroke-linecap="round" fill="none"/>
+              <ellipse cx="162" cy="240" rx="9.5" ry="9" fill="#8d99ae"/>
+              <path d="M153 241 Q162 246 171 241" stroke="#1d2a26" stroke-width="2.4" stroke-linecap="round" fill="none"/>
+            </g>
+
+            <!-- Pink Nose & Articulated Meowing Mouth -->
+            <polygon points="136,252 148,252 142,260" fill="#e07a5f"/>
+            <path data-part="mouth-closed" d="M132 264 Q137 270 142 264 Q147 270 152 264" stroke="#1d2a26" stroke-width="2.4" stroke-linecap="round" fill="none"/>
+            <g class="anim-meow-mouth" data-part="mouth-open" data-pivot="142 264" opacity="0">
+              <ellipse cx="142" cy="269" rx="7.5" ry="6.5" fill="#991b1b" stroke="#1d2a26" stroke-width="2"/>
+              <ellipse cx="142" cy="271" rx="5" ry="3.8" fill="#f7cad0"/>
+            </g>
+
+            <!-- Twitching Whiskers -->
+            <g class="anim-whiskers" data-part="whiskers" data-pivot="142 258">
+              <line x1="76" y1="248" x2="110" y2="253" stroke="#1d2a26" stroke-width="2" stroke-linecap="round"/>
+              <line x1="74" y1="258" x2="110" y2="259" stroke="#1d2a26" stroke-width="2" stroke-linecap="round"/>
+              <line x1="78" y1="268" x2="112" y2="265" stroke="#1d2a26" stroke-width="2" stroke-linecap="round"/>
+              <line x1="208" y1="248" x2="174" y2="253" stroke="#1d2a26" stroke-width="2" stroke-linecap="round"/>
+              <line x1="210" y1="258" x2="174" y2="259" stroke="#1d2a26" stroke-width="2" stroke-linecap="round"/>
+              <line x1="206" y1="268" x2="172" y2="265" stroke="#1d2a26" stroke-width="2" stroke-linecap="round"/>
+            </g>
+          </g>
+
+          <!-- Temporary Cat "Meow~" & "Purr… zzz" Dialogue Bubbles -->
+          <g class="scenic-dialogue anim-dialogue-meow" data-part="dialogue-meow" data-pivot="90 190" opacity="0" style="opacity:0">
+            <rect x="18" y="156" width="84" height="34" rx="17" fill="#ffffff" stroke="#0d6e57" stroke-width="2"/>
+            <polygon points="82,189 96,204 70,189" fill="#ffffff"/>
+            <polyline points="82,189 96,204 70,189" stroke="#0d6e57" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+            <text x="60" y="178" text-anchor="middle" fill="#0d6e57" font-family="system-ui, sans-serif" font-size="13.5" font-weight="750">Meow~</text>
+          </g>
+          <g class="scenic-dialogue anim-dialogue-zzz" data-part="dialogue-zzz" data-pivot="190 180" opacity="0" style="opacity:0">
+            <rect x="176" y="148" width="86" height="32" rx="16" fill="#ffffff" stroke="#64a68d" stroke-width="1.8"/>
+            <circle cx="182" cy="190" r="4" fill="#ffffff" stroke="#64a68d" stroke-width="1.5"/>
+            <circle cx="174" cy="200" r="2.5" fill="#ffffff" stroke="#64a68d" stroke-width="1.5"/>
+            <text x="219" y="169" text-anchor="middle" fill="#0d6e57" font-family="system-ui, sans-serif" font-size="12.5" font-weight="700">Purr… zzz</text>
+          </g>
+
+          <!-- Oak Branch & Velvet Paws -->
+          <rect x="48" y="402" width="188" height="30" rx="15" fill="#7c5d46" stroke="#5e4330" stroke-width="2"/>
+          <path d="M74 414 H134 M162 420 H214" stroke="#5e4330" stroke-width="2.5" stroke-linecap="round"/>
+          <ellipse cx="122" cy="402" rx="14" ry="10" fill="#edf2f4" stroke="#8d99ae" stroke-width="2"/>
+          <ellipse cx="162" cy="402" rx="14" ry="10" fill="#edf2f4" stroke="#8d99ae" stroke-width="2"/>
+        </g>
+      </svg>
+    </div>
   </div>
 
   <?php if (!$reviews): ?>

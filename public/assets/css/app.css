@@ -361,6 +361,124 @@ button.link:active {
   transition-duration: var(--dur-press);
 }
 
+/* Compact Mobile Navigation Toggle & Collapsible Drawer (<= 768px) */
+.nav-mobile-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.55rem;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  flex-shrink: 0;
+  box-shadow: var(--shadow-xs);
+  transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), transform var(--dur-press) var(--ease-out);
+}
+
+.nav-mobile-toggle:active {
+  transform: scale(0.95);
+}
+
+.nav-mobile-toggle svg {
+  display: block;
+  pointer-events: none;
+}
+
+.nav-mobile-toggle[aria-expanded="false"] .nav-toggle-icon-close,
+.nav-mobile-toggle[aria-expanded="true"] .nav-toggle-icon-menu {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .topbar-inner {
+    flex-wrap: nowrap;
+    padding: 0.58rem 1rem;
+    gap: 0.75rem;
+    min-height: 3.5rem;
+  }
+
+  .nav-mobile-toggle {
+    display: inline-flex;
+  }
+
+  .topbar nav {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    flex-direction: column;
+    align-items: stretch;
+    flex-wrap: nowrap;
+    gap: 0.2rem;
+    padding: 0.75rem 1rem 1rem;
+    background: var(--surface);
+    border-bottom: 1px solid var(--line);
+    box-shadow: var(--shadow-md);
+    max-height: calc(100dvh - 3.6rem);
+    overflow-y: auto;
+    z-index: 60;
+    opacity: 1;
+    transform: translateY(0);
+    transition: opacity var(--dur-ui) var(--ease-out), transform var(--dur-ui) var(--ease-out);
+  }
+
+  .topbar.is-nav-open nav {
+    display: flex;
+  }
+
+  @starting-style {
+    .topbar.is-nav-open nav {
+      opacity: 0;
+      transform: translateY(-6px);
+    }
+  }
+
+  .topbar nav a,
+  .topbar nav button.link {
+    width: 100%;
+    min-height: 2.75rem;
+    padding: 0.6rem 0.85rem;
+    justify-content: flex-start;
+    font-size: 0.94rem;
+    border-radius: 0.55rem;
+  }
+
+  .topbar nav .nav-divider {
+    width: 100%;
+    height: 1px;
+    margin: 0.4rem 0;
+  }
+
+  .topbar nav a.nav-cta {
+    justify-content: center;
+    margin-top: 0.35rem;
+    padding: 0.65rem 1rem;
+  }
+
+  .topbar nav .nav-active-indicator,
+  .topbar nav a.is-current::after,
+  .topbar nav a.is-active::after {
+    display: none !important;
+  }
+
+  .topbar nav .profile-menu {
+    width: 100%;
+    margin-top: 0.25rem;
+  }
+
+  .topbar nav .profile-dropdown {
+    position: static;
+    margin-top: 0.45rem;
+    width: 100%;
+    box-shadow: none;
+  }
+}
+
 /* Main Content Container with Smooth Entry Transition */
 main {
   flex: 1;
@@ -1155,6 +1273,7 @@ input[type=number].qty {
   .otp-inputs-wrap {
     gap: 0.35rem;
   }
+
   .otp-digit-box {
     width: 2.35rem;
     height: 2.85rem;
@@ -2003,6 +2122,8 @@ body:not(.js-pet-world-ready) .anim-bunny-ear-right {
 @media (prefers-reduced-motion: reduce) {
 
   .topbar nav a,
+  .topbar nav,
+  .nav-mobile-toggle,
   button.link,
   .btn,
   button.btn,
@@ -2522,8 +2643,8 @@ body.has-modal-open {
   position: relative;
   overflow: hidden;
   transition: height 260ms cubic-bezier(0.23, 1, 0.32, 1),
-              box-shadow var(--dur-ui) var(--ease-apple),
-              border-color var(--dur-ui) var(--ease-apple);
+    box-shadow var(--dur-ui) var(--ease-apple),
+    border-color var(--dur-ui) var(--ease-apple);
   will-change: height, box-shadow;
 }
 
@@ -2538,8 +2659,8 @@ body.has-modal-open {
   overflow: hidden;
   color: var(--muted);
   transition: opacity 180ms cubic-bezier(0.23, 1, 0.32, 1),
-              max-height 240ms cubic-bezier(0.23, 1, 0.32, 1),
-              margin 240ms cubic-bezier(0.23, 1, 0.32, 1);
+    max-height 240ms cubic-bezier(0.23, 1, 0.32, 1),
+    margin 240ms cubic-bezier(0.23, 1, 0.32, 1);
 }
 
 .role-card.is-expanded .role-short-desc {
@@ -2556,7 +2677,7 @@ body.has-modal-open {
   opacity: 0;
   overflow: hidden;
   transition: max-height 260ms cubic-bezier(0.23, 1, 0.32, 1),
-              opacity 220ms cubic-bezier(0.23, 1, 0.32, 1);
+    opacity 220ms cubic-bezier(0.23, 1, 0.32, 1);
 }
 
 .role-card.is-expanded .role-card-panel {
@@ -2651,8 +2772,15 @@ body.has-modal-open {
 }
 
 @keyframes navDotPop {
-  0% { transform: scale(0); opacity: 0; }
-  100% { transform: scale(1); opacity: 1; }
+  0% {
+    transform: scale(0);
+    opacity: 0;
+  }
+
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 
 /* Static fallback underline (SSR or non-JS) */
@@ -2672,8 +2800,13 @@ body.has-modal-open {
 }
 
 @keyframes navUnderlineExpand {
-  0% { transform: scaleX(0); }
-  100% { transform: scaleX(1); }
+  0% {
+    transform: scaleX(0);
+  }
+
+  100% {
+    transform: scaleX(1);
+  }
 }
 
 /* Smoothly sliding & horizontally expanding underline indicator */
@@ -2714,6 +2847,7 @@ body.has-modal-open {
 }
 
 @media (prefers-reduced-motion: reduce) {
+
   .modal,
   .modal::backdrop,
   .role-option,
@@ -3054,18 +3188,22 @@ body.has-modal-open {
   .grooming-wide-appt-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
   .grooming-overview-middle-grid,
   .petstore-overview-middle-grid,
   .vet-overview-middle-grid {
     grid-template-columns: 1fr;
   }
+
   .grooming-employees-present-grid,
   .vet-employees-duty-grid {
     grid-template-columns: 1fr;
   }
+
   .grooming-overview-grid {
     grid-template-columns: 1fr;
   }
+
   .grooming-stock-alerts-card,
   .grooming-employees-present-card {
     grid-column: span 1;
@@ -3076,6 +3214,7 @@ body.has-modal-open {
   .grooming-wide-appt-grid {
     grid-template-columns: 1fr;
   }
+
   .vet-activity-stats-row {
     grid-template-columns: 1fr;
   }
@@ -3518,9 +3657,9 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   font-size: 0.83rem;
 }
 
-.grooming-bubble-dl > div:nth-child(4),
-.grooming-bubble-dl > div:nth-child(5),
-.grooming-bubble-dl > div:nth-child(7) {
+.grooming-bubble-dl>div:nth-child(4),
+.grooming-bubble-dl>div:nth-child(5),
+.grooming-bubble-dl>div:nth-child(7) {
   grid-column: span 2;
 }
 
@@ -3774,6 +3913,7 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
     opacity: 0;
     transform: translateY(-4px) scale(0.98);
   }
+
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
@@ -4464,7 +4604,7 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   margin-top: 0.05rem;
 }
 
-.staff-unit-list .staff-unit + .staff-unit::before {
+.staff-unit-list .staff-unit+.staff-unit::before {
   content: "·";
   margin-right: 0.35rem;
   color: var(--muted);
@@ -5000,6 +5140,16 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   margin: 0;
 }
 
+/* Desktop & Tablet Preservation: Mobile Companion Wrappers Transparent Outside Mobile */
+.home-search-stage,
+.home-reviews-heading-wrap {
+  display: contents;
+}
+
+.mobile-pet-companion {
+  display: none;
+}
+
 /* Section 3 — We Care for You Roster */
 .home-care-roster {
   display: grid;
@@ -5326,6 +5476,7 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
 }
 
 @media (max-width: 900px) {
+
   .home-hero-split,
   .home-why-panel {
     grid-template-columns: 1fr;
@@ -5348,6 +5499,7 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
 }
 
 @media (max-width: 768px) {
+
   .home-care-roster,
   .home-units-grid,
   .home-reviews-grid {
@@ -5367,18 +5519,51 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
 
 @media (max-width: 640px) {
   .brand-logo-horizontal {
-    height: 2.05rem;
-    max-width: 148px;
+    height: 1.95rem;
+    max-width: 140px;
   }
 
   .home-hero-split {
-    padding: 1.45rem 1.1rem;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.9rem;
+    padding: 1.35rem 1.1rem 1.4rem;
     margin-bottom: 1.75rem;
+  }
+
+  .home-hero-copy {
+    display: contents;
+  }
+
+  .home-hero-title {
+    order: 1;
+    font-size: 1.65rem;
+    line-height: 1.12;
+    margin: 0;
+  }
+
+  .home-hero-lead {
+    order: 2;
+    font-size: 0.95rem;
+    line-height: 1.54;
+    margin: 0;
+  }
+
+  .home-hero-visual {
+    order: 3;
+    margin: 0.2rem 0 0.1rem;
+  }
+
+  .home-hero-actions {
+    order: 4;
+    margin-top: 0.1rem;
   }
 
   .home-hero-actions .btn {
     width: 100%;
-    font-size: 0.92rem;
+    min-height: 2.85rem;
+    font-size: 0.94rem;
   }
 
   .home-why-list {
@@ -5396,6 +5581,116 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
 
   .home-section {
     margin-top: 2.15rem;
+  }
+}
+
+/* Mobile Portrait Homepage Companions & 390 x 844 Composition */
+@media (max-width: 480px) {
+  main {
+    padding: 1.25rem 0.9rem 3rem;
+  }
+
+  /* Clover (Meadow Bunny) sitting beside the search bar nibbling a carrot */
+  .home-discovery-bar {
+    padding: 0.95rem 0.85rem 0.95rem;
+    gap: 0.45rem;
+    overflow: visible;
+  }
+
+  .home-search-stage {
+    display: flex;
+    align-items: flex-end;
+    gap: 0.45rem;
+    position: relative;
+    width: 100%;
+    padding-top: 0.25rem;
+  }
+
+  .home-search-stage .home-secondary-search {
+    flex: 1 1 auto;
+    min-width: 0;
+    width: auto;
+    padding: 0.3rem 0.32rem 0.3rem 0.65rem;
+    border-radius: 12px;
+    position: relative;
+    z-index: 2;
+  }
+
+  .home-search-stage .hero-search-icon {
+    margin-right: 0.4rem;
+  }
+
+  .home-search-stage .hero-search-input {
+    height: 2.35rem;
+    font-size: 0.88rem;
+    padding-right: 0.25rem !important;
+  }
+
+  .home-search-stage .hero-search-btn {
+    height: 2.35rem;
+    padding: 0 0.78rem;
+    font-size: 0.84rem;
+    position: relative;
+    z-index: 2;
+  }
+
+  .mobile-clover-companion {
+    display: block;
+    flex: 0 0 58px;
+    width: 58px;
+    height: 118px;
+    margin-bottom: -6px;
+    position: relative;
+    z-index: 2;
+    pointer-events: none;
+    user-select: none;
+  }
+
+  .mobile-clover-companion svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+    overflow: visible;
+    filter: drop-shadow(0 4px 10px rgba(15, 25, 22, 0.09));
+  }
+
+  /* Luna (Silver Tabby) sitting beside Explore Customer Reviews */
+  .home-reviews-header {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+  }
+
+  .home-reviews-heading-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.35rem;
+    min-width: 0;
+    flex: 1 1 auto;
+    padding-bottom: 0.35rem;
+  }
+
+  .mobile-luna-companion {
+    display: block;
+    flex: 0 0 116px;
+    width: 116px;
+    height: 138px;
+    position: relative;
+    margin-right: -4px;
+    pointer-events: none;
+    user-select: none;
+  }
+
+  .mobile-luna-companion svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+    overflow: visible;
+    filter: drop-shadow(0 5px 12px rgba(15, 25, 22, 0.08));
   }
 }
 
@@ -5427,6 +5722,7 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
 }
 
 @media (forced-colors: active) {
+
   .home-why-panel,
   [data-theme="dark"] .home-why-panel {
     border: 1px solid CanvasText;
@@ -7108,6 +7404,7 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
 }
 
 @media (forced-colors: active) {
+
   .home-how-shell,
   [data-theme="dark"] .home-how-shell {
     border: 1px solid CanvasText;
@@ -7155,6 +7452,7 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
 }
 
 @media (prefers-reduced-motion: reduce) {
+
   .home-how-progress-fill,
   .home-how-step,
   .home-how-step::before,
@@ -7220,10 +7518,3 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
     display: none !important;
   }
 }
-
-
-
-
-
-
-
