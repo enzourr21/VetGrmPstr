@@ -3119,4 +3119,1092 @@
       });
     });
   }
+
+  // ---- Homepage: How PawCariño Works Scrolling Slideshow Walkthrough
+  (function initHowItWorksWalkthrough() {
+    var root = document.querySelector('[data-how-walkthrough]');
+    if (!root) return;
+
+    var scrollContainer = root.querySelector('[data-how-scroll]');
+    var progressEl = root.querySelector('[data-how-progress]');
+    var stepButtons = Array.prototype.slice.call(root.querySelectorAll('[data-how-step]'));
+    var headlines = Array.prototype.slice.call(root.querySelectorAll('[data-how-headline]'));
+    var scenes = Array.prototype.slice.call(root.querySelectorAll('[data-how-scene]'));
+    var counterEl = root.querySelector('[data-how-counter]');
+    var ctaEl = root.querySelector('.home-how-cta');
+    var totalSteps = scenes.length;
+    if (!scrollContainer || totalSteps !== 5 || headlines.length !== 5 || stepButtons.length !== 5) return;
+
+    var AUTO_ADVANCE_IDLE_MS = 4000;
+    var SLIDE_TWEEN_DURATION_MS = 640;
+    var SNAP_DURATION_MS = 340;
+    var SCROLL_SETTLE_DELAY_MS = 210;
+    var SMOOTH_DAMPING = 11.5;
+    var SCENE_TRAVEL_PCT = 105;
+    var HEADLINE_TRAVEL_PCT = 48;
+    var EASE_OUT = 'cubic-bezier(0.23, 1, 0.32, 1)';
+    var REVEAL_EASE = 'cubic-bezier(0.22, 1, 0.36, 1)';
+    var supportsWAAPI = typeof Element !== 'undefined' && typeof Element.prototype.animate === 'function';
+
+    var motionQuery = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
+    var isReduced = motionQuery ? motionQuery.matches : reducedMotion;
+    var activeIndex = 0;
+    var lastPlayedSceneIdx = -1;
+    var renderedProgress = 0;
+    var targetProgress = 0;
+    var runToken = 0;
+    var stepTimers = [];
+    var activeAnims = [];
+    var idleTimerId = null;
+    var scrollSettleTimerId = null;
+    var smoothRafId = null;
+    var smoothLastTs = 0;
+    var tweenRafId = null;
+    var isProgrammaticTween = false;
+    var isAutoTween = false;
+    var isUserScrolling = false;
+    var isSyncingScroll = false;
+    var syncClearTimerId = null;
+    var lastInputWasKeyboard = false;
+    var isKeyboardFocused = false;
+    var isCtaHovered = false;
+    var lastPointerX = null;
+    var lastPointerY = null;
+    var lastPointerMoveMark = 0;
+
+    function checkInViewport() {
+      var rect = root.getBoundingClientRect();
+      var vh = window.innerHeight || document.documentElement.clientHeight || 800;
+      if (rect.height <= 0) return false;
+      var visiblePx = Math.min(rect.bottom, vh) - Math.max(rect.top, 0);
+      return visiblePx >= Math.min(rect.height * 0.12, 80);
+    }
+
+    var isSectionInView = checkInViewport();
+
+    function getMaxScroll() {
+      if (window.innerWidth <= 900) return 0;
+      return Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight);
+    }
+
+    function setScrollTopSilent(topPx) {
+      var maxScroll = getMaxScroll();
+      if (maxScroll <= 0) return;
+      var clamped = Math.max(0, Math.min(maxScroll, topPx));
+      if (Math.abs(scrollContainer.scrollTop - clamped) < 0.5) return;
+      isSyncingScroll = true;
+      scrollContainer.scrollTop = clamped;
+      if (syncClearTimerId !== null) clearTimeout(syncClearTimerId);
+      syncClearTimerId = setTimeout(function () {
+        syncClearTimerId = null;
+        isSyncingScroll = false;
+      }, 60);
+    }
+
+    function clearScrollSettleTimer() {
+      if (scrollSettleTimerId !== null) {
+        clearTimeout(scrollSettleTimerId);
+        scrollSettleTimerId = null;
+      }
+    }
+
+    function stopSmoothLoop() {
+      if (smoothRafId !== null) {
+        cancelAnimationFrame(smoothRafId);
+        smoothRafId = null;
+      }
+      smoothLastTs = 0;
+    }
+
+    function cancelProgrammaticTween() {
+      if (tweenRafId !== null) {
+        cancelAnimationFrame(tweenRafId);
+        tweenRafId = null;
+      }
+      isProgrammaticTween = false;
+      isAutoTween = false;
+    }
+
+    function clearStepTimers() {
+      for (var i = 0; i < stepTimers.length; i++) {
+        clearTimeout(stepTimers[i]);
+      }
+      stepTimers = [];
+    }
+
+    function scheduleStep(token, fn, delay) {
+      var id = setTimeout(function () {
+        if (token !== runToken) return;
+        fn();
+      }, delay);
+      stepTimers.push(id);
+      return id;
+    }
+
+    function cancelActiveAnims() {
+      for (var i = 0; i < activeAnims.length; i++) {
+        try {
+          activeAnims[i].cancel();
+        } catch (err) {
+          // ignore already-finished animations
+        }
+      }
+      activeAnims = [];
+    }
+
+    function runAnim(el, keyframes, options, onDone) {
+      if (!el || isReduced || !supportsWAAPI) {
+        if (typeof onDone === 'function') onDone();
+        return null;
+      }
+      var anim = el.animate(keyframes, options);
+      activeAnims.push(anim);
+      anim.onfinish = function () {
+        var idx = activeAnims.indexOf(anim);
+        if (idx !== -1) activeAnims.splice(idx, 1);
+        if (typeof onDone === 'function') onDone();
+        try {
+          anim.cancel();
+        } catch (err) {
+          // ignore
+        }
+      };
+      return anim;
+    }
+
+    function clearIdleTimer() {
+      if (idleTimerId !== null) {
+        clearTimeout(idleTimerId);
+        idleTimerId = null;
+      }
+    }
+
+    function canRunAutoAdvance() {
+      return !isReduced &&
+        isSectionInView &&
+        !document.hidden &&
+        !isKeyboardFocused &&
+        !isCtaHovered &&
+        !isProgrammaticTween &&
+        !isUserScrolling;
+    }
+
+    function syncStepIndicators(idx, skipProgress) {
+      for (var i = 0; i < stepButtons.length; i++) {
+        var active = i === idx;
+        var done = i < idx;
+        stepButtons[i].classList.toggle('is-active', active);
+        stepButtons[i].classList.toggle('is-done', done);
+        stepButtons[i].setAttribute('aria-pressed', active ? 'true' : 'false');
+        if (active) {
+          stepButtons[i].setAttribute('aria-current', 'step');
+        } else {
+          stepButtons[i].removeAttribute('aria-current');
+        }
+      }
+      if (progressEl && !skipProgress) {
+        progressEl.style.transform = 'scaleX(' + ((idx + 1) / totalSteps).toFixed(4) + ')';
+      }
+      if (counterEl) {
+        var nextLabel = 'Step ' + (idx + 1) + ' of ' + totalSteps;
+        if (isReduced) {
+          counterEl.textContent = nextLabel;
+        } else {
+          animateTextSwap(counterEl, nextLabel);
+        }
+      }
+    }
+
+    function setSubview(sceneEl, viewName, animate) {
+      var views = Array.prototype.slice.call(sceneEl.querySelectorAll('[data-how-view]'));
+      var prevView = null;
+      var nextView = null;
+
+      for (var i = 0; i < views.length; i++) {
+        if (views[i].classList.contains('is-visible')) prevView = views[i];
+        if (views[i].getAttribute('data-how-view') === viewName) nextView = views[i];
+        views[i].classList.remove('is-exiting');
+      }
+
+      if (!nextView) return;
+      if (!animate || isReduced || !supportsWAAPI || prevView === nextView) {
+        for (var j = 0; j < views.length; j++) {
+          views[j].classList.toggle('is-visible', views[j] === nextView);
+        }
+        return;
+      }
+
+      if (prevView) {
+        prevView.classList.remove('is-visible');
+        prevView.classList.add('is-exiting');
+        runAnim(
+          prevView,
+          [
+            { opacity: 1, transform: 'translate3d(0, 0, 0) scale(1)' },
+            { opacity: 0, transform: 'translate3d(0, -10px, 0) scale(0.975)' }
+          ],
+          { duration: 180, easing: EASE_OUT, fill: 'forwards' },
+          function () {
+            prevView.classList.remove('is-exiting');
+          }
+        );
+      }
+
+      nextView.classList.add('is-visible');
+      runAnim(
+        nextView,
+        [
+          { opacity: 0, transform: 'translate3d(0, 20px, 0)' },
+          { opacity: 1, transform: 'translate3d(0, 0, 0)' }
+        ],
+        { duration: 360, delay: 90, easing: REVEAL_EASE, fill: 'both' }
+      );
+    }
+
+    function hideCursor(sceneEl) {
+      var cursor = sceneEl.querySelector('[data-how-cursor]');
+      if (!cursor) return;
+      cursor.classList.remove('is-visible', 'is-clicking');
+    }
+
+    function placeCursorStart(sceneEl) {
+      var frame = sceneEl.querySelector('[data-how-frame]');
+      var cursor = sceneEl.querySelector('[data-how-cursor]');
+      if (!frame || !cursor) return;
+      var rect = frame.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      var x = rect.width * 0.78;
+      var y = rect.height * 0.74;
+      cursor.style.transition = 'none';
+      cursor.style.transform = 'translate3d(' + x.toFixed(1) + 'px, ' + y.toFixed(1) + 'px, 0)';
+      cursor.getBoundingClientRect();
+      cursor.style.transition = '';
+    }
+
+    function moveCursorTo(sceneEl, targetKey) {
+      var frame = sceneEl.querySelector('[data-how-frame]');
+      var cursor = sceneEl.querySelector('[data-how-cursor]');
+      var target = sceneEl.querySelector('[data-how-target="' + targetKey + '"]');
+      if (!frame || !cursor || !target) return;
+      var frameRect = frame.getBoundingClientRect();
+      var targetRect = target.getBoundingClientRect();
+      if (!frameRect.width || !targetRect.width) return;
+      var x = (targetRect.left - frameRect.left) + (targetRect.width * 0.52);
+      var y = (targetRect.top - frameRect.top) + (targetRect.height * 0.56);
+      cursor.style.transform = 'translate3d(' + x.toFixed(1) + 'px, ' + y.toFixed(1) + 'px, 0)';
+      cursor.classList.add('is-visible');
+    }
+
+    function clickTarget(token, sceneEl, targetKey, onDone) {
+      var cursor = sceneEl.querySelector('[data-how-cursor]');
+      var target = sceneEl.querySelector('[data-how-target="' + targetKey + '"]');
+      if (cursor) cursor.classList.add('is-clicking');
+      if (target) target.classList.add('is-pressed');
+      scheduleStep(token, function () {
+        if (cursor) cursor.classList.remove('is-clicking');
+        if (target) target.classList.remove('is-pressed');
+        if (typeof onDone === 'function') onDone();
+      }, 150);
+    }
+
+    function resetScene(idx) {
+      var sceneEl = scenes[idx];
+      if (!sceneEl) return;
+      hideCursor(sceneEl);
+
+      sceneEl.querySelectorAll('.is-selected, .is-pressed, .is-added, .is-updated, .is-exiting').forEach(function (el) {
+        el.classList.remove('is-selected', 'is-pressed', 'is-added', 'is-updated', 'is-exiting');
+      });
+
+      if (idx === 0) {
+        setSubview(sceneEl, 'auth-email', false);
+      } else if (idx === 1) {
+        setSubview(sceneEl, 'pets-list', false);
+        var weightEl = sceneEl.querySelector('[data-how-pet-weight]');
+        if (weightEl) weightEl.textContent = '26.5';
+      } else if (idx === 2) {
+        setSubview(sceneEl, 'catalog', false);
+        var cartCount = sceneEl.querySelector('[data-how-cart-count]');
+        if (cartCount) cartCount.textContent = '0';
+      } else if (idx === 3) {
+        setSubview(sceneEl, 'menu', false);
+      } else if (idx === 4) {
+        setSubview(sceneEl, 'builder', false);
+        var gCount = sceneEl.querySelector('[data-how-groom-count]');
+        var gTotal = sceneEl.querySelector('[data-how-groom-total]');
+        if (gCount) gCount.textContent = '0 services';
+        if (gTotal) gTotal.textContent = '$0.00';
+      }
+    }
+
+    function cleanupInactiveScenes(keepIdx) {
+      for (var i = 0; i < totalSteps; i++) {
+        if (i !== keepIdx) {
+          headlines[i].classList.remove('is-active', 'is-exiting');
+          headlines[i].setAttribute('aria-hidden', 'true');
+          scenes[i].classList.remove('is-active', 'is-exiting');
+          resetScene(i);
+        }
+      }
+    }
+
+    // Horizontal scrolling slideshow:
+    // Scroll down (p increases): outgoing moves LEFT (offset 0 -> -1), incoming enters from RIGHT (offset +1 -> 0)
+    // Scroll up   (p decreases): outgoing moves RIGHT (offset 0 -> +1), incoming enters from LEFT (offset -1 -> 0)
+    function applySlideFrame(i, offset) {
+      var absOff = Math.abs(offset);
+      var scene = scenes[i];
+      var head = headlines[i];
+
+      if (absOff >= 0.999) {
+        scene.style.opacity = '0';
+        scene.style.visibility = 'hidden';
+        scene.style.transform = 'translate3d(' + (offset > 0 ? SCENE_TRAVEL_PCT : -SCENE_TRAVEL_PCT) + '%, 0, 0) scale(0.96)';
+        scene.classList.remove('is-active', 'is-exiting');
+
+        head.style.opacity = '0';
+        head.style.visibility = 'hidden';
+        head.style.transform = 'translate3d(' + (offset > 0 ? HEADLINE_TRAVEL_PCT : -HEADLINE_TRAVEL_PCT) + '%, 0, 0)';
+        head.classList.remove('is-active', 'is-exiting');
+        head.setAttribute('aria-hidden', 'true');
+        return;
+      }
+
+      var smooth = 1 - (absOff * absOff * (3 - 2 * absOff));
+      var sceneX = offset * SCENE_TRAVEL_PCT;
+      var sceneScale = 0.96 + (0.04 * smooth);
+      var sceneOpacity = Math.pow(smooth, 1.15);
+
+      scene.style.visibility = 'visible';
+      scene.style.opacity = sceneOpacity.toFixed(4);
+      scene.style.transform = 'translate3d(' + sceneX.toFixed(2) + '%, 0, 0) scale(' + sceneScale.toFixed(4) + ')';
+      scene.classList.toggle('is-active', absOff < 0.5);
+
+      var headX = offset * HEADLINE_TRAVEL_PCT;
+      var headOpacity = Math.pow(smooth, 1.35);
+      head.style.visibility = 'visible';
+      head.style.opacity = headOpacity.toFixed(4);
+      head.style.transform = 'translate3d(' + headX.toFixed(2) + '%, 0, 0)';
+      if (absOff < 0.5) {
+        head.classList.add('is-active');
+        head.removeAttribute('aria-hidden');
+      } else {
+        head.classList.remove('is-active');
+        head.setAttribute('aria-hidden', 'true');
+      }
+    }
+
+    function renderSlideshow(p) {
+      var clamped = Math.max(0, Math.min(totalSteps - 1, p));
+      for (var i = 0; i < totalSteps; i++) {
+        applySlideFrame(i, i - clamped);
+      }
+      if (progressEl) {
+        progressEl.style.transform = 'scaleX(' + ((clamped + 1) / totalSteps).toFixed(4) + ')';
+      }
+      var nearest = Math.max(0, Math.min(totalSteps - 1, Math.round(clamped)));
+      if (nearest !== activeIndex) {
+        activeIndex = nearest;
+        syncStepIndicators(activeIndex, true);
+      }
+    }
+
+    function renderDirectPair(fromIdx, toIdx, easedT, dir) {
+      for (var i = 0; i < totalSteps; i++) {
+        if (i === fromIdx) {
+          applySlideFrame(i, -dir * easedT);
+        } else if (i === toIdx) {
+          applySlideFrame(i, dir * (1 - easedT));
+        } else {
+          applySlideFrame(i, 2);
+        }
+      }
+      if (progressEl) {
+        var fromScale = (fromIdx + 1) / totalSteps;
+        var toScale = (toIdx + 1) / totalSteps;
+        var curScale = fromScale + (toScale - fromScale) * easedT;
+        progressEl.style.transform = 'scaleX(' + curScale.toFixed(4) + ')';
+      }
+      var visualIdx = easedT >= 0.5 ? toIdx : fromIdx;
+      if (visualIdx !== activeIndex) {
+        activeIndex = visualIdx;
+        syncStepIndicators(activeIndex, true);
+      }
+    }
+
+    function showStaticState(idx) {
+      runToken++;
+      clearStepTimers();
+      clearScrollSettleTimer();
+      stopSmoothLoop();
+      cancelProgrammaticTween();
+      cancelActiveAnims();
+      isUserScrolling = false;
+      var targetIdx = typeof idx === 'number' ? idx : activeIndex;
+      targetIdx = Math.max(0, Math.min(totalSteps - 1, targetIdx));
+      activeIndex = targetIdx;
+      renderedProgress = targetIdx;
+      targetProgress = targetIdx;
+      lastPlayedSceneIdx = -1;
+      syncStepIndicators(targetIdx, false);
+      for (var i = 0; i < totalSteps; i++) {
+        resetScene(i);
+        headlines[i].style.opacity = '';
+        headlines[i].style.visibility = '';
+        headlines[i].style.transform = '';
+        scenes[i].style.opacity = '';
+        scenes[i].style.visibility = '';
+        scenes[i].style.transform = '';
+        headlines[i].classList.remove('is-exiting');
+        scenes[i].classList.remove('is-exiting');
+        if (i === targetIdx) {
+          headlines[i].classList.add('is-active');
+          headlines[i].removeAttribute('aria-hidden');
+          scenes[i].classList.add('is-active');
+        } else {
+          headlines[i].classList.remove('is-active');
+          headlines[i].setAttribute('aria-hidden', 'true');
+          scenes[i].classList.remove('is-active');
+        }
+      }
+      var maxScroll = getMaxScroll();
+      if (maxScroll > 0) {
+        setScrollTopSilent((targetIdx / (totalSteps - 1)) * maxScroll);
+      }
+    }
+
+    function runScene(idx) {
+      var token = ++runToken;
+      clearStepTimers();
+      lastPlayedSceneIdx = idx;
+      if (isReduced || !isSectionInView || document.hidden) return;
+
+      var sceneEl = scenes[idx];
+      resetScene(idx);
+      placeCursorStart(sceneEl);
+
+      if (idx === 0) {
+        // Step 1: Get Started — Email highlight -> Continue -> Password -> Account Active
+        scheduleStep(token, function () {
+          var emailInput = sceneEl.querySelector('[data-how-auth-email]');
+          if (emailInput) emailInput.classList.add('is-updated');
+          moveCursorTo(sceneEl, 'auth-continue');
+        }, 300);
+
+        scheduleStep(token, function () {
+          clickTarget(token, sceneEl, 'auth-continue', function () {
+            setSubview(sceneEl, 'auth-password', true);
+          });
+        }, 900);
+
+        scheduleStep(token, function () {
+          var passInput = sceneEl.querySelector('[data-how-auth-pass]');
+          if (passInput) passInput.classList.add('is-updated');
+          moveCursorTo(sceneEl, 'auth-signin');
+        }, 1680);
+
+        scheduleStep(token, function () {
+          clickTarget(token, sceneEl, 'auth-signin', function () {
+            setSubview(sceneEl, 'done', true);
+            hideCursor(sceneEl);
+          });
+        }, 2380);
+      } else if (idx === 1) {
+        // Step 2: Your Pets' Information — My Pets -> Edit Profile -> Saved
+        scheduleStep(token, function () {
+          moveCursorTo(sceneEl, 'pet-edit');
+        }, 300);
+
+        scheduleStep(token, function () {
+          clickTarget(token, sceneEl, 'pet-edit', function () {
+            var petCard = sceneEl.querySelector('[data-how-pet="1"]');
+            if (petCard) petCard.classList.add('is-selected');
+          });
+        }, 900);
+
+        scheduleStep(token, function () {
+          setSubview(sceneEl, 'pets-edit', true);
+        }, 1240);
+
+        scheduleStep(token, function () {
+          var weightEl = sceneEl.querySelector('[data-how-pet-weight]');
+          if (weightEl) {
+            weightEl.textContent = '27.0';
+            weightEl.classList.add('is-updated');
+          }
+          moveCursorTo(sceneEl, 'pet-save');
+        }, 1820);
+
+        scheduleStep(token, function () {
+          clickTarget(token, sceneEl, 'pet-save', function () {
+            setSubview(sceneEl, 'done', true);
+            hideCursor(sceneEl);
+          });
+        }, 2520);
+      } else if (idx === 2) {
+        // Step 3: Shop for Your Pets — Browse -> Add to Cart -> Checkout -> Order Confirmed
+        scheduleStep(token, function () {
+          moveCursorTo(sceneEl, 'store-add');
+        }, 280);
+
+        scheduleStep(token, function () {
+          clickTarget(token, sceneEl, 'store-add', function () {
+            var prodCard = sceneEl.querySelector('[data-how-product="1"]');
+            var addBtn = sceneEl.querySelector('[data-how-target="store-add"]');
+            var cartPill = sceneEl.querySelector('[data-how-target="store-cart"]');
+            var cartCount = sceneEl.querySelector('[data-how-cart-count]');
+            if (prodCard) prodCard.classList.add('is-selected');
+            if (addBtn) addBtn.classList.add('is-added');
+            if (cartPill) cartPill.classList.add('is-updated');
+            if (cartCount) cartCount.textContent = '1';
+          });
+        }, 840);
+
+        scheduleStep(token, function () {
+          moveCursorTo(sceneEl, 'store-cart');
+        }, 1340);
+
+        scheduleStep(token, function () {
+          clickTarget(token, sceneEl, 'store-cart', function () {
+            setSubview(sceneEl, 'checkout', true);
+          });
+        }, 1860);
+
+        scheduleStep(token, function () {
+          moveCursorTo(sceneEl, 'store-place');
+        }, 2380);
+
+        scheduleStep(token, function () {
+          clickTarget(token, sceneEl, 'store-place', function () {
+            setSubview(sceneEl, 'done', true);
+            hideCursor(sceneEl);
+          });
+        }, 2960);
+      } else if (idx === 3) {
+        // Step 4: Veterinary Care — Service -> Date & Time -> Request Submitted
+        scheduleStep(token, function () {
+          moveCursorTo(sceneEl, 'vet-service');
+        }, 280);
+
+        scheduleStep(token, function () {
+          clickTarget(token, sceneEl, 'vet-service', function () {
+            var svc = sceneEl.querySelector('[data-how-target="vet-service"]');
+            if (svc) svc.classList.add('is-selected');
+          });
+        }, 800);
+
+        scheduleStep(token, function () {
+          setSubview(sceneEl, 'schedule', true);
+        }, 1120);
+
+        scheduleStep(token, function () {
+          moveCursorTo(sceneEl, 'vet-date');
+        }, 1480);
+
+        scheduleStep(token, function () {
+          clickTarget(token, sceneEl, 'vet-date', function () {
+            var d = sceneEl.querySelector('[data-how-target="vet-date"]');
+            if (d) d.classList.add('is-selected');
+          });
+        }, 1900);
+
+        scheduleStep(token, function () {
+          moveCursorTo(sceneEl, 'vet-time');
+        }, 2120);
+
+        scheduleStep(token, function () {
+          clickTarget(token, sceneEl, 'vet-time', function () {
+            var t = sceneEl.querySelector('[data-how-target="vet-time"]');
+            if (t) t.classList.add('is-selected');
+          });
+        }, 2540);
+
+        scheduleStep(token, function () {
+          moveCursorTo(sceneEl, 'vet-submit');
+        }, 2760);
+
+        scheduleStep(token, function () {
+          clickTarget(token, sceneEl, 'vet-submit', function () {
+            setSubview(sceneEl, 'done', true);
+            hideCursor(sceneEl);
+          });
+        }, 3220);
+      } else {
+        // Step 5: Grooming Services — Multi-Service + Slot -> Request Sent
+        scheduleStep(token, function () {
+          moveCursorTo(sceneEl, 'groom-svc-1');
+        }, 280);
+
+        scheduleStep(token, function () {
+          clickTarget(token, sceneEl, 'groom-svc-1', function () {
+            var s1 = sceneEl.querySelector('[data-how-target="groom-svc-1"]');
+            var gCount = sceneEl.querySelector('[data-how-groom-count]');
+            var gTotal = sceneEl.querySelector('[data-how-groom-total]');
+            if (s1) s1.classList.add('is-selected');
+            if (gCount) gCount.textContent = '1 service';
+            if (gTotal) gTotal.textContent = '$55.00';
+          });
+        }, 800);
+
+        scheduleStep(token, function () {
+          moveCursorTo(sceneEl, 'groom-svc-2');
+        }, 1140);
+
+        scheduleStep(token, function () {
+          clickTarget(token, sceneEl, 'groom-svc-2', function () {
+            var s2 = sceneEl.querySelector('[data-how-target="groom-svc-2"]');
+            var gCount = sceneEl.querySelector('[data-how-groom-count]');
+            var gTotal = sceneEl.querySelector('[data-how-groom-total]');
+            if (s2) s2.classList.add('is-selected');
+            if (gCount) gCount.textContent = '2 services';
+            if (gTotal) gTotal.textContent = '$63.00';
+          });
+        }, 1640);
+
+        scheduleStep(token, function () {
+          moveCursorTo(sceneEl, 'groom-slot');
+        }, 1960);
+
+        scheduleStep(token, function () {
+          clickTarget(token, sceneEl, 'groom-slot', function () {
+            var slot = sceneEl.querySelector('[data-how-target="groom-slot"]');
+            if (slot) slot.classList.add('is-selected');
+          });
+        }, 2420);
+
+        scheduleStep(token, function () {
+          moveCursorTo(sceneEl, 'groom-submit');
+        }, 2680);
+
+        scheduleStep(token, function () {
+          clickTarget(token, sceneEl, 'groom-submit', function () {
+            setSubview(sceneEl, 'done', true);
+            hideCursor(sceneEl);
+          });
+        }, 3180);
+      }
+    }
+
+    function easeInOutCubic(t) {
+      return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    }
+
+    function easeOutCubic(t) {
+      return 1 - Math.pow(1 - t, 3);
+    }
+
+    function scheduleIdleAutoAdvance() {
+      clearIdleTimer();
+      if (!canRunAutoAdvance()) return;
+      idleTimerId = setTimeout(function () {
+        idleTimerId = null;
+        if (!canRunAutoAdvance()) return;
+        var nextIdx = (activeIndex + 1) % totalSteps;
+        transitionToStep(nextIdx, true);
+      }, AUTO_ADVANCE_IDLE_MS);
+    }
+
+    function resetIdleCountdown() {
+      clearIdleTimer();
+      scheduleIdleAutoAdvance();
+    }
+
+    function finishStepLanding(targetIdx) {
+      activeIndex = targetIdx;
+      renderedProgress = targetIdx;
+      targetProgress = targetIdx;
+      isProgrammaticTween = false;
+      isAutoTween = false;
+      renderSlideshow(targetIdx);
+      syncStepIndicators(targetIdx, false);
+      var maxScroll = getMaxScroll();
+      if (maxScroll > 0) {
+        setScrollTopSilent((targetIdx / (totalSteps - 1)) * maxScroll);
+      }
+      runScene(targetIdx);
+      scheduleIdleAutoAdvance();
+    }
+
+    function transitionToStep(targetIdx, fromAuto) {
+      if (targetIdx < 0 || targetIdx >= totalSteps) return;
+      clearIdleTimer();
+      clearScrollSettleTimer();
+      stopSmoothLoop();
+      cancelProgrammaticTween();
+
+      if (isReduced) {
+        showStaticState(targetIdx);
+        return;
+      }
+
+      var fromIdx = activeIndex;
+      if (fromIdx === targetIdx && Math.abs(renderedProgress - targetIdx) < 0.01) {
+        runScene(targetIdx);
+        scheduleIdleAutoAdvance();
+        return;
+      }
+
+      runToken++;
+      clearStepTimers();
+      cancelActiveAnims();
+      resetScene(targetIdx);
+
+      var dir = (fromIdx === totalSteps - 1 && targetIdx === 0)
+        ? 1
+        : (targetIdx >= fromIdx ? 1 : -1);
+      var maxScroll = getMaxScroll();
+      var startScroll = scrollContainer.scrollTop;
+      var endScroll = maxScroll > 0 ? (targetIdx / (totalSteps - 1)) * maxScroll : 0;
+      var startTime = performance.now();
+
+      isProgrammaticTween = true;
+      isAutoTween = Boolean(fromAuto);
+
+      function stepTween(now) {
+        var raw = Math.min(1, (now - startTime) / SLIDE_TWEEN_DURATION_MS);
+        var eased = easeInOutCubic(raw);
+
+        renderDirectPair(fromIdx, targetIdx, eased, dir);
+        if (maxScroll > 0 && !(fromIdx === totalSteps - 1 && targetIdx === 0)) {
+          setScrollTopSilent(startScroll + (endScroll - startScroll) * eased);
+        }
+
+        if (raw < 1) {
+          tweenRafId = requestAnimationFrame(stepTween);
+        } else {
+          tweenRafId = null;
+          finishStepLanding(targetIdx);
+        }
+      }
+
+      tweenRafId = requestAnimationFrame(stepTween);
+    }
+
+    function snapScrollToNearestStep() {
+      var snappedIdx = Math.max(0, Math.min(totalSteps - 1, Math.round(targetProgress)));
+      var maxScroll = getMaxScroll();
+
+      if (isReduced || maxScroll <= 0) {
+        isUserScrolling = false;
+        if (isReduced) {
+          showStaticState(snappedIdx);
+        } else {
+          finishStepLanding(snappedIdx);
+        }
+        return;
+      }
+
+      var startScroll = scrollContainer.scrollTop;
+      var endScroll = (snappedIdx / (totalSteps - 1)) * maxScroll;
+
+      if (Math.abs(endScroll - startScroll) < 2 && Math.abs(renderedProgress - snappedIdx) < 0.015) {
+        isUserScrolling = false;
+        targetProgress = snappedIdx;
+        renderedProgress = snappedIdx;
+        renderSlideshow(snappedIdx);
+        if (lastPlayedSceneIdx !== snappedIdx) {
+          runScene(snappedIdx);
+        }
+        scheduleIdleAutoAdvance();
+        return;
+      }
+
+      stopSmoothLoop();
+      cancelProgrammaticTween();
+      isProgrammaticTween = true;
+      isAutoTween = false;
+      var startTime = performance.now();
+      var startP = renderedProgress;
+
+      function snapFrame(now) {
+        var raw = Math.min(1, (now - startTime) / SNAP_DURATION_MS);
+        var eased = easeOutCubic(raw);
+        var p = startP + (snappedIdx - startP) * eased;
+        renderedProgress = p;
+        targetProgress = p;
+        renderSlideshow(p);
+        setScrollTopSilent(startScroll + (endScroll - startScroll) * eased);
+
+        if (raw < 1) {
+          tweenRafId = requestAnimationFrame(snapFrame);
+        } else {
+          tweenRafId = null;
+          isUserScrolling = false;
+          isProgrammaticTween = false;
+          renderedProgress = snappedIdx;
+          targetProgress = snappedIdx;
+          renderSlideshow(snappedIdx);
+          syncStepIndicators(snappedIdx, false);
+          if (lastPlayedSceneIdx !== snappedIdx) {
+            runScene(snappedIdx);
+          }
+          scheduleIdleAutoAdvance();
+        }
+      }
+
+      tweenRafId = requestAnimationFrame(snapFrame);
+    }
+
+    function ensureSmoothLoop() {
+      if (smoothRafId !== null) return;
+      smoothLastTs = performance.now();
+
+      function tick(now) {
+        var dt = Math.min(0.05, Math.max(0.001, (now - smoothLastTs) / 1000));
+        smoothLastTs = now;
+        var alpha = 1 - Math.exp(-dt * SMOOTH_DAMPING);
+        var diff = targetProgress - renderedProgress;
+
+        if (Math.abs(diff) < 0.0008) {
+          renderedProgress = targetProgress;
+          renderSlideshow(renderedProgress);
+          smoothRafId = null;
+          return;
+        }
+
+        renderedProgress += diff * alpha;
+        renderSlideshow(renderedProgress);
+        smoothRafId = requestAnimationFrame(tick);
+      }
+
+      smoothRafId = requestAnimationFrame(tick);
+    }
+
+    function onContainerScroll() {
+      if (isSyncingScroll) return;
+      var maxScroll = getMaxScroll();
+      if (maxScroll <= 0) return;
+
+      // Manual scroll immediately takes priority over any running automatic or snap transition
+      cancelProgrammaticTween();
+      clearIdleTimer();
+      isUserScrolling = true;
+
+      var nextProgress = (scrollContainer.scrollTop / maxScroll) * (totalSteps - 1);
+      targetProgress = Math.max(0, Math.min(totalSteps - 1, nextProgress));
+
+      if (isReduced) {
+        var nearest = Math.max(0, Math.min(totalSteps - 1, Math.round(targetProgress)));
+        if (nearest !== activeIndex) {
+          showStaticState(nearest);
+        }
+      } else {
+        ensureSmoothLoop();
+      }
+
+      clearScrollSettleTimer();
+      scrollSettleTimerId = setTimeout(function () {
+        scrollSettleTimerId = null;
+        snapScrollToNearestStep();
+      }, SCROLL_SETTLE_DELAY_MS);
+    }
+
+    function pauseWalkthrough() {
+      runToken++;
+      clearStepTimers();
+      clearIdleTimer();
+      clearScrollSettleTimer();
+      stopSmoothLoop();
+      cancelProgrammaticTween();
+      cancelActiveAnims();
+      isUserScrolling = false;
+      lastPlayedSceneIdx = -1;
+      renderedProgress = activeIndex;
+      targetProgress = activeIndex;
+      if (isReduced) {
+        showStaticState(activeIndex);
+      } else {
+        renderSlideshow(activeIndex);
+      }
+    }
+
+    // Track input modality so mouse clicks on step buttons do not trap keyboard focus state
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Tab' || e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'Home' || e.key === 'End') {
+        lastInputWasKeyboard = true;
+      }
+    }, true);
+
+    document.addEventListener('pointerdown', function () {
+      lastInputWasKeyboard = false;
+      if (isKeyboardFocused) {
+        isKeyboardFocused = false;
+        scheduleIdleAutoAdvance();
+      }
+    }, true);
+
+    // Native desktop scroll drives the smooth scrolling slideshow; wheel instantly preempts any auto tween
+    scrollContainer.addEventListener('wheel', function () {
+      isSyncingScroll = false;
+      if (syncClearTimerId !== null) {
+        clearTimeout(syncClearTimerId);
+        syncClearTimerId = null;
+      }
+      if (isProgrammaticTween) {
+        cancelProgrammaticTween();
+      }
+      clearIdleTimer();
+    }, { passive: true });
+
+    scrollContainer.addEventListener('scroll', onContainerScroll, { passive: true });
+
+    // Direct step clicks & keyboard navigation (Arrow keys / Home / End)
+    stepButtons.forEach(function (btn, idx) {
+      btn.addEventListener('click', function () {
+        lastInputWasKeyboard = false;
+        isKeyboardFocused = false;
+        transitionToStep(idx, false);
+      });
+
+      btn.addEventListener('keydown', function (e) {
+        var next = null;
+        if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
+          next = (idx + 1) % totalSteps;
+        } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+          next = (idx + totalSteps - 1) % totalSteps;
+        } else if (e.key === 'Home') {
+          next = 0;
+        } else if (e.key === 'End') {
+          next = totalSteps - 1;
+        }
+        if (next !== null) {
+          e.preventDefault();
+          lastInputWasKeyboard = true;
+          isKeyboardFocused = true;
+          stepButtons[next].focus();
+          transitionToStep(next, false);
+        }
+      });
+    });
+
+    // Real pointer movement (>= 4px) resets the 4-second inactivity countdown; stationary cursor stays idle
+    root.addEventListener('pointermove', function (e) {
+      if (lastPointerX !== null && lastPointerY !== null) {
+        var dx = Math.abs(e.clientX - lastPointerX);
+        var dy = Math.abs(e.clientY - lastPointerY);
+        if (dx < 4 && dy < 4) return;
+      }
+      lastPointerX = e.clientX;
+      lastPointerY = e.clientY;
+      var now = Date.now();
+      if (now - lastPointerMoveMark < 220) return;
+      lastPointerMoveMark = now;
+      if (!isProgrammaticTween && !isUserScrolling) {
+        resetIdleCountdown();
+      }
+    }, { passive: true });
+
+    root.addEventListener('touchstart', function () {
+      if (!isProgrammaticTween) {
+        resetIdleCountdown();
+      }
+    }, { passive: true });
+
+    // Pause auto-advance while hovering directly over the Get Started CTA
+    if (ctaEl) {
+      ctaEl.addEventListener('mouseenter', function () {
+        isCtaHovered = true;
+        clearIdleTimer();
+      });
+      ctaEl.addEventListener('mouseleave', function () {
+        isCtaHovered = false;
+        scheduleIdleAutoAdvance();
+      });
+    }
+
+    // Pause while genuine keyboard focus is inside the walkthrough
+    root.addEventListener('focusin', function (e) {
+      var isKb = lastInputWasKeyboard;
+      if (!isKb && e.target && typeof e.target.matches === 'function') {
+        try {
+          isKb = e.target.matches(':focus-visible');
+        } catch (err) {
+          isKb = false;
+        }
+      }
+      if (isKb) {
+        isKeyboardFocused = true;
+        clearIdleTimer();
+      }
+    });
+
+    root.addEventListener('focusout', function (e) {
+      if (!root.contains(e.relatedTarget) && isKeyboardFocused) {
+        isKeyboardFocused = false;
+        scheduleIdleAutoAdvance();
+      }
+    });
+
+    // Pause when section leaves viewport; resume + start 4s idle countdown when visible
+    function handleVisibilityState(inView) {
+      if (inView === isSectionInView) return;
+      isSectionInView = inView;
+      if (isSectionInView) {
+        if (!isReduced && !document.hidden && !isProgrammaticTween && !isUserScrolling) {
+          renderSlideshow(activeIndex);
+          runScene(activeIndex);
+          scheduleIdleAutoAdvance();
+        }
+      } else {
+        pauseWalkthrough();
+      }
+    }
+
+    if (typeof IntersectionObserver === 'function') {
+      var io = new IntersectionObserver(function (entries) {
+        for (var i = 0; i < entries.length; i++) {
+          if (entries[i].target === root) {
+            handleVisibilityState(entries[i].isIntersecting && entries[i].intersectionRatio >= 0.08);
+          }
+        }
+      }, { threshold: [0, 0.08, 0.25] });
+      io.observe(root);
+    }
+
+    // Sync scroll position on viewport resize (desktop <-> mobile)
+    window.addEventListener('resize', function () {
+      var maxScroll = getMaxScroll();
+      if (maxScroll > 0 && !isUserScrolling && !isProgrammaticTween) {
+        setScrollTopSilent((activeIndex / (totalSteps - 1)) * maxScroll);
+      }
+    }, { passive: true });
+
+    document.addEventListener('visibilitychange', function () {
+      if (document.hidden) {
+        pauseWalkthrough();
+      } else {
+        isSectionInView = checkInViewport();
+        if (isSectionInView && !isReduced && !isProgrammaticTween) {
+          renderSlideshow(activeIndex);
+          runScene(activeIndex);
+          scheduleIdleAutoAdvance();
+        }
+      }
+    });
+
+    if (motionQuery && typeof motionQuery.addEventListener === 'function') {
+      motionQuery.addEventListener('change', function (e) {
+        isReduced = e.matches;
+        if (isReduced) {
+          pauseWalkthrough();
+          showStaticState(activeIndex);
+        } else if (isSectionInView && !document.hidden) {
+          renderSlideshow(activeIndex);
+          runScene(activeIndex);
+          scheduleIdleAutoAdvance();
+        }
+      });
+    }
+
+    syncStepIndicators(0, false);
+    if (isReduced) {
+      showStaticState(0);
+    } else {
+      renderSlideshow(0);
+      if (isSectionInView && !document.hidden) {
+        runScene(0);
+        scheduleIdleAutoAdvance();
+      }
+    }
+  })();
 })();

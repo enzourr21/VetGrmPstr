@@ -204,6 +204,498 @@ $businessUnitCards = [
   </div>
 </section>
 
+<!-- Section 5: How PawCariño Works -->
+<section class="home-section home-how-section" id="home-how-it-works" aria-labelledby="home-how-heading" data-how-walkthrough>
+  <div class="home-how-shell">
+    <div class="home-how-walkthrough" data-how-scroll>
+      <div class="home-how-scroll-runway" data-how-runway>
+        <div class="home-how-sticky-frame">
+      <!-- Left Column: 5-Step Customer Journey Rail -->
+      <div class="home-how-rail">
+        <div class="home-how-rail-head">
+          <h2 id="home-how-heading" class="home-how-rail-title">How PawCariño Works</h2>
+          <div class="home-how-progress-track" aria-hidden="true">
+            <span class="home-how-progress-fill" data-how-progress></span>
+          </div>
+        </div>
+
+        <ol class="home-how-steps" role="list">
+          <li class="home-how-step-item" data-how-step-item="0">
+            <button type="button" class="home-how-step is-active" data-how-step="0" aria-pressed="true" aria-current="step">
+              <span class="home-how-step-badge" aria-hidden="true">
+                <span class="home-how-step-num tabular">01</span>
+                <svg class="home-how-step-check" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              </span>
+              <span class="home-how-step-copy">
+                <span class="home-how-step-title">Get Started with PawCariño</span>
+                <span class="home-how-step-desc">Sign in with your email or username, or create a customer account with email verification.</span>
+              </span>
+            </button>
+          </li>
+
+          <li class="home-how-step-item" data-how-step-item="1">
+            <button type="button" class="home-how-step" data-how-step="1" aria-pressed="false">
+              <span class="home-how-step-badge" aria-hidden="true">
+                <span class="home-how-step-num tabular">02</span>
+                <svg class="home-how-step-check" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              </span>
+              <span class="home-how-step-copy">
+                <span class="home-how-step-title">Your Pets&rsquo; Information</span>
+                <span class="home-how-step-desc">Save each pet&rsquo;s species, breed, weight, and care notes&mdash;kept separate from unit orders and visits.</span>
+              </span>
+            </button>
+          </li>
+
+          <li class="home-how-step-item" data-how-step-item="2">
+            <button type="button" class="home-how-step" data-how-step="2" aria-pressed="false">
+              <span class="home-how-step-badge" aria-hidden="true">
+                <span class="home-how-step-num tabular">03</span>
+                <svg class="home-how-step-check" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              </span>
+              <span class="home-how-step-copy">
+                <span class="home-how-step-title">Shop for Your Pets</span>
+                <span class="home-how-step-desc">Browse live stock in unit-specific catalogs, add to a dedicated cart, and check out for pickup or delivery.</span>
+              </span>
+            </button>
+          </li>
+
+          <li class="home-how-step-item" data-how-step-item="3">
+            <button type="button" class="home-how-step" data-how-step="3" aria-pressed="false">
+              <span class="home-how-step-badge" aria-hidden="true">
+                <span class="home-how-step-num tabular">04</span>
+                <svg class="home-how-step-check" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              </span>
+              <span class="home-how-step-copy">
+                <span class="home-how-step-title">Veterinary Care</span>
+                <span class="home-how-step-desc">Compare clinic services, estimated durations, and base rates, then submit a consultation request.</span>
+              </span>
+            </button>
+          </li>
+
+          <li class="home-how-step-item" data-how-step-item="4">
+            <button type="button" class="home-how-step" data-how-step="4" aria-pressed="false">
+              <span class="home-how-step-badge" aria-hidden="true">
+                <span class="home-how-step-num tabular">05</span>
+                <svg class="home-how-step-check" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              </span>
+              <span class="home-how-step-copy">
+                <span class="home-how-step-title">Grooming Services</span>
+                <span class="home-how-step-desc">Choose one or more grooming treatments for your pets, pick a preferred time, and submit your request.</span>
+              </span>
+            </button>
+          </li>
+        </ol>
+
+        <div class="home-how-rail-foot">
+          <span class="home-how-foot-note">Be part of the platform</span>
+          <a class="home-how-cta" href="/login">Get Started</a>
+        </div>
+      </div>
+
+      <!-- Right Column: Persistent Sticky Demonstration Panel -->
+      <div class="home-how-right-col">
+        <div class="home-how-sticky-panel">
+          <div class="home-how-stage-head">
+            <span class="home-how-counter tabular" data-how-counter>Step 1 of 5</span>
+            <div class="home-how-headlines">
+              <p class="home-how-headline is-active" data-how-headline="0">One account for every visit and order.</p>
+              <p class="home-how-headline" data-how-headline="1" aria-hidden="true">Keep every pet&rsquo;s profile up to date.</p>
+              <p class="home-how-headline" data-how-headline="2" aria-hidden="true">Everything your pet needs, just a few clicks away.</p>
+              <p class="home-how-headline" data-how-headline="3" aria-hidden="true">Give your furry friend the care they deserve.</p>
+              <p class="home-how-headline" data-how-headline="4" aria-hidden="true">A little pampering goes a long way.</p>
+            </div>
+          </div>
+
+          <div class="home-how-stage" aria-hidden="true">
+
+            <!-- Scene 0: Get Started with PawCariño (Smartphone Account Experience) -->
+            <div class="home-how-scene is-active" data-how-scene="0">
+              <div class="how-phone" data-how-frame>
+                <div class="how-phone-top">
+                  <span class="how-phone-notch"></span>
+                  <div class="how-phone-header">
+                    <span class="how-phone-unit">PawCariño Account</span>
+                    <span class="how-phone-pet">Sign in</span>
+                  </div>
+                </div>
+
+                <div class="how-phone-screen">
+                  <div class="how-subview is-visible" data-how-view="auth-email">
+                    <div class="how-auth-steps">
+                      <span class="how-auth-pill is-current">1. Email</span>
+                      <span class="how-auth-pill">2. Password</span>
+                    </div>
+                    <div class="how-phone-label">Sign in to PawCariño</div>
+                    <div class="how-mock-field">
+                      <span class="how-mock-field-label">Email or username</span>
+                      <span class="how-mock-input" data-how-auth-email>alex@example.com</span>
+                    </div>
+                    <div class="how-phone-cta-wrap">
+                      <span class="how-mock-btn how-mock-btn-full" data-how-target="auth-continue">Continue</span>
+                    </div>
+                    <div class="how-auth-footnote">New here? Create an account with email verification</div>
+                  </div>
+
+                  <div class="how-subview" data-how-view="auth-password">
+                    <div class="how-auth-steps">
+                      <span class="how-auth-pill is-done">1. Email &#10003;</span>
+                      <span class="how-auth-pill is-current">2. Password</span>
+                    </div>
+                    <div class="how-phone-label">Step 2 &middot; Enter Password</div>
+                    <div class="how-mock-field">
+                      <span class="how-mock-field-label">Password</span>
+                      <span class="how-mock-input tabular" data-how-auth-pass>&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;</span>
+                    </div>
+                    <div class="how-phone-cta-wrap">
+                      <span class="how-mock-btn how-mock-btn-full" data-how-target="auth-signin">Sign in</span>
+                    </div>
+                  </div>
+
+                <div class="how-subview how-done-view" data-how-view="done">
+                  <div class="how-done-icon">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                  <div class="how-done-title">Welcome, Alex</div>
+                  <div class="how-done-meta">Customer account active</div>
+                  <div class="how-account-chips">
+                    <span class="how-account-chip">My pets</span>
+                    <span class="how-account-chip">Orders</span>
+                    <span class="how-account-chip">Appointments</span>
+                    <span class="how-account-chip">Profile</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="how-cursor" data-how-cursor>
+                <span class="how-cursor-ring"></span>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                  <path d="M5.5 3.5L19 12.2L12.7 13.7L9.8 19.8L5.5 3.5Z" fill="currentColor" stroke="#ffffff" stroke-width="1.6" stroke-linejoin="round"/>
+                </svg>
+              </div>
+            </div>
+          </div>
+
+          <!-- Scene 1: Your Pets' Information (Smartphone Pet Profile Experience) -->
+          <div class="home-how-scene" data-how-scene="1">
+            <div class="how-phone" data-how-frame>
+              <div class="how-phone-top">
+                <span class="how-phone-notch"></span>
+                <div class="how-phone-header">
+                  <span class="how-phone-unit">My pets</span>
+                  <span class="how-phone-pet">2 profiles</span>
+                </div>
+              </div>
+
+              <div class="how-phone-screen">
+                <div class="how-subview is-visible" data-how-view="pets-list">
+                  <div class="how-phone-label">Registered pet profiles</div>
+                  <div class="how-pet-list">
+                    <div class="how-pet-card" data-how-pet="1">
+                      <div class="how-pet-head">
+                        <span class="how-pet-name">Bella</span>
+                        <span class="how-pet-species">Dog</span>
+                      </div>
+                      <div class="how-pet-meta tabular">Golden Retriever &middot; Female &middot; 26.5 kg</div>
+                      <div class="how-pet-note">Sensitive around clippers; oatmeal shampoo</div>
+                      <div class="how-pet-foot">
+                        <span class="how-pet-edit-link" data-how-target="pet-edit">Edit profile &rarr;</span>
+                      </div>
+                    </div>
+
+                    <div class="how-pet-card">
+                      <div class="how-pet-head">
+                        <span class="how-pet-name">Milo</span>
+                        <span class="how-pet-species">Cat</span>
+                      </div>
+                      <div class="how-pet-meta tabular">Domestic Shorthair &middot; Male &middot; 4.2 kg</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="how-subview" data-how-view="pets-edit">
+                  <div class="how-phone-label">Edit pet &middot; Bella</div>
+                  <div class="how-pet-fields">
+                    <div class="how-pet-field-row">
+                      <span class="how-mock-field-label">Weight (kg)</span>
+                      <span class="how-mock-input tabular" data-how-pet-weight>26.5</span>
+                    </div>
+                    <div class="how-pet-field-row">
+                      <span class="how-mock-field-label">Care notes</span>
+                      <span class="how-mock-input">Oatmeal bath; gentle ear drying</span>
+                    </div>
+                  </div>
+                  <div class="how-phone-cta-wrap">
+                    <span class="how-mock-btn how-mock-btn-full" data-how-target="pet-save">Save changes</span>
+                  </div>
+                </div>
+
+                <div class="how-subview how-done-view" data-how-view="done">
+                  <div class="how-done-icon">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                  <div class="how-done-title">Pet Profile Updated</div>
+                  <div class="how-done-meta">Bella &middot; Dog &middot; 27.0 kg &middot; Notes saved</div>
+                  <div class="how-done-pill">Ready for grooming requests</div>
+                </div>
+              </div>
+
+              <div class="how-cursor" data-how-cursor>
+                <span class="how-cursor-ring"></span>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                  <path d="M5.5 3.5L19 12.2L12.7 13.7L9.8 19.8L5.5 3.5Z" fill="currentColor" stroke="#ffffff" stroke-width="1.6" stroke-linejoin="round"/>
+                </svg>
+              </div>
+            </div>
+          </div>
+
+          <!-- Scene 2: Shop for Your Pets (Laptop / Browser Interface) -->
+          <div class="home-how-scene" data-how-scene="2">
+            <div class="how-browser" data-how-frame>
+              <div class="how-browser-bar">
+                <div class="how-window-dots">
+                  <span></span><span></span><span></span>
+                </div>
+                <div class="how-browser-url">pawcarino / shop / pet-store</div>
+                <div class="how-cart-pill" data-how-target="store-cart">
+                  <span>Cart</span>
+                  <span class="how-cart-count tabular" data-how-cart-count>0</span>
+                </div>
+              </div>
+
+              <div class="how-browser-body">
+                <div class="how-subview is-visible" data-how-view="catalog">
+                  <div class="how-view-head">
+                    <span class="how-view-title">Pet Store products</span>
+                    <span class="how-view-meta">Live stock</span>
+                  </div>
+                  <div class="how-product-grid">
+                    <div class="how-product-card" data-how-product="1">
+                      <div class="how-product-top">
+                        <span class="how-cat-label">Food</span>
+                        <span class="how-stock-tag">In stock</span>
+                      </div>
+                      <div class="how-product-name">Adult Dog Kibble 2kg</div>
+                      <div class="how-product-foot">
+                        <span class="how-price tabular">$24.00</span>
+                        <span class="how-mock-btn" data-how-target="store-add">
+                          <span class="how-btn-idle">Add to cart</span>
+                          <span class="how-btn-done">Added &#10003;</span>
+                        </span>
+                      </div>
+                    </div>
+
+                    <div class="how-product-card">
+                      <div class="how-product-top">
+                        <span class="how-cat-label">Grooming Supplies</span>
+                        <span class="how-stock-tag">In stock</span>
+                      </div>
+                      <div class="how-product-name">Oatmeal Pet Shampoo</div>
+                      <div class="how-product-foot">
+                        <span class="how-price tabular">$14.50</span>
+                        <span class="how-mock-btn is-muted">Add to cart</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="how-subview" data-how-view="checkout">
+                  <div class="how-view-head">
+                    <span class="how-view-title">Checkout &middot; Pet Store</span>
+                    <span class="how-view-meta">1 item</span>
+                  </div>
+                  <div class="how-checkout-summary">
+                    <div class="how-checkout-line">
+                      <span>Adult Dog Kibble 2kg &times; 1</span>
+                      <strong class="tabular">$24.00</strong>
+                    </div>
+                    <div class="how-checkout-options">
+                      <span class="how-option-chip is-picked">Branch Pickup &middot; $0.00</span>
+                      <span class="how-option-chip is-picked">Cash on Delivery</span>
+                    </div>
+                  </div>
+                  <div class="how-checkout-foot">
+                    <div class="how-total-pair">
+                      <span class="how-total-label">Total</span>
+                      <strong class="how-price tabular">$24.00</strong>
+                    </div>
+                    <span class="how-mock-btn" data-how-target="store-place">Place Order</span>
+                  </div>
+                </div>
+
+                <div class="how-subview how-done-view" data-how-view="done">
+                  <div class="how-done-icon">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                  <div class="how-done-title">Order #1042 Confirmed</div>
+                  <div class="how-done-meta">Pet Store &middot; Branch Pickup &middot; Stock reserved</div>
+                  <div class="how-done-pill tabular">Total $24.00 &middot; COD</div>
+                </div>
+              </div>
+
+              <div class="how-cursor" data-how-cursor>
+                <span class="how-cursor-ring"></span>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                  <path d="M5.5 3.5L19 12.2L12.7 13.7L9.8 19.8L5.5 3.5Z" fill="currentColor" stroke="#ffffff" stroke-width="1.6" stroke-linejoin="round"/>
+                </svg>
+              </div>
+            </div>
+          </div>
+
+          <!-- Scene 3: Veterinary Care (Smartphone Appointment Interface) -->
+          <div class="home-how-scene" data-how-scene="3">
+            <div class="how-phone" data-how-frame>
+              <div class="how-phone-top">
+                <span class="how-phone-notch"></span>
+                <div class="how-phone-header">
+                  <span class="how-phone-unit">Veterinary Clinic</span>
+                  <span class="how-phone-pet">Milo &middot; Dog</span>
+                </div>
+              </div>
+
+              <div class="how-phone-screen">
+                <div class="how-subview is-visible" data-how-view="menu">
+                  <div class="how-phone-label">Choose a clinic service</div>
+                  <div class="how-vet-list">
+                    <div class="how-vet-row" data-how-target="vet-service">
+                      <div class="how-vet-row-main">
+                        <span class="how-vet-name">Comprehensive Wellness Exam</span>
+                        <span class="how-vet-sub tabular">30 min &middot; $48.00</span>
+                      </div>
+                      <span class="how-radio"></span>
+                    </div>
+                    <div class="how-vet-row">
+                      <div class="how-vet-row-main">
+                        <span class="how-vet-name">Core Vaccination Visit</span>
+                        <span class="how-vet-sub tabular">20 min &middot; $38.00</span>
+                      </div>
+                      <span class="how-radio"></span>
+                    </div>
+                    <div class="how-vet-row">
+                      <div class="how-vet-row-main">
+                        <span class="how-vet-name">Diagnostic Wellness Panel</span>
+                        <span class="how-vet-sub tabular">35 min &middot; $85.00</span>
+                      </div>
+                      <span class="how-radio"></span>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="how-subview" data-how-view="schedule">
+                  <div class="how-phone-label">Preferred date &amp; time</div>
+                  <div class="how-date-row">
+                    <span class="how-date-chip">Thu 20</span>
+                    <span class="how-date-chip" data-how-target="vet-date">Fri 21</span>
+                    <span class="how-date-chip">Sat 22</span>
+                  </div>
+                  <div class="how-time-row">
+                    <span class="how-time-chip">09:30 AM</span>
+                    <span class="how-time-chip" data-how-target="vet-time">11:00 AM</span>
+                    <span class="how-time-chip">02:00 PM</span>
+                  </div>
+                  <div class="how-phone-cta-wrap">
+                    <span class="how-mock-btn how-mock-btn-full" data-how-target="vet-submit">Submit request</span>
+                  </div>
+                </div>
+
+                <div class="how-subview how-done-view" data-how-view="done">
+                  <div class="how-done-icon">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                  <div class="how-done-title">Request Submitted</div>
+                  <div class="how-done-meta">Wellness Exam &middot; Fri 21, 11:00 AM</div>
+                  <div class="how-done-pill is-pending">Pending review</div>
+                </div>
+              </div>
+
+              <div class="how-cursor" data-how-cursor>
+                <span class="how-cursor-ring"></span>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                  <path d="M5.5 3.5L19 12.2L12.7 13.7L9.8 19.8L5.5 3.5Z" fill="currentColor" stroke="#ffffff" stroke-width="1.6" stroke-linejoin="round"/>
+                </svg>
+              </div>
+            </div>
+          </div>
+
+          <!-- Scene 4: Grooming Services (Studio Service-Selection Board) -->
+          <div class="home-how-scene" data-how-scene="4">
+            <div class="how-studio" data-how-frame>
+              <div class="how-studio-head">
+                <span class="how-studio-title">Grooming Services</span>
+                <span class="how-studio-pet">Bella &middot; Dog</span>
+              </div>
+
+              <div class="how-studio-body">
+                <div class="how-subview is-visible" data-how-view="builder">
+                  <div class="how-studio-grid">
+                    <div class="how-studio-services">
+                      <div class="how-groom-card" data-how-target="groom-svc-1">
+                        <span class="how-check-box"></span>
+                        <div class="how-groom-info">
+                          <span class="how-groom-name">Full Grooming</span>
+                          <span class="how-groom-meta tabular">90 min &middot; $55.00</span>
+                        </div>
+                      </div>
+
+                      <div class="how-groom-card">
+                        <span class="how-check-box"></span>
+                        <div class="how-groom-info">
+                          <span class="how-groom-name">Basic Bath &amp; Dry</span>
+                          <span class="how-groom-meta tabular">45 min &middot; $25.00</span>
+                        </div>
+                      </div>
+
+                      <div class="how-groom-card" data-how-target="groom-svc-2">
+                        <span class="how-check-box"></span>
+                        <div class="how-groom-info">
+                          <span class="how-groom-name">Nail Trim</span>
+                          <span class="how-groom-meta tabular">15 min &middot; $8.00</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="how-studio-tray">
+                      <div class="how-tray-label">Preferred slot</div>
+                      <div class="how-slot-list">
+                        <span class="how-slot-chip">Fri 2:00 PM</span>
+                        <span class="how-slot-chip" data-how-target="groom-slot">Sat 10:00 AM</span>
+                      </div>
+                      <div class="how-tray-summary">
+                        <span data-how-groom-count>0 services</span>
+                        <strong class="tabular" data-how-groom-total>$0.00</strong>
+                      </div>
+                      <span class="how-mock-btn how-mock-btn-full" data-how-target="groom-submit">Submit request</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="how-subview how-done-view" data-how-view="done">
+                  <div class="how-done-icon">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                  <div class="how-done-title">Grooming Request Sent</div>
+                  <div class="how-done-meta">Bella &middot; Full Grooming + Nail Trim &middot; Sat 10:00 AM</div>
+                  <div class="how-done-pill is-pending tabular">Est. $63.00 &middot; Pending review</div>
+                </div>
+              </div>
+
+              <div class="how-cursor" data-how-cursor>
+                <span class="how-cursor-ring"></span>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                  <path d="M5.5 3.5L19 12.2L12.7 13.7L9.8 19.8L5.5 3.5Z" fill="currentColor" stroke="#ffffff" stroke-width="1.6" stroke-linejoin="round"/>
+                </svg>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+        </div>
+      </div>
+    </div>
+    </div>
+  </div>
+</section>
+
 <!-- Section 5: Customer Reviews -->
 <section class="home-section" data-scene="community" id="home-reviews" aria-labelledby="home-reviews-heading">
   <div class="section-header home-section-header">
