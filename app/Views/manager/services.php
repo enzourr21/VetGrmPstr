@@ -130,9 +130,9 @@ $catStyle = function(string $cat): array {
               </td>
               <td style="text-align: center; white-space: nowrap;">
                 <?php if ($isAvail): ?>
-                  <span class="badge ok" style="padding: 0.18rem 0.5rem; font-weight: 600; font-size: 0.75rem;">Available</span>
+                  <span class="badge ok">Available</span>
                 <?php else: ?>
-                  <span class="badge" style="padding: 0.18rem 0.5rem; font-weight: 600; font-size: 0.75rem; background: #fee2e2; color: #991b1b; border: 1px solid #fecaca;">Unavailable</span>
+                  <span class="badge err">Unavailable</span>
                 <?php endif; ?>
               </td>
               <td style="text-align: right; white-space: nowrap;">

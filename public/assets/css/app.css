@@ -28,6 +28,7 @@
   --brand-ink: #ffffff;
   --brand-soft: #e6f4f0;
   --brand-soft-hover: #d3ebe4;
+  --brand-border: rgba(13, 110, 87, 0.24);
   --brand-ring: rgba(16, 185, 129, 0.15);
   --accent-warm: #e07a5f;
   --accent-gold: #d9822b;
@@ -43,6 +44,9 @@
   --ok: #136535;
   --ok-bg: #e1f6e9;
   --ok-border: #a5e1bd;
+  --info: #0c5468;
+  --info-bg: #e6f4f8;
+  --info-border: #a7dbe8;
 
   /* Emil Kowalski & Apple Fluid Easing Tokens */
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
@@ -565,7 +569,7 @@ main {
 }
 
 .hero-search-form:focus-within .hero-search-icon {
-  color: var(--brand);
+  color: var(--brand-text);
 }
 
 .hero-search-input {
@@ -1005,7 +1009,7 @@ input[type=number].qty {
 }
 
 .step-chip.is-active .step-chip-label {
-  color: var(--brand);
+  color: var(--brand-text);
 }
 
 .step-chip.is-done .step-chip-bar {
@@ -1048,20 +1052,27 @@ input[type=number].qty {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  font-size: 0.75rem;
-  font-weight: 680;
-  letter-spacing: 0.045em;
-  text-transform: uppercase;
-  color: var(--brand);
+  font-size: 0.78rem;
+  font-weight: 650;
+  letter-spacing: 0.008em;
+  line-height: 1.25;
+  color: var(--brand-text);
 }
 
 .stage-status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-size: 0.75rem;
-  font-weight: 600;
+  font-weight: 640;
+  letter-spacing: 0.008em;
+  line-height: 1.25;
   color: var(--ok);
   background: var(--ok-bg);
-  padding: 0.15rem 0.55rem;
+  border: 1px solid var(--ok-border);
+  padding: 0.16rem 0.54rem;
   border-radius: 999px;
+  white-space: nowrap;
 }
 
 .stage-actions {
@@ -1173,7 +1184,7 @@ input[type=number].qty {
 }
 
 .otp-feedback-msg.is-info {
-  color: var(--brand);
+  color: var(--brand-text);
   background: var(--brand-soft);
   border: 1px solid rgba(13, 110, 87, 0.18);
 }
@@ -1529,33 +1540,95 @@ tr:last-child td {
   border-bottom: 0;
 }
 
-.badge {
+/* Shared Status Badges, Pills & Semantic Variants */
+.badge,
+.badge-tag {
   display: inline-flex;
   align-items: center;
-  gap: 0.25rem;
-  padding: 0;
-  border-radius: 0;
-  font-size: 0.78rem;
-  font-weight: 660;
-  letter-spacing: 0.015em;
+  justify-content: center;
+  gap: 0.28rem;
+  padding: 0.18rem 0.56rem;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  font-size: 0.75rem;
+  font-weight: 640;
+  letter-spacing: 0.008em;
   line-height: 1.25;
-  background: transparent;
+  background: var(--bg-subtle);
   color: var(--ink-secondary);
+  white-space: nowrap;
 }
 
-.badge.warn {
-  background: transparent;
+.badge.neutral,
+.badge.secondary,
+.badge.badge-secondary,
+.badge-secondary,
+.badge-tag.badge-neutral {
+  background: var(--bg-subtle);
+  color: var(--ink-secondary);
+  border-color: var(--line-strong);
+}
+
+.badge.warn,
+.badge.badge-warning,
+.badge-warning,
+.badge.badge-warn,
+.badge-warn,
+.badge-tag.badge-warn,
+.badge-attention-active {
+  background: var(--warn-bg);
   color: var(--warn);
+  border-color: var(--warn-border);
 }
 
-.badge.err {
-  background: transparent;
+.badge.err,
+.badge.badge-danger,
+.badge-danger,
+.badge.status-inactive,
+.badge.status-suspended {
+  background: var(--err-bg);
   color: var(--err);
+  border-color: var(--err-border);
 }
 
-.badge.ok {
-  background: transparent;
+.badge.ok,
+.badge.badge-success,
+.badge-success,
+.badge.status-active,
+.badge-attention-clear {
+  background: var(--ok-bg);
   color: var(--ok);
+  border-color: var(--ok-border);
+}
+
+.badge.info,
+.badge.badge-info,
+.badge-info {
+  background: var(--info-bg);
+  color: var(--info);
+  border-color: var(--info-border);
+}
+
+.badge.primary,
+.badge.badge-primary,
+.badge-primary {
+  background: var(--brand-soft);
+  color: var(--brand-text);
+  border-color: var(--brand-border);
+}
+
+.badge.badge-purple,
+.badge-purple {
+  background: #f3effb;
+  color: #5b21b6;
+  border-color: #d8ccf4;
+}
+
+[data-theme="dark"] .badge.badge-purple,
+[data-theme="dark"] .badge-purple {
+  background: rgba(167, 139, 250, 0.16);
+  color: #c4b5fd;
+  border-color: rgba(196, 181, 253, 0.34);
 }
 
 .price {
@@ -1971,21 +2044,22 @@ body:not(.js-pet-world-ready) .anim-bunny-ear-right {
 .unit-pill {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
-  padding: 0.22rem 0.68rem;
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.055em;
-  text-transform: uppercase;
+  gap: 0.32rem;
+  padding: 0.18rem 0.6rem;
+  font-size: 0.75rem;
+  font-weight: 640;
+  letter-spacing: 0.008em;
+  line-height: 1.25;
   border-radius: 999px;
   background: var(--brand-soft);
-  color: var(--brand);
-  border: 1px solid rgba(13, 110, 87, 0.22);
+  color: var(--brand-text);
+  border: 1px solid var(--brand-border);
+  white-space: nowrap;
 }
 
 .unit-pill-global {
   background: var(--brand);
-  color: #ffffff;
+  color: var(--brand-ink);
   border-color: var(--brand);
 }
 
@@ -2088,15 +2162,6 @@ a.btn.btn-sm {
 .table-wrap {
   width: 100%;
   overflow-x: auto;
-}
-
-.badge.status-active {
-  color: var(--ok);
-}
-
-.badge.status-inactive,
-.badge.status-suspended {
-  color: var(--err);
 }
 
 /* Controlled Demo Access Panel on Sign-In Pages */
@@ -2406,13 +2471,14 @@ body.has-modal-open {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  padding: 0.25rem 0.35rem 0.25rem 0.7rem;
+  padding: 0.22rem 0.35rem 0.22rem 0.65rem;
   border-radius: 999px;
   background: var(--brand-soft);
-  color: var(--brand);
-  border: 1px solid rgba(13, 110, 87, 0.22);
-  font-size: 0.78rem;
-  font-weight: 650;
+  color: var(--brand-text);
+  border: 1px solid var(--brand-border);
+  font-size: 0.76rem;
+  font-weight: 640;
+  line-height: 1.25;
 }
 
 .role-chip-remove {
@@ -2682,11 +2748,11 @@ body.has-modal-open {
   }
 
   .role-chip-remove:hover {
-    background: rgba(13, 110, 87, 0.14);
+    background: var(--brand-soft-hover);
   }
 
   .role-card-toggle:hover {
-    color: var(--brand);
+    color: var(--brand-text);
   }
 }
 
@@ -2759,44 +2825,29 @@ body.has-modal-open {
   flex-wrap: wrap;
 }
 
-.badge-tag {
+.badge-attention-active,
+.badge-attention-clear {
   display: inline-flex;
   align-items: center;
-  padding: 0.2rem 0.55rem;
-  font-size: 0.73rem;
-  font-weight: 650;
+  justify-content: center;
+  padding: 0.22rem 0.62rem;
   border-radius: 999px;
-  line-height: 1;
-}
-
-.badge-tag.badge-warn {
-  background: #fef3c7;
-  color: #92400e;
-  border: 1px solid #fde68a;
-}
-
-.badge-tag.badge-neutral {
-  background: #f1f5f9;
-  color: #475569;
-  border: 1px solid #e2e8f0;
+  border: 1px solid transparent;
+  font-weight: 640;
+  font-size: 0.75rem;
+  line-height: 1.25;
 }
 
 .badge-attention-active {
-  background: #fef3c7;
-  color: #92400e;
-  padding: 0.25rem 0.65rem;
-  border-radius: 999px;
-  font-weight: 650;
-  font-size: 0.75rem;
+  background: var(--warn-bg);
+  color: var(--warn);
+  border-color: var(--warn-border);
 }
 
 .badge-attention-clear {
-  background: #ecfdf5;
-  color: #065f46;
-  padding: 0.25rem 0.65rem;
-  border-radius: 999px;
-  font-weight: 650;
-  font-size: 0.75rem;
+  background: var(--ok-bg);
+  color: var(--ok);
+  border-color: var(--ok-border);
 }
 
 .empty-subtle {
@@ -4072,6 +4123,7 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   --brand-ink: #ffffff;
   --brand-soft: rgba(16, 185, 129, 0.16);
   --brand-soft-hover: rgba(16, 185, 129, 0.24);
+  --brand-border: rgba(52, 211, 153, 0.32);
   --brand-ring: rgba(52, 211, 153, 0.28);
 
   --warn: #fbbf24;
@@ -4085,6 +4137,9 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   --ok: #4ade80;
   --ok-bg: rgba(34, 197, 94, 0.15);
   --ok-border: rgba(74, 222, 128, 0.32);
+  --info: #38bdf8;
+  --info-bg: rgba(56, 189, 248, 0.15);
+  --info-border: rgba(56, 189, 248, 0.34);
 
   --shadow-xs: 0 1px 2px rgba(2, 6, 23, 0.28);
   --shadow-sm: 0 1px 3px rgba(2, 6, 23, 0.34), 0 6px 16px -4px rgba(2, 6, 23, 0.42);
@@ -4467,14 +4522,15 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
 .staff-unit-pill {
   display: inline-flex;
   align-items: center;
-  padding: 0.22rem 0.62rem;
+  padding: 0.18rem 0.6rem;
   border-radius: 999px;
   font-size: 0.75rem;
   font-weight: 640;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.008em;
+  line-height: 1.25;
   background: var(--surface-tint);
-  color: var(--brand);
-  border: 1px solid rgba(13, 110, 87, 0.18);
+  color: var(--brand-text);
+  border: 1px solid var(--brand-border);
   white-space: nowrap;
 }
 
@@ -4593,12 +4649,12 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
 .review-sample-tag {
   display: inline-flex;
   align-items: center;
-  padding: 0.16rem 0.52rem;
+  padding: 0.16rem 0.54rem;
   border-radius: 999px;
-  font-size: 0.71rem;
-  font-weight: 660;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
+  font-size: 0.73rem;
+  font-weight: 640;
+  letter-spacing: 0.008em;
+  line-height: 1.25;
   background: var(--bg-subtle);
   color: var(--ink-secondary);
   border: 1px solid var(--line-strong);
@@ -4985,7 +5041,7 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   gap: 0.55rem;
   padding: 1rem;
   background: var(--surface-tint);
-  color: var(--brand);
+  color: var(--brand-text);
   text-align: center;
 }
 
