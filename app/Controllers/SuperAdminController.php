@@ -150,9 +150,8 @@ final class SuperAdminController extends Controller
             'activeTab' => 'system-admins',
             'sysadmins' => $this->fetchSystemAdmins(),
             'units' => Units::all(),
-            'positionsByUnit' => AdminAccountService::allPositionsByUnit(true),
             'errors' => [],
-            'old' => ['position' => 'System Administrator'],
+            'old' => [],
         ]);
     }
 
@@ -168,8 +167,8 @@ final class SuperAdminController extends Controller
             'email' => $this->post('email'),
             'username' => $this->post('username'),
             'business_unit_id' => (int)$this->post('business_unit_id'),
-            'position' => $this->post('position', 'System Administrator'),
             'roles' => ['SYSTEM_ADMINISTRATOR'],
+            'is_system_admin_provisioning' => true,
             'password' => $_POST['password'] ?? '',
             'phone' => $this->post('phone'),
         ];
@@ -183,7 +182,6 @@ final class SuperAdminController extends Controller
                 'activeTab' => 'system-admins',
                 'sysadmins' => $this->fetchSystemAdmins(),
                 'units' => Units::all(),
-                'positionsByUnit' => AdminAccountService::allPositionsByUnit(true),
                 'errors' => $res['errors'],
                 'old' => $input,
             ]);
@@ -198,9 +196,7 @@ final class SuperAdminController extends Controller
     {
         $this->requireSuperAdmin();
         $filterUnit = isset($_GET['unit_id']) && ctype_digit((string)$_GET['unit_id']) ? (int)$_GET['unit_id'] : null;
-        $roles = $this->db->query(
-            "SELECT role_id, role_name, description FROM role WHERE role_name <> 'SUPER_ADMINISTRATOR' ORDER BY role_id"
-        )->fetchAll();
+        $roles = $this->fetchAssignableEmployeeRoles();
 
         $this->render('super_admin/employees', [
             'title' => 'Employee Accounts · Super Administrator',
@@ -241,9 +237,7 @@ final class SuperAdminController extends Controller
         $res = AdminAccountService::createEmployeeAccount($input, null, $actorId);
         if (!$res['ok']) {
             http_response_code(422);
-            $roles = $this->db->query(
-                "SELECT role_id, role_name, description FROM role WHERE role_name <> 'SUPER_ADMINISTRATOR' ORDER BY role_id"
-            )->fetchAll();
+            $roles = $this->fetchAssignableEmployeeRoles();
             Session::flash('error', 'Could not create employee account. Please fix the errors below.');
             $this->render('super_admin/employees', [
                 'title' => 'Employee Accounts · Super Administrator',
@@ -261,6 +255,16 @@ final class SuperAdminController extends Controller
 
         Session::flash('success', 'Employee account created and assigned.');
         $this->redirect('/super-admin/employees');
+    }
+
+    private function fetchAssignableEmployeeRoles(): array
+    {
+        return $this->db->query(
+            "SELECT role_id, role_name, description
+             FROM role
+             WHERE role_name NOT IN ('SUPER_ADMINISTRATOR', 'VETERINARY_TECHNICIAN_WORKSPACE', 'VETERINARIAN', 'NURSE', 'TECHNICIAN')
+             ORDER BY role_id"
+        )->fetchAll();
     }
 
     public function updateAccountStatus(int $userId): void

@@ -33,9 +33,6 @@ $businessUnitCards = [
 <section class="hero-card home-hero-split" data-scene="hero" id="home-hero">
   <div class="home-hero-copy">
     <h1 class="home-hero-title">Care, grooming, and everyday supplies for every stage of your pet&rsquo;s life.</h1>
-    <p class="home-hero-lead">
-      PawCariño connects pet owners with our Veterinary Clinic, Grooming Services studio, and Pet Store in one place.
-    </p>
     <div class="home-hero-actions">
       <a class="btn home-cta-get-started" href="/login">Get Started</a>
     </div>

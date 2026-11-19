@@ -11,8 +11,6 @@
     </div>
     <?php if ($signedIn): ?>
       <a class="btn" href="/appointments/new">Request Grooming Appointment</a>
-    <?php else: ?>
-      <a class="btn" href="/login">Sign in to Book Grooming</a>
     <?php endif; ?>
   </div>
 </div>

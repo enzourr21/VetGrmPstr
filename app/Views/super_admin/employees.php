@@ -52,7 +52,7 @@
               <?php endif; ?>
             </td>
             <td><?= e($emp['position']) ?></td>
-            <td><code><?= e($emp['roles'] ?: ((bool)$emp['is_super_admin'] ? 'SUPER_ADMINISTRATOR' : 'None')) ?></code></td>
+            <td><code><?= e(str_replace('_', ' ', (string)($emp['roles'] ?: ((bool)$emp['is_super_admin'] ? 'SUPER_ADMINISTRATOR' : 'None')))) ?></code></td>
             <td>
               <span class="status <?= $emp['account_status'] === 'active' ? 'ok' : ($emp['account_status'] === 'suspended' ? 'err' : 'warn') ?>">
                 <?= e(ucfirst($emp['account_status'])) ?>
@@ -92,6 +92,18 @@
       <div class="flash flash-error" role="alert"><?= e($errors['general']) ?></div>
     <?php endif; ?>
 
+    <?php
+    $selectedUnitId = (int)($old['business_unit_id'] ?? 0);
+    $hasSelectedUnit = $selectedUnitId > 0;
+    $selectedUnitName = '';
+    foreach ($units as $u) {
+        if ((int)$u['business_unit_id'] === $selectedUnitId) {
+            $selectedUnitName = (string)$u['business_unit_name'];
+            break;
+        }
+    }
+    $visibleRoleNames = array_column($assignableRoles, 'role_name');
+    ?>
     <form method="post" action="/super-admin/employees" novalidate data-unit-position-form>
       <?= \App\Core\CSRF::field() ?>
 
@@ -113,7 +125,7 @@
           <select id="emp_unit" name="business_unit_id" required data-unit-select>
             <option value="">Select business unit...</option>
             <?php foreach ($units as $u): ?>
-              <option value="<?= (int)$u['business_unit_id'] ?>" data-unit-name="<?= e($u['business_unit_name']) ?>" <?= (int)($old['business_unit_id'] ?? 0) === (int)$u['business_unit_id'] ? 'selected' : '' ?>>
+              <option value="<?= (int)$u['business_unit_id'] ?>" data-unit-name="<?= e($u['business_unit_name']) ?>" <?= $selectedUnitId === (int)$u['business_unit_id'] ? 'selected' : '' ?>>
                 <?= e($u['business_unit_name']) ?>
               </option>
             <?php endforeach; ?>
@@ -123,11 +135,24 @@
 
         <div class="field">
           <label for="emp_position">4. Default position</label>
-          <select id="emp_position" name="position" required data-position-select>
-            <option value="">Select default position...</option>
-            <?php foreach ($positionsByUnit as $p): ?>
-              <option value="<?= e($p['position_name']) ?>" data-unit-id="<?= (int)$p['business_unit_id'] ?>" <?= ($old['position'] ?? '') === $p['position_name'] ? 'selected' : '' ?>>
-                <?= e($p['business_unit_name'] . ' — ' . $p['position_name']) ?>
+          <select id="emp_position" name="position" required data-position-select<?= !$hasSelectedUnit ? ' disabled' : '' ?>>
+            <option value=""><?= $hasSelectedUnit ? 'Select default position...' : 'Select business unit first...' ?></option>
+            <?php foreach ($positionsByUnit as $p):
+              $posUnitId = (int)$p['business_unit_id'];
+              $posName = (string)$p['position_name'];
+              $isSelectedPos = $hasSelectedUnit && $selectedUnitId === $posUnitId && ($old['position'] ?? '') === $posName;
+              $mappedRoles = \App\Models\AdminAccountService::POSITION_INITIAL_ROLE_MAP[$posName] ?? [];
+              $mappedRoles = is_array($mappedRoles) ? $mappedRoles : [$mappedRoles];
+              $resolvedDefaultRoles = [];
+              foreach ($mappedRoles as $mr) {
+                  if (in_array($mr, $visibleRoleNames, true)) {
+                      $resolvedDefaultRoles[] = $mr;
+                  }
+              }
+              $resolvedDefaultRoles = array_values(array_unique($resolvedDefaultRoles));
+            ?>
+              <option value="<?= e($posName) ?>" data-unit-id="<?= $posUnitId ?>" data-default-roles="<?= e(implode(',', $resolvedDefaultRoles)) ?>" <?= $isSelectedPos ? 'selected' : '' ?>>
+                <?= e($posName) ?>
               </option>
             <?php endforeach; ?>
           </select>
@@ -150,20 +175,30 @@
         </div>
       </div>
 
-      <fieldset class="petblock" style="margin-top: 1.15rem;">
+      <fieldset class="petblock" style="margin-top: 1.15rem;" data-roles-fieldset>
         <legend><strong>5. System role or roles</strong> <span class="caption">(Scoped to selected business unit)</span></legend>
         <div class="grid-3">
           <?php
           $oldRoles = (array)($old['roles'] ?? []);
           foreach ($assignableRoles as $r):
-            $isClinical = in_array($r['role_name'], \App\Models\AdminAccountService::CLINICAL_ROLES, true);
-            $checked = in_array($r['role_name'], $oldRoles, true) || in_array((string)$r['role_id'], $oldRoles, true);
+            $roleName = (string)$r['role_name'];
+            $roleLabel = str_replace('_', ' ', $roleName);
+            $isClinical = in_array($roleName, \App\Models\AdminAccountService::CLINICAL_ROLES, true);
+            $isPetStoreOnly = in_array($roleName, \App\Models\AdminAccountService::PET_STORE_ROLES, true);
+            $isGroomingOnly = in_array($roleName, \App\Models\AdminAccountService::GROOMING_WORKSPACE_ROLES, true);
+            $requiredUnit = $isClinical
+                ? \App\Models\Units::VET_CLINIC
+                : ($isPetStoreOnly
+                    ? \App\Models\Units::PET_STORE
+                    : ($isGroomingOnly ? \App\Models\Units::GROOMING : ''));
+            $isDisabled = !$hasSelectedUnit || ($requiredUnit !== '' && $selectedUnitName !== $requiredUnit);
+            $checked = !$isDisabled && (in_array($roleName, $oldRoles, true) || in_array((string)$r['role_id'], $oldRoles, true));
           ?>
-            <label class="check" <?= $isClinical ? 'data-clinical-role="1"' : '' ?>>
-              <input type="checkbox" name="roles[]" value="<?= e($r['role_name']) ?>" <?= $checked ? 'checked' : '' ?>>
+            <label class="check<?= $isDisabled ? ' is-disabled' : '' ?>"<?= $isDisabled ? ' aria-disabled="true"' : '' ?><?= $requiredUnit !== '' ? ' data-role-unit="' . e($requiredUnit) . '"' : '' ?><?= $isClinical ? ' data-clinical-role="1"' : '' ?>>
+              <input type="checkbox" name="roles[]" value="<?= e($roleName) ?>" <?= $checked ? 'checked' : '' ?> <?= $isDisabled ? 'disabled' : '' ?>>
               <span>
-                <strong><?= e($r['role_name']) ?></strong>
-                <?php if ($isClinical): ?><span class="caption" style="display:block;color:var(--brand)">(Veterinary Clinic only)</span><?php endif; ?>
+                <strong><?= e($roleLabel) ?></strong>
+                <?php if ($requiredUnit !== ''): ?><span class="caption" style="display:block;color:var(--brand)">(<?= e($requiredUnit) ?> only)</span><?php endif; ?>
                 <span class="caption" style="display:block"><?= e($r['description']) ?></span>
               </span>
             </label>

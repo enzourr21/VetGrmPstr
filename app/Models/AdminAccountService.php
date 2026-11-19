@@ -39,12 +39,17 @@ final class AdminAccountService
     public const POSITION_INITIAL_ROLE_MAP = [
         // Pet Store
         'System Administrator' => 'SYSTEM_ADMINISTRATOR',
+        'Pet Store System Administrator' => 'SYSTEM_ADMINISTRATOR',
+        'Veterinary Clinic System Administrator' => 'SYSTEM_ADMINISTRATOR',
+        'Grooming Services System Administrator' => 'SYSTEM_ADMINISTRATOR',
         'Business Manager — Pet Store' => 'BUSINESS_MANAGER',
         'Inventory Manager' => 'INVENTORY_MANAGER',
         'Receptionist' => 'RECEPTIONIST',
+        'Delivery Personnel' => 'DELIVERY_PERSONNEL',
         // Veterinary Clinic
         'Veterinarian (DVM)' => 'VETERINARIAN_WORKSPACE',
         'Veterinary Nurse' => 'VETERINARY_NURSE_WORKSPACE',
+        'Assistant Nurse' => 'VETERINARY_NURSE_WORKSPACE',
         'Veterinary Technician' => 'VETERINARY_TECHNICIAN_WORKSPACE',
         'Veterinary Receptionist' => 'RECEPTIONIST',
         'Lead Veterinarian' => 'VETERINARIAN_WORKSPACE',
@@ -58,6 +63,27 @@ final class AdminAccountService
         'Bather' => 'BATHER_WORKSPACE',
         'Master Stylist' => ['STYLIST_WORKSPACE', 'BATHER_WORKSPACE'],
     ];
+
+    public static function systemAdminPositionForUnit(string $unitName): string
+    {
+        return match ($unitName) {
+            Units::PET_STORE => 'Pet Store System Administrator',
+            Units::VET_CLINIC => 'Veterinary Clinic System Administrator',
+            Units::GROOMING => 'Grooming Services System Administrator',
+            default => trim($unitName) !== '' ? trim($unitName) . ' System Administrator' : 'System Administrator',
+        };
+    }
+
+    public static function isValidEmail(string $email): bool
+    {
+        if ($email === '' || strlen($email) > 255) {
+            return false;
+        }
+        if (filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
+            return false;
+        }
+        return preg_match('/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i', $email) === 1;
+    }
 
     public static function normalizeRoleName(string $role): string
     {
@@ -253,7 +279,7 @@ final class AdminAccountService
 
         // 2. Email validation & uniqueness
         $email = strtolower(trim((string)($input['email'] ?? '')));
-        if ($email === '' || strlen($email) > 255 || filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
+        if (!self::isValidEmail($email)) {
             $errors['email'] = 'Enter a valid email address (for example, name@vetgrpet.local).';
         } else {
             $chk = $db->prepare('SELECT user_account_id FROM user_account WHERE email = ?');
@@ -289,35 +315,46 @@ final class AdminAccountService
         }
 
         // 5. Default position validation against the assigned business unit
-        $position = trim((string)($input['position'] ?? ''));
-        if ($position === '' || mb_strlen($position) > 100) {
-            $errors['position'] = 'Select a valid default position for the assigned business unit.';
-        } elseif ($unit) {
-            $posChk = $db->prepare(
-                'SELECT position_name FROM business_position WHERE business_unit_id = ? AND position_name = ? AND position_status = "active"'
-            );
-            $posChk->execute([$unit['business_unit_id'], $position]);
-            $matchedPos = $posChk->fetchColumn();
-            if (!$matchedPos) {
-                $errors['position'] = "The position '$position' is not an active position in {$unit['business_unit_name']}.";
-            } else {
-                $position = (string)$matchedPos;
+        $isSysAdminProvisioning = !empty($input['is_system_admin_provisioning']);
+        if ($isSysAdminProvisioning) {
+            // Authoritatively derive position from the validated business unit (never trust client-submitted position)
+            $position = $unit ? self::systemAdminPositionForUnit((string)$unit['business_unit_name']) : '';
+        } else {
+            $position = trim((string)($input['position'] ?? ''));
+            if ($position === '' || mb_strlen($position) > 100) {
+                $errors['position'] = 'Select a valid default position for the assigned business unit.';
+            } elseif ($unit) {
+                $posChk = $db->prepare(
+                    'SELECT position_name FROM business_position WHERE business_unit_id = ? AND position_name = ? AND position_status = "active"'
+                );
+                $posChk->execute([$unit['business_unit_id'], $position]);
+                $matchedPos = $posChk->fetchColumn();
+                if (!$matchedPos) {
+                    $errors['position'] = "The position '$position' is not an active position in {$unit['business_unit_name']}.";
+                } else {
+                    $position = (string)$matchedPos;
+                }
             }
         }
 
         // 6. System roles validation against business unit & non-Super-Admin rule
-        $rawRoles = $input['roles'] ?? ($input['role_ids'] ?? []);
-        if (!is_array($rawRoles)) {
-            $rawRoles = $rawRoles !== '' && $rawRoles !== null ? [$rawRoles] : [];
-        }
-        $rawRoles = array_values(array_unique(array_filter(array_map(fn($v) => trim((string)$v), $rawRoles), fn($v) => $v !== '')));
+        if ($isSysAdminProvisioning) {
+            // System Administrator provisioning always assigns SYSTEM_ADMINISTRATOR scoped to the selected business unit
+            $rawRoles = ['SYSTEM_ADMINISTRATOR'];
+        } else {
+            $rawRoles = $input['roles'] ?? ($input['role_ids'] ?? []);
+            if (!is_array($rawRoles)) {
+                $rawRoles = $rawRoles !== '' && $rawRoles !== null ? [$rawRoles] : [];
+            }
+            $rawRoles = array_values(array_unique(array_filter(array_map(fn($v) => trim((string)$v), $rawRoles), fn($v) => $v !== '')));
 
-        // Automatic initial system role assignment during employee creation
-        if ($position !== '' && $unit) {
-            $initRoles = self::initialRolesForPosition($position, $unit['business_unit_name']);
-            foreach (array_reverse($initRoles) as $initRole) {
-                if (!in_array($initRole, $rawRoles, true)) {
-                    array_unshift($rawRoles, $initRole);
+            // Automatic initial system role assignment during employee creation
+            if ($position !== '' && $unit) {
+                $initRoles = self::initialRolesForPosition($position, $unit['business_unit_name']);
+                foreach (array_reverse($initRoles) as $initRole) {
+                    if (!in_array($initRole, $rawRoles, true)) {
+                        array_unshift($rawRoles, $initRole);
+                    }
                 }
             }
         }

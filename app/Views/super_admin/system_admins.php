@@ -78,9 +78,19 @@
       <div class="flash flash-error" role="alert"><?= e($errors['general']) ?></div>
     <?php endif; ?>
 
-    <form method="post" action="/super-admin/system-admins" novalidate data-unit-position-form>
+    <?php
+      $selectedUnitId = (int)($old['business_unit_id'] ?? 0);
+      $derivedPosition = '';
+      foreach ($units as $u) {
+          if ((int)$u['business_unit_id'] === $selectedUnitId) {
+              $derivedPosition = \App\Models\AdminAccountService::systemAdminPositionForUnit((string)$u['business_unit_name']);
+              break;
+          }
+      }
+      $positionPlaceholder = 'Select a business unit to assign position';
+    ?>
+    <form method="post" action="/super-admin/system-admins" novalidate data-sysadmin-provision-form>
       <?= \App\Core\CSRF::field() ?>
-      <input type="hidden" name="roles[]" value="SYSTEM_ADMINISTRATOR">
 
       <div class="form-grid-2">
         <div class="field">
@@ -91,16 +101,18 @@
 
         <div class="field">
           <label for="sa_email">2. Email address <span class="label-optional">(Used for Admin Sign-In)</span></label>
-          <input id="sa_email" name="email" type="email" required placeholder="sysadmin.unit@vetgrpet.local" value="<?= e($old['email'] ?? '') ?>">
-          <?php if (isset($errors['email'])): ?><div class="field-error"><?= e($errors['email']) ?></div><?php endif; ?>
+          <input id="sa_email" name="email" type="email" autocomplete="email" required placeholder="sysadmin.unit@vetgrpet.local" aria-describedby="sa_email_error" aria-invalid="<?= isset($errors['email']) ? 'true' : 'false' ?>" value="<?= e($old['email'] ?? '') ?>">
+          <div class="field-error" id="sa_email_error" data-sa-email-error <?= isset($errors['email']) ? '' : 'hidden' ?>><?= e($errors['email'] ?? '') ?></div>
         </div>
 
         <div class="field">
           <label for="sa_unit">3. Assigned business unit</label>
-          <select id="sa_unit" name="business_unit_id" required data-unit-select>
-            <option value="">Select business unit...</option>
-            <?php foreach ($units as $u): ?>
-              <option value="<?= (int)$u['business_unit_id'] ?>" <?= (int)($old['business_unit_id'] ?? 0) === (int)$u['business_unit_id'] ? 'selected' : '' ?>>
+          <select id="sa_unit" name="business_unit_id" required data-sysadmin-unit-select>
+            <option value="" data-sysadmin-position="">Select business unit...</option>
+            <?php foreach ($units as $u):
+              $unitPosition = \App\Models\AdminAccountService::systemAdminPositionForUnit((string)$u['business_unit_name']);
+            ?>
+              <option value="<?= (int)$u['business_unit_id'] ?>" data-sysadmin-position="<?= e($unitPosition) ?>" <?= $selectedUnitId === (int)$u['business_unit_id'] ? 'selected' : '' ?>>
                 <?= e($u['business_unit_name']) ?>
               </option>
             <?php endforeach; ?>
@@ -109,31 +121,19 @@
         </div>
 
         <div class="field">
-          <label for="sa_position">4. Default position</label>
-          <select id="sa_position" name="position" required data-position-select>
-            <option value="System Administrator" selected>System Administrator</option>
-            <?php foreach ($positionsByUnit as $p): ?>
-              <option value="<?= e($p['position_name']) ?>" data-unit-id="<?= (int)$p['business_unit_id'] ?>" <?= ($old['position'] ?? '') === $p['position_name'] ? 'selected' : '' ?>>
-                <?= e($p['business_unit_name'] . ' — ' . $p['position_name']) ?>
-              </option>
-            <?php endforeach; ?>
-          </select>
-          <?php if (isset($errors['position'])): ?><div class="field-error"><?= e($errors['position']) ?></div><?php endif; ?>
+          <label id="sa_position_label">4. Default position</label>
+          <div
+            id="sa_position_display"
+            class="readonly-display-field <?= $derivedPosition === '' ? 'is-placeholder' : '' ?>"
+            aria-labelledby="sa_position_label"
+            aria-live="polite"
+            data-sysadmin-position-display
+            data-placeholder="<?= e($positionPlaceholder) ?>"
+          ><?= e($derivedPosition !== '' ? $derivedPosition : $positionPlaceholder) ?></div>
         </div>
 
         <div class="field">
-          <label for="sa_role_display">5. System role</label>
-          <input id="sa_role_display" type="text" readonly value="SYSTEM_ADMINISTRATOR (Scoped to Selected Business Unit)">
-        </div>
-
-        <div class="field">
-          <label for="sa_username">Username <span class="label-optional">(Optional · Customer-Only Login)</span></label>
-          <input id="sa_username" name="username" type="text" placeholder="e.g. sysadmin_store" value="<?= e($old['username'] ?? '') ?>">
-          <?php if (isset($errors['username'])): ?><div class="field-error"><?= e($errors['username']) ?></div><?php endif; ?>
-        </div>
-
-        <div class="field">
-          <label for="sa_password">6. Initial password <span class="label-optional">(Min 10 characters)</span></label>
+          <label for="sa_password">5. Initial password <span class="label-optional">(Min 10 characters)</span></label>
           <div class="password-input-wrap">
             <input id="sa_password" name="password" type="password" required minlength="10" autocomplete="new-password" placeholder="At least 10 characters">
             <button type="button" class="password-toggle-btn" data-pw-toggle="sa_password" aria-label="Show password" aria-pressed="false"><svg class="icon-eye" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg><svg class="icon-eye-off" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.4 10.4 0 0 1 12 19c-6.5 0-10-7-10-7a18.6 18.6 0 0 1 4.06-5.06"/><path d="M9.9 5.24A9.7 9.7 0 0 1 12 5c6.5 0 10 7 10 7a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="2" y1="2" x2="22" y2="22"/></svg></button>

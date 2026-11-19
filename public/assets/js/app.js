@@ -180,7 +180,6 @@
     var regNameError = regForm.querySelector('[data-reg-name-error]');
     var step1Actions = regForm.querySelector('[data-reg-step1-actions]');
     var unlock2Btn = regForm.querySelector('[data-reg-unlock-2]');
-    var step1Badge = regForm.querySelector('[data-stage1-done]');
 
     // Step 2: Additional Details
     var stage2 = regForm.querySelector('#reg-stage-2');
@@ -193,7 +192,6 @@
     var regPostalError = regForm.querySelector('[data-reg-postal-error]');
     var step2Actions = regForm.querySelector('[data-reg-step2-actions]');
     var unlock3Btn = regForm.querySelector('[data-reg-unlock-3]');
-    var step2Badge = regForm.querySelector('[data-stage2-done]');
 
     // Step 3: Set and Verify Email
     var stage3 = regForm.querySelector('#reg-stage-3');
@@ -206,7 +204,6 @@
     var otpFeedback = regForm.querySelector('[data-otp-feedback]');
     var step3Actions = regForm.querySelector('[data-reg-step3-actions]');
     var unlock4Btn = regForm.querySelector('[data-reg-unlock-4]');
-    var step3Badge = regForm.querySelector('[data-stage3-done]');
 
     // Step 4: Set Password
     var stage4 = regForm.querySelector('#reg-stage-4');
@@ -348,7 +345,6 @@
 
     function unlockStep4Ui() {
       if (step3Actions) step3Actions.setAttribute('hidden', 'hidden');
-      if (step3Badge) animateStageIn(step3Badge);
       syncMobileRegisterStages(4);
       animateStageIn(stage4, '#password');
       updateStepTracker(regCard, 4);
@@ -393,7 +389,6 @@
       }
       if (regNameError) regNameError.setAttribute('hidden', 'hidden');
       if (step1Actions) step1Actions.setAttribute('hidden', 'hidden');
-      if (step1Badge) animateStageIn(step1Badge);
       syncMobileRegisterStages(2);
       animateStageIn(stage2, '#phone');
       updateStepTracker(regCard, 2);
@@ -416,7 +411,6 @@
       if (regPhoneError) regPhoneError.setAttribute('hidden', 'hidden');
       if (regPostalError) regPostalError.setAttribute('hidden', 'hidden');
       if (step2Actions) step2Actions.setAttribute('hidden', 'hidden');
-      if (step2Badge) animateStageIn(step2Badge);
       syncMobileRegisterStages(3);
       animateStageIn(stage3, '#email');
       updateStepTracker(regCard, 3);
@@ -724,9 +718,9 @@
           stopResendCooldown();
           clearOtpBoxes();
           if (otpSection) otpSection.setAttribute('hidden', 'hidden');
-          if (step3Badge) step3Badge.setAttribute('hidden', 'hidden');
           if (stage4) stage4.setAttribute('hidden', 'hidden');
           if (step3Actions) step3Actions.removeAttribute('hidden');
+          syncMobileRegisterStages(3);
           updateStepTracker(regCard, 3);
         }
       });
@@ -1072,36 +1066,217 @@
   document.querySelectorAll('[data-unit-position-form]').forEach(function (form) {
     var unitSelect = form.querySelector('[data-unit-select]');
     var posSelect = form.querySelector('[data-position-select]');
-    var clinicalCards = form.querySelectorAll('[data-clinical-role="1"]');
+    var roleCheckboxes = form.querySelectorAll('input[type="checkbox"][name="roles[]"]');
     if (!unitSelect || !posSelect) return;
 
-    function syncUnitOptions() {
-      var selectedUnit = unitSelect.value;
-      var optgroups = posSelect.querySelectorAll('optgroup[data-unit-group]');
-      optgroups.forEach(function (og) {
-        var groupUnit = og.getAttribute('data-unit-group');
-        var match = !selectedUnit || groupUnit === selectedUnit;
-        og.disabled = !match;
-        og.hidden = !match;
+    var positionCatalog = [];
+    Array.prototype.forEach.call(posSelect.querySelectorAll('option[data-unit-id]'), function (opt) {
+      positionCatalog.push({
+        value: opt.value,
+        text: (opt.textContent || '').trim(),
+        unitId: (opt.getAttribute('data-unit-id') || '').trim(),
+        defaultRoles: (opt.getAttribute('data-default-roles') || '').trim()
       });
-      var currentOpt = posSelect.options[posSelect.selectedIndex];
-      if (currentOpt && currentOpt.parentElement && currentOpt.parentElement.tagName === 'OPTGROUP') {
-        if (currentOpt.parentElement.disabled) {
-          posSelect.value = '';
-        }
-      }
-      clinicalCards.forEach(function (card) {
-        var isVet = !selectedUnit || selectedUnit === '2';
-        card.style.opacity = isVet ? '1' : '0.45';
-        var cb = card.querySelector('input[type="checkbox"]');
-        if (cb && !isVet) {
+    });
+    var initialPosValue = posSelect.value || '';
+    var autoCheckedByPosition = {};
+
+    roleCheckboxes.forEach(function (cb) {
+      cb.addEventListener('change', function () {
+        delete autoCheckedByPosition[cb.value];
+      });
+    });
+
+    function syncPositionRoles() {
+      roleCheckboxes.forEach(function (cb) {
+        if (autoCheckedByPosition[cb.value]) {
           cb.checked = false;
+          delete autoCheckedByPosition[cb.value];
+        }
+      });
+
+      var selectedPosOpt = posSelect.options[posSelect.selectedIndex];
+      var rawRoles = selectedPosOpt ? (selectedPosOpt.getAttribute('data-default-roles') || '').trim() : '';
+      if (!rawRoles) return;
+
+      var targetRoles = rawRoles.split(',').map(function (r) { return r.trim(); }).filter(Boolean);
+      roleCheckboxes.forEach(function (cb) {
+        if (!cb.disabled && targetRoles.indexOf(cb.value) !== -1) {
+          if (!cb.checked) {
+            cb.checked = true;
+            autoCheckedByPosition[cb.value] = true;
+          }
         }
       });
     }
 
+    function syncUnitOptions() {
+      var selectedUnit = (unitSelect.value || '').trim();
+      var hasUnit = selectedUnit !== '';
+
+      if (positionCatalog.length > 0) {
+        var prevValue = posSelect.value || initialPosValue;
+        initialPosValue = '';
+        posSelect.innerHTML = '';
+
+        var placeholderOpt = document.createElement('option');
+        placeholderOpt.value = '';
+        placeholderOpt.textContent = hasUnit ? 'Select default position...' : 'Select business unit first...';
+        posSelect.appendChild(placeholderOpt);
+
+        if (!hasUnit) {
+          posSelect.disabled = true;
+          posSelect.value = '';
+        } else {
+          posSelect.disabled = false;
+          var matchedPrev = false;
+          positionCatalog.forEach(function (item) {
+            if (item.unitId !== selectedUnit) return;
+            var opt = document.createElement('option');
+            opt.value = item.value;
+            opt.textContent = item.text;
+            opt.setAttribute('data-unit-id', item.unitId);
+            if (item.defaultRoles !== '') {
+              opt.setAttribute('data-default-roles', item.defaultRoles);
+            }
+            if (prevValue !== '' && item.value === prevValue) {
+              opt.selected = true;
+              matchedPrev = true;
+            }
+            posSelect.appendChild(opt);
+          });
+          if (!matchedPrev) {
+            posSelect.value = '';
+          }
+        }
+      } else {
+        var optgroups = posSelect.querySelectorAll('optgroup[data-unit-group]');
+        optgroups.forEach(function (og) {
+          var groupUnit = og.getAttribute('data-unit-group');
+          var match = !hasUnit || groupUnit === selectedUnit;
+          og.disabled = !match;
+          og.hidden = !match;
+        });
+        var currentOpt = posSelect.options[posSelect.selectedIndex];
+        if (currentOpt && currentOpt.parentElement && currentOpt.parentElement.tagName === 'OPTGROUP') {
+          if (currentOpt.parentElement.disabled) {
+            posSelect.value = '';
+          }
+        }
+      }
+
+      var selectedUnitOpt = unitSelect.options[unitSelect.selectedIndex];
+      var selectedUnitName = selectedUnitOpt ? (selectedUnitOpt.getAttribute('data-unit-name') || '').trim() : '';
+      var isVet = selectedUnitName === 'Veterinary Clinic' || (selectedUnitName === '' && selectedUnit === '2');
+
+      roleCheckboxes.forEach(function (cb) {
+        var label = cb.closest('label.check');
+        var requiredUnit = label ? (label.getAttribute('data-role-unit') || '').trim() : '';
+        var isClinical = label && label.getAttribute('data-clinical-role') === '1';
+        var unitAllowed = true;
+        if (requiredUnit !== '') {
+          unitAllowed = selectedUnitName !== '' && selectedUnitName === requiredUnit;
+        } else if (isClinical) {
+          unitAllowed = isVet;
+        }
+        var shouldDisable = !hasUnit || !unitAllowed;
+        cb.disabled = shouldDisable;
+        if (shouldDisable) {
+          cb.checked = false;
+          delete autoCheckedByPosition[cb.value];
+        }
+        if (label) {
+          label.classList.toggle('is-disabled', shouldDisable);
+          if (shouldDisable) {
+            label.setAttribute('aria-disabled', 'true');
+          } else {
+            label.removeAttribute('aria-disabled');
+          }
+          label.style.opacity = '';
+        }
+      });
+
+      syncPositionRoles();
+    }
+
     unitSelect.addEventListener('change', syncUnitOptions);
+    posSelect.addEventListener('change', syncPositionRoles);
+    window.addEventListener('pageshow', syncUnitOptions);
     syncUnitOptions();
+  });
+
+  // ---- System Administrator Provisioning Form: Auto-Derived Position & Email Validation ---
+  document.querySelectorAll('[data-sysadmin-provision-form]').forEach(function (form) {
+    var unitSelect = form.querySelector('[data-sysadmin-unit-select]');
+    var posDisplay = form.querySelector('[data-sysadmin-position-display]');
+    var emailInput = form.querySelector('#sa_email');
+    var emailError = form.querySelector('[data-sa-email-error]');
+    var strictEmailPattern = /^[^\s@]+@[^\s@]+\.[a-zA-Z]{2,}$/;
+
+    function syncDerivedPosition() {
+      if (!unitSelect || !posDisplay) return;
+      var selectedOpt = unitSelect.options[unitSelect.selectedIndex];
+      var posText = selectedOpt ? (selectedOpt.getAttribute('data-sysadmin-position') || '').trim() : '';
+      var placeholder = posDisplay.getAttribute('data-placeholder') || 'Select a business unit to assign position';
+      if (posText !== '') {
+        posDisplay.textContent = posText;
+        posDisplay.classList.remove('is-placeholder');
+      } else {
+        posDisplay.textContent = placeholder;
+        posDisplay.classList.add('is-placeholder');
+      }
+    }
+
+    function validateSysAdminEmail(showEmptyError) {
+      if (!emailInput || !emailError) return true;
+      var val = (emailInput.value || '').trim();
+      if (val === '') {
+        if (!showEmptyError) {
+          emailError.setAttribute('hidden', 'hidden');
+          emailError.textContent = '';
+          emailInput.setAttribute('aria-invalid', 'false');
+          return true;
+        }
+        emailInput.setAttribute('aria-invalid', 'true');
+        showErrorSmooth(emailError, 'Enter a valid email address (for example, name@vetgrpet.local).');
+        return false;
+      }
+      if (val.length > 255 || !strictEmailPattern.test(val)) {
+        emailInput.setAttribute('aria-invalid', 'true');
+        showErrorSmooth(emailError, 'Enter a valid email address (for example, name@vetgrpet.local).');
+        return false;
+      }
+      emailError.setAttribute('hidden', 'hidden');
+      emailError.textContent = '';
+      emailInput.setAttribute('aria-invalid', 'false');
+      return true;
+    }
+
+    if (unitSelect && posDisplay) {
+      unitSelect.addEventListener('change', syncDerivedPosition);
+      window.addEventListener('pageshow', syncDerivedPosition);
+      syncDerivedPosition();
+    }
+
+    if (emailInput && emailError) {
+      var emailTouched = !emailError.hasAttribute('hidden') && (emailError.textContent || '').trim() !== '';
+      emailInput.addEventListener('blur', function () {
+        emailTouched = true;
+        validateSysAdminEmail(false);
+      });
+      emailInput.addEventListener('input', function () {
+        if (emailTouched || emailInput.getAttribute('aria-invalid') === 'true') {
+          validateSysAdminEmail(false);
+        }
+      });
+      form.addEventListener('submit', function (ev) {
+        emailTouched = true;
+        if (!validateSysAdminEmail(true)) {
+          ev.preventDefault();
+          emailInput.focus();
+        }
+      });
+    }
   });
 
   // ---- Confirmation Guard for Sensitive Admin Actions ------------------

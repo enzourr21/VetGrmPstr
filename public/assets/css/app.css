@@ -1043,6 +1043,28 @@ input[readonly] {
   color: var(--ink-secondary);
 }
 
+.readonly-display-field {
+  width: 100%;
+  min-height: 2.85rem;
+  padding: 0.45rem 0.85rem;
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  color: var(--ink);
+  font-size: 0.95rem;
+  font-weight: 560;
+  line-height: 1.4;
+  cursor: default;
+  user-select: text;
+}
+
+.readonly-display-field.is-placeholder {
+  color: var(--muted);
+  font-weight: 450;
+}
+
 input[type=number].qty {
   width: 5.25rem;
   text-align: center;
@@ -1415,8 +1437,22 @@ input[type=number].qty {
   transition: border-color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out), transform var(--dur-press) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
 }
 
-.check:active {
+.check:not(.is-disabled):not(:has(input:disabled)):active {
   transform: scale(0.99);
+}
+
+.check.is-disabled,
+.check:has(input:disabled) {
+  opacity: 0.5;
+  background: var(--bg-subtle);
+  cursor: not-allowed;
+  user-select: none;
+}
+
+.check.is-disabled input,
+.check input:disabled {
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 .check:has(input:checked) {
@@ -1614,7 +1650,7 @@ form.inline {
     background: var(--surface-subtle);
   }
 
-  .check:hover {
+  .check:not(.is-disabled):not(:has(input:disabled)):hover {
     border-color: var(--brand);
     background: var(--surface-tint);
   }
@@ -4466,7 +4502,7 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
 
 .services-controls .tabs {
   max-width: 100%;
-  overflow-x: auto;
+  overflow: visible;
 }
 
 .services-controls .tab-link {
@@ -5051,17 +5087,9 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   font-weight: 780;
   letter-spacing: -0.025em;
   line-height: 1.08;
-  margin: 0 0 0.85rem;
+  margin: 0 0 1.4rem;
   color: var(--ink);
   overflow-wrap: break-word;
-}
-
-.home-hero-lead {
-  font-size: 1.02rem;
-  line-height: 1.58;
-  color: var(--ink-secondary);
-  max-width: 48ch;
-  margin: 0 0 1.4rem;
 }
 
 .home-hero-actions {
@@ -5615,13 +5643,6 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
     order: 1;
     font-size: 1.65rem;
     line-height: 1.12;
-    margin: 0;
-  }
-
-  .home-hero-lead {
-    order: 2;
-    font-size: 0.95rem;
-    line-height: 1.54;
     margin: 0;
   }
 

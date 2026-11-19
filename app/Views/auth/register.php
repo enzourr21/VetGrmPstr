@@ -36,7 +36,6 @@ if (!empty($errors)) {
         <div class="progressive-stage-header">
           <span class="stage-label">Step 1 · Full Name</span>
           <span class="stage-header-meta">
-            <span class="status ok" data-stage1-done <?= $stage > 1 ? '' : 'hidden' ?>>Completed</span>
             <button type="button" class="stage-mobile-edit" data-stage-edit="1" aria-expanded="false" <?= $stage > 1 ? '' : 'hidden' ?>>Edit</button>
           </span>
         </div>
@@ -77,7 +76,6 @@ if (!empty($errors)) {
         <div class="progressive-stage-header">
           <span class="stage-label">Step 2 · Additional Details</span>
           <span class="stage-header-meta">
-            <span class="status ok" data-stage2-done <?= $stage > 2 ? '' : 'hidden' ?>>Completed</span>
             <button type="button" class="stage-mobile-edit" data-stage-edit="2" aria-expanded="false" <?= $stage > 2 ? '' : 'hidden' ?>>Edit</button>
           </span>
         </div>
@@ -135,7 +133,6 @@ if (!empty($errors)) {
         <div class="progressive-stage-header">
           <span class="stage-label">Step 3 · Set and Verify Email</span>
           <span class="stage-header-meta">
-            <span class="status ok" data-stage3-done <?= $stage > 3 ? '' : 'hidden' ?>>Completed</span>
             <button type="button" class="stage-mobile-edit" data-stage-edit="3" aria-expanded="false" <?= $stage > 3 ? '' : 'hidden' ?>>Edit</button>
           </span>
         </div>
