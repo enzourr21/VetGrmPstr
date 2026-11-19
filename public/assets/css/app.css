@@ -4466,7 +4466,7 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
 
 .services-controls .tabs {
   max-width: 100%;
-  overflow: visible;
+  overflow-x: auto;
 }
 
 .services-controls .tab-link {
@@ -5787,6 +5787,35 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   .auth-card {
     padding: 1.25rem 1.1rem;
     border-radius: 1.05rem;
+  }
+
+  /* Allow the 4-step sign-up form to scroll internally when a step exceeds the mobile viewport height */
+  .auth-card:has([data-progressive-register]) {
+    display: flex;
+    flex-direction: column;
+    max-height: max(24rem, calc(100dvh - 5.25rem));
+    overflow: hidden;
+  }
+
+  .auth-card:has([data-progressive-register]) > .step-tracker,
+  .auth-card:has([data-progressive-register]) > h1,
+  .auth-card:has([data-progressive-register]) > .auth-lead,
+  .auth-card:has([data-progressive-register]) > .auth-foot-link {
+    flex-shrink: 0;
+  }
+
+  .auth-card:has([data-progressive-register]) > form[data-progressive-register] {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    padding: 3px 3px 0.35rem;
+    margin: -3px -3px 0;
+  }
+
+  .auth-card:has([data-progressive-register]) .email-input-group .btn {
+    width: 100%;
   }
 
   .auth-card h1 {
