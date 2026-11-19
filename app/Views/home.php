@@ -160,93 +160,47 @@ $businessUnitCards = [
 
 <!-- Section 4: Why PawCariño? -->
 <section class="home-section home-why-section" id="home-why-pawcarino" aria-labelledby="home-why-heading">
-  <div class="section-header home-section-header">
-    <div>
-      <h2 id="home-why-heading">Why PawCariño?</h2>
+  <div class="home-why-panel">
+    <div class="home-why-intro">
+      <h2 id="home-why-heading" class="home-why-title">Why PawCariño?</h2>
+      <p class="home-why-lead">
+        One account connecting our Pet Store, Veterinary Clinic, and Grooming Services&mdash;so live stock, service rates, grooming requests, and pet profiles stay organized.
+      </p>
     </div>
-  </div>
 
-  <div class="home-why-bento">
-    <article class="card home-why-feature-lead">
-      <div class="home-why-lead-copy">
-        <div class="home-why-head">
-          <span class="home-why-icon" aria-hidden="true">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
-          </span>
-          <h3>Unit-Specific Shopping &amp; Live Stock</h3>
+    <ul class="home-why-list" role="list">
+      <li class="home-why-item">
+        <div class="home-why-item-body">
+          <h3 class="home-why-item-title">Unit-Specific Shopping &amp; Live Stock</h3>
+          <p class="home-why-item-desc">Check real-time product availability and pricing for each business unit, with dedicated unit carts and pickup or delivery checkout.</p>
         </div>
-        <p>Check real-time product availability and pricing for each business unit, with independent shopping carts and pickup or delivery checkout.</p>
-        <a class="action-link" href="/products">Browse Business Catalogs <span class="arrow" aria-hidden="true">&rarr;</span></a>
-      </div>
-      <div class="home-why-ui-preview" aria-hidden="true">
-        <div class="home-preview-card">
-          <div class="home-preview-row">
-            <span class="home-preview-title">Adult Dog Kibble 2kg</span>
-            <span class="home-preview-status is-ok">In stock</span>
-          </div>
-          <div class="home-preview-sub">Pet Store · Independent Pet Store Cart</div>
-        </div>
-        <div class="home-preview-card">
-          <div class="home-preview-row">
-            <span class="home-preview-title">Full Grooming Package</span>
-            <span class="home-preview-status">60 mins</span>
-          </div>
-          <div class="home-preview-sub">Grooming Services · Multi-pet online request</div>
-        </div>
-      </div>
-    </article>
+        <a class="action-link" href="/products">Browse business catalogs <span class="arrow" aria-hidden="true">&rarr;</span></a>
+      </li>
 
-    <div class="home-why-grid">
-      <article class="card home-why-tile">
-        <div>
-          <div class="home-why-head">
-            <span class="home-why-icon" aria-hidden="true">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><line x1="8" y1="11" x2="16" y2="11"/><line x1="8" y1="15" x2="16" y2="15"/></svg>
-            </span>
-            <h3>Transparent Service Menus</h3>
-          </div>
-          <p>Compare Veterinary Clinic and Grooming Services descriptions, estimated durations, and base rates upfront.</p>
+      <li class="home-why-item">
+        <div class="home-why-item-body">
+          <h3 class="home-why-item-title">Transparent Service Menus</h3>
+          <p class="home-why-item-desc">Compare Veterinary Clinic and Grooming Services descriptions, estimated durations, and base rates upfront.</p>
         </div>
         <a class="action-link" href="/services">View service rates <span class="arrow" aria-hidden="true">&rarr;</span></a>
-      </article>
+      </li>
 
-      <article class="card home-why-tile">
-        <div>
-          <div class="home-why-head">
-            <span class="home-why-icon" aria-hidden="true">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><path d="M9 16l2 2 4-4"/></svg>
-            </span>
-            <h3>Online Grooming Requests</h3>
-          </div>
-          <p>Select multiple pets and grooming treatments in a single request and choose your preferred appointment date and time.</p>
+      <li class="home-why-item">
+        <div class="home-why-item-body">
+          <h3 class="home-why-item-title">Online Grooming Requests</h3>
+          <p class="home-why-item-desc">Select multiple pets and grooming treatments in a single request and choose your preferred appointment date and time.</p>
         </div>
         <a class="action-link" href="<?= $signedIn ? '/appointments/new' : '/login' ?>"><?= $signedIn ? 'Request appointment' : 'Sign in to book' ?> <span class="arrow" aria-hidden="true">&rarr;</span></a>
-      </article>
+      </li>
 
-      <article class="card home-why-tile">
-        <div>
-          <div class="home-why-head">
-            <span class="home-why-icon" aria-hidden="true">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg>
-            </span>
-            <h3>Dedicated Business-Unit Carts</h3>
-          </div>
-          <p>Keep Pet Store, Veterinary Clinic, and Grooming Services purchases neatly separated in unit-specific carts.</p>
+      <li class="home-why-item">
+        <div class="home-why-item-body">
+          <h3 class="home-why-item-title">Pet Profiles &amp; Order History</h3>
+          <p class="home-why-item-desc">Save your pets&rsquo; species, breed, and care notes, track order and appointment statuses, and share customer reviews.</p>
         </div>
-      </article>
-
-      <article class="card home-why-tile">
-        <div>
-          <div class="home-why-head">
-            <span class="home-why-icon" aria-hidden="true">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
-            </span>
-            <h3>Pet Profiles &amp; Order History</h3>
-          </div>
-          <p>Save your pets&rsquo; species, breed, and care notes, track order and appointment statuses, and leave verified reviews.</p>
-        </div>
-      </article>
-    </div>
+        <a class="action-link" href="<?= $signedIn ? '/pets' : '/register' ?>"><?= $signedIn ? 'Manage pet profiles' : 'Create an account' ?> <span class="arrow" aria-hidden="true">&rarr;</span></a>
+      </li>
+    </ul>
   </div>
 </section>
 
