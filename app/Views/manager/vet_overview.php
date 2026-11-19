@@ -19,7 +19,7 @@ $unitQuery = !empty($isSuper) ? '?unit_id=' . (int)$unitId : '';
       <h2 style="margin: 0; font-size: 1.25rem;">Current / Upcoming Appointment</h2>
     </div>
     <?php if (!empty($currentAppointment)): ?>
-      <span class="badge <?= e($currentAppointment['badge_class']) ?>">
+      <span class="status <?= e($currentAppointment['badge_class']) ?>">
         <?= e($currentAppointment['status_name']) ?>
       </span>
     <?php endif; ?>
@@ -130,7 +130,7 @@ $unitQuery = !empty($isSuper) ? '?unit_id=' . (int)$unitId : '';
                   <?php endif; ?>
                 </td>
                 <td style="padding: 0.65rem 0.75rem; text-align: right;">
-                  <span class="badge <?= e($item['alert_badge_class']) ?>">
+                  <span class="status <?= e($item['alert_badge_class']) ?>">
                     <?= e($item['alert_label']) ?>
                   </span>
                 </td>
@@ -155,7 +155,7 @@ $unitQuery = !empty($isSuper) ? '?unit_id=' . (int)$unitId : '';
         <span class="eyebrow" style="margin-bottom: 0.2rem;">Today's Operations</span>
         <h2 style="margin: 0; font-size: 1.15rem;">Daily Clinic Activity</h2>
       </div>
-      <span class="badge secondary" id="vet-activity-date-badge"><?= e($activityDateFormatted) ?></span>
+      <span class="meta-label" id="vet-activity-date-badge"><?= e($activityDateFormatted) ?></span>
     </div>
 
     <p class="caption muted" style="margin: 0 0 1rem 0;">
@@ -212,7 +212,7 @@ $unitQuery = !empty($isSuper) ? '?unit_id=' . (int)$unitId : '';
       <?php foreach ($employeesOnDuty as $emp):
         $initials = strtoupper(substr((string)$emp['first_name'], 0, 1) . substr((string)$emp['last_name'], 0, 1));
         $ws = (string)$emp['work_status'];
-        $badgeClass = $ws === 'On Duty' ? 'badge-success' : 'secondary';
+        $badgeClass = $ws === 'On Duty' ? 'ok' : 'secondary';
       ?>
         <div class="vet-employee-duty-card">
           <div style="width: 44px; height: 44px; border-radius: 50%; background: #e0f2fe; color: #0369a1; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 1rem; flex-shrink: 0;" aria-hidden="true">
@@ -225,7 +225,7 @@ $unitQuery = !empty($isSuper) ? '?unit_id=' . (int)$unitId : '';
             <span class="caption" style="display: block; color: var(--muted); margin-bottom: 0.25rem;">
               <?= e($emp['display_position']) ?>
             </span>
-            <span class="badge <?= $badgeClass ?>" style="font-size: 0.72rem;">
+            <span class="status <?= $badgeClass ?>">
               <?= e($ws) ?>
             </span>
           </div>

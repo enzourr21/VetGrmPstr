@@ -14,11 +14,11 @@ $isInvManager = !empty($isInventoryManagerOnly);
 </div>
 
 <?php if ((int)$unitId === 1 && empty($isInvManager)): ?>
-  <div class="segmented-bar" role="tablist" style="margin-bottom: 1.5rem;" aria-label="Products & Inventory Sections">
-    <a href="/manager/products<?= $unitQuery ?>" class="segmented-pill" role="tab" aria-selected="false">
+  <div class="tabs" role="tablist" style="margin-bottom: 1.5rem;" aria-label="Products & Inventory Sections">
+    <a href="/manager/products<?= $unitQuery ?>" class="tab-link" role="tab" aria-selected="false">
       Product Catalog
     </a>
-    <a href="/manager/inventory<?= $unitQuery ?>" class="segmented-pill is-active" role="tab" aria-selected="true">
+    <a href="/manager/inventory<?= $unitQuery ?>" class="tab-link is-active" role="tab" aria-selected="true">
       Inventory &amp; Stock Control
     </a>
   </div>
@@ -37,45 +37,45 @@ $isInvManager = !empty($isInventoryManagerOnly);
 
     <!-- 6 Primary Metric Stat Cards -->
     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 1.25rem;">
-      <article class="card stat-card" style="padding: 1rem; background: var(--surface-subtle, #f8fafc); border: 1px solid var(--line);">
+      <article class="stat-card" style="padding: 1rem; background: var(--surface-subtle); border-radius: var(--radius-sm);">
         <span class="eyebrow">Total Products</span>
         <strong class="stat-value" style="font-size: 1.6rem;"><?= (int)($inventorySummary['total_products'] ?? 0) ?></strong>
         <p class="caption" style="margin: 0.25rem 0 0 0;">Active catalog items</p>
       </article>
 
-      <article class="card stat-card" style="padding: 1rem; background: var(--surface-subtle, #f8fafc); border: 1px solid var(--line);">
+      <article class="stat-card" style="padding: 1rem; background: var(--surface-subtle); border-radius: var(--radius-sm);">
         <span class="eyebrow">Physical Stock</span>
         <strong class="stat-value" style="font-size: 1.6rem;"><?= (int)($inventorySummary['total_physical_stock'] ?? 0) ?></strong>
         <p class="caption" style="margin: 0.25rem 0 0 0;">Total units on hand</p>
       </article>
 
-      <article class="card stat-card" style="padding: 1rem; background: var(--surface-subtle, #f8fafc); border: 1px solid var(--line);">
+      <article class="stat-card" style="padding: 1rem; background: var(--surface-subtle); border-radius: var(--radius-sm);">
         <span class="eyebrow">Low Stock</span>
-        <strong class="stat-value" style="font-size: 1.6rem; <?= ($inventorySummary['low_stock_count'] ?? 0) > 0 ? 'color: var(--danger, #dc2626);' : '' ?>">
+        <strong class="stat-value" style="font-size: 1.6rem; <?= ($inventorySummary['low_stock_count'] ?? 0) > 0 ? 'color: var(--err);' : '' ?>">
           <?= (int)($inventorySummary['low_stock_count'] ?? 0) ?>
         </strong>
         <p class="caption" style="margin: 0.25rem 0 0 0;">Available stock &le; 10</p>
       </article>
 
-      <article class="card stat-card" style="padding: 1rem; background: var(--surface-subtle, #f8fafc); border: 1px solid var(--line);">
+      <article class="stat-card" style="padding: 1rem; background: var(--surface-subtle); border-radius: var(--radius-sm);">
         <span class="eyebrow">Out of Stock</span>
-        <strong class="stat-value" style="font-size: 1.6rem; <?= ($inventorySummary['out_of_stock_count'] ?? 0) > 0 ? 'color: var(--danger, #dc2626);' : '' ?>">
+        <strong class="stat-value" style="font-size: 1.6rem; <?= ($inventorySummary['out_of_stock_count'] ?? 0) > 0 ? 'color: var(--err);' : '' ?>">
           <?= (int)($inventorySummary['out_of_stock_count'] ?? 0) ?>
         </strong>
         <p class="caption" style="margin: 0.25rem 0 0 0;">Zero usable available</p>
       </article>
 
-      <article class="card stat-card" style="padding: 1rem; background: var(--surface-subtle, #f8fafc); border: 1px solid var(--line);">
+      <article class="stat-card" style="padding: 1rem; background: var(--surface-subtle); border-radius: var(--radius-sm);">
         <span class="eyebrow">Expiring Soon</span>
-        <strong class="stat-value" style="font-size: 1.6rem; <?= ($inventorySummary['expiring_soon_count'] ?? 0) > 0 ? 'color: #b45309;' : '' ?>">
+        <strong class="stat-value" style="font-size: 1.6rem; <?= ($inventorySummary['expiring_soon_count'] ?? 0) > 0 ? 'color: var(--warn);' : '' ?>">
           <?= (int)($inventorySummary['expiring_soon_count'] ?? 0) ?>
         </strong>
         <p class="caption" style="margin: 0.25rem 0 0 0;">Batches &le; 30 days</p>
       </article>
 
-      <article class="card stat-card" style="padding: 1rem; background: var(--surface-subtle, #f8fafc); border: 1px solid var(--line);">
+      <article class="stat-card" style="padding: 1rem; background: var(--surface-subtle); border-radius: var(--radius-sm);">
         <span class="eyebrow">Expired Batches</span>
-        <strong class="stat-value" style="font-size: 1.6rem; <?= ($inventorySummary['expired_count'] ?? 0) > 0 ? 'color: var(--danger, #dc2626);' : '' ?>">
+        <strong class="stat-value" style="font-size: 1.6rem; <?= ($inventorySummary['expired_count'] ?? 0) > 0 ? 'color: var(--err);' : '' ?>">
           <?= (int)($inventorySummary['expired_count'] ?? 0) ?>
         </strong>
         <p class="caption" style="margin: 0.25rem 0 0 0;">Require write-off</p>
@@ -85,7 +85,7 @@ $isInvManager = !empty($isInventoryManagerOnly);
     <!-- 7. Recent Inventory Movements Summary -->
     <div style="border-top: 1px solid var(--line); padding-top: 1rem;">
       <div class="row" style="justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
-        <span class="caption" style="font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;">Recent Inventory Movements</span>
+        <span class="caption" style="font-weight: 600;">Recent Inventory Movements</span>
         <a href="/manager/inventory<?= $unitQuery ?><?= !empty($unitQuery) ? '&' : '?' ?>tab=movements" class="btn ghost btn-sm">
           View All Movements (<?= (int)($inventorySummary['total_movements'] ?? 0) ?>) &rarr;
         </a>
@@ -93,7 +93,7 @@ $isInvManager = !empty($isInventoryManagerOnly);
       <?php if (empty($inventorySummary['recent_movements'])): ?>
         <p class="caption muted" style="margin: 0;">No stock movements recorded yet for this facility.</p>
       <?php else: ?>
-        <div class="table-wrap" style="border: 1px solid var(--line); border-radius: var(--radius-sm);">
+        <div class="table-wrap">
           <table style="margin: 0; font-size: 0.85rem;">
             <thead>
               <tr>
@@ -123,7 +123,7 @@ $isInvManager = !empty($isInventoryManagerOnly);
                     <?= !empty($rm['batch_number']) ? '<code>' . e($rm['batch_number']) . '</code>' : '<span class="caption muted">—</span>' ?>
                   </td>
                   <td style="padding: 0.5rem 0.75rem;">
-                    <span class="badge secondary" style="font-size: 0.75rem;"><?= e(str_replace('_', ' ', (string)$rm['movement_type'])) ?></span>
+                    <span class="meta-label"><?= e(str_replace('_', ' ', (string)$rm['movement_type'])) ?></span>
                   </td>
                   <td style="padding: 0.5rem 0.75rem; text-align: right; font-weight: 600; color: <?= $rmQty > 0 ? 'var(--primary, #059669)' : 'var(--danger, #dc2626)' ?>;">
                     <?= $rmQty > 0 ? ('+' . $rmQty) : $rmQty ?>
@@ -143,17 +143,17 @@ $isInvManager = !empty($isInventoryManagerOnly);
 
 <!-- Sub-Tabs: Stock Levels vs Purchase Orders vs Movement History -->
 <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.5rem;">
-  <div class="segmented-bar">
+  <div class="tabs">
     <a href="/manager/inventory<?= $unitQuery ?><?= !empty($unitQuery) ? '&' : '?' ?>tab=stock"
-       class="segmented-pill <?= $invTab === 'stock' ? 'is-active' : '' ?>">
+       class="tab-link <?= $invTab === 'stock' ? 'is-active' : '' ?>">
       Stock Levels &amp; Adjustments (<?= count($inventoryItems) ?>)
     </a>
     <a href="/manager/inventory<?= $unitQuery ?><?= !empty($unitQuery) ? '&' : '?' ?>tab=orders"
-       class="segmented-pill <?= $invTab === 'orders' ? 'is-active' : '' ?>">
+       class="tab-link <?= $invTab === 'orders' ? 'is-active' : '' ?>">
       Purchase Orders (<?= count($purchaseOrders) ?>)
     </a>
     <a href="/manager/inventory<?= $unitQuery ?><?= !empty($unitQuery) ? '&' : '?' ?>tab=movements"
-       class="segmented-pill <?= $invTab === 'movements' ? 'is-active' : '' ?>">
+       class="tab-link <?= $invTab === 'movements' ? 'is-active' : '' ?>">
       Movement History (<?= (int)($inventorySummary['total_movements'] ?? 0) ?>)
     </a>
   </div>
@@ -278,15 +278,15 @@ $isInvManager = !empty($isInventoryManagerOnly);
             <?php foreach ($inventoryItems as $item):
               $isOutOfStock = (int)$item['available'] <= 0;
             ?>
-              <tr style="<?= $isOutOfStock ? 'background-color: rgba(254, 242, 242, 0.4);' : '' ?>">
+              <tr style="<?= $isOutOfStock ? 'background-color: var(--err-bg);' : '' ?>">
                 <td style="vertical-align: top; padding: 0.75rem 0.85rem;">
                   <strong><?= e($item['product_name']) ?></strong>
                   <?php if ($isOutOfStock): ?>
-                    <span class="badge badge-danger" style="margin-left: 0.4rem; font-size: 0.7rem; white-space: nowrap;">Out of Stock</span>
+                    <span class="status err" style="margin-left: 0.4rem;">Out of Stock</span>
                   <?php endif; ?>
                 </td>
                 <td style="white-space: nowrap; vertical-align: top; padding: 0.75rem 0.85rem;"><code><?= e($item['sku'] ?: '—') ?></code></td>
-                <td style="white-space: nowrap; vertical-align: top; padding: 0.75rem 0.85rem;"><span class="badge secondary"><?= e($item['product_category']) ?></span></td>
+                <td style="white-space: nowrap; vertical-align: top; padding: 0.75rem 0.85rem;"><span class="meta-label"><?= e($item['product_category']) ?></span></td>
                 <?php if ((int)$unitId === \App\Models\Units::vetClinicId()): ?>
                   <td style="vertical-align: top; padding: 0.75rem 0.85rem;">
                     <?php if (!empty($item['batches'])): ?>
@@ -298,7 +298,7 @@ $isInvManager = !empty($isInventoryManagerOnly);
                             <?php if (!empty($b['expiration_date'])): ?>
                               <span class="caption" style="color: var(--muted); font-size: 0.75rem; white-space: nowrap;">Exp: <?= date('M j, Y', strtotime((string)$b['expiration_date'])) ?></span>
                             <?php endif; ?>
-                            <span class="badge <?= e($b['badge_class']) ?>" style="font-size: 0.7rem; padding: 0.1rem 0.35rem; white-space: nowrap;">
+                            <span class="status <?= e($b['badge_class']) ?>">
                               <?= e($b['status_label']) ?>
                             </span>
                           </div>
@@ -328,7 +328,7 @@ $isInvManager = !empty($isInventoryManagerOnly);
                   </strong>
                 </td>
                 <td style="text-align: center; white-space: nowrap; vertical-align: top; padding: 0.75rem 0.85rem;">
-                  <span class="badge <?= $isOutOfStock ? 'badge-danger' : 'badge-success' ?>" style="white-space: nowrap;">
+                  <span class="status <?= $isOutOfStock ? 'err' : 'ok' ?>">
                     <?= $isOutOfStock ? 'Out of Stock' : 'In Stock' ?>
                   </span>
                 </td>
@@ -583,16 +583,16 @@ $isInvManager = !empty($isInventoryManagerOnly);
                 <td>
                   <?php
                   $prio = (string)$por['priority'];
-                  $prioClass = in_array($prio, ['High', 'Urgent'], true) ? 'badge-danger' : ($prio === 'Medium' ? 'badge-warning' : 'secondary');
+                  $prioClass = in_array($prio, ['High', 'Urgent'], true) ? 'err' : ($prio === 'Medium' ? 'warn' : 'secondary');
                   ?>
-                  <span class="badge <?= $prioClass ?>"><?= e($prio) ?></span>
+                  <span class="status <?= $prioClass ?>"><?= e($prio) ?></span>
                 </td>
                 <td>
                   <?php
                   $rst = (string)$por['request_status'];
-                  $rClass = $rst === 'Approved' ? 'badge-success' : ($rst === 'Rejected' ? 'badge-danger' : 'badge-warning');
+                  $rClass = $rst === 'Approved' ? 'ok' : ($rst === 'Rejected' ? 'err' : 'warn');
                   ?>
-                  <span class="badge <?= $rClass ?>"><?= e($rst) ?></span>
+                  <span class="status <?= $rClass ?>"><?= e($rst) ?></span>
                 </td>
                 <td style="text-align: right;">
                   <div class="row" style="gap: 0.35rem; justify-content: flex-end;">
@@ -659,7 +659,7 @@ $isInvManager = !empty($isInventoryManagerOnly);
                   <td><?= (int)$po['total_ordered_qty'] ?> unit(s)</td>
                   <td><?= peso((float)$po['total_cost']) ?></td>
                   <td>
-                    <span class="badge <?= $po['po_status'] === 'Fully Received' ? 'badge-success' : ($po['po_status'] === 'Partially Received' ? 'badge-warning' : 'secondary') ?>">
+                    <span class="status <?= $po['po_status'] === 'Fully Received' ? 'ok' : ($po['po_status'] === 'Partially Received' ? 'warn' : 'neutral') ?>">
                       <?= e($po['po_status']) ?>
                     </span>
                   </td>
@@ -690,7 +690,7 @@ $isInvManager = !empty($isInventoryManagerOnly);
     <dialog class="modal modal-wide" id="view-po-<?= (int)$po['purchase_order_id'] ?>" aria-labelledby="view-po-title-<?= (int)$po['purchase_order_id'] ?>">
       <div class="modal-head">
         <div>
-          <span class="badge secondary" style="margin-bottom: 0.25rem;">Purchase Order</span>
+          <span class="meta-label" style="margin-bottom: 0.25rem;">Purchase Order</span>
           <h3 id="view-po-title-<?= (int)$po['purchase_order_id'] ?>" style="margin: 0;"><?= e($po['po_number']) ?></h3>
         </div>
         <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close">&times;</button>
@@ -707,7 +707,7 @@ $isInvManager = !empty($isInventoryManagerOnly);
             <p class="caption" style="margin: 0 0 0.25rem 0;">Order Metadata</p>
             <div>Date: <strong><?= e(date('F j, Y g:i A', strtotime((string)$po['order_date']))) ?></strong></div>
             <div>Created By: <strong><?= e($po['created_by_name']) ?></strong></div>
-            <div>Status: <span class="badge secondary"><?= e($po['po_status']) ?></span></div>
+            <div>Status: <span class="meta-label"><?= e($po['po_status']) ?></span></div>
           </div>
         </div>
 
@@ -817,7 +817,7 @@ $isInvManager = !empty($isInventoryManagerOnly);
                     <td>
                       <strong><?= e($it['product_name']) ?></strong>
                       <?php if ($isBatchTracked): ?>
-                        <span class="badge secondary" style="font-size: 0.7rem; margin-left: 0.25rem;">Batch Tracked</span>
+                        <span class="meta-label" style="margin-left: 0.25rem;">Batch Tracked</span>
                       <?php endif; ?>
                       <input type="hidden" name="items[<?= $idx ?>][po_item_id]" value="<?= (int)$it['po_item_id'] ?>">
                       <input type="hidden" name="items[<?= $idx ?>][business_product_id]" value="<?= (int)$it['business_product_id'] ?>">
@@ -871,7 +871,7 @@ $isInvManager = !empty($isInventoryManagerOnly);
     <dialog class="modal modal-wide" id="view-por-<?= (int)$por['request_id'] ?>" aria-labelledby="view-por-title-<?= (int)$por['request_id'] ?>">
       <div class="modal-head">
         <div>
-          <span class="badge" style="background: #e0f2fe; color: #0369a1; margin-bottom: 0.25rem;">Purchase Order Request</span>
+          <span class="meta-label" style="margin-bottom: 0.25rem;">Purchase Order Request</span>
           <h3 id="view-por-title-<?= (int)$por['request_id'] ?>" style="margin: 0;"><?= e($por['request_number']) ?></h3>
         </div>
         <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close">&times;</button>
@@ -889,9 +889,9 @@ $isInvManager = !empty($isInventoryManagerOnly);
             <div>
               <?php
               $rst = (string)$por['request_status'];
-              $rClass = $rst === 'Approved' ? 'badge-success' : ($rst === 'Rejected' ? 'badge-danger' : 'badge-warning');
+              $rClass = $rst === 'Approved' ? 'ok' : ($rst === 'Rejected' ? 'err' : 'warn');
               ?>
-              <span class="badge <?= $rClass ?>"><?= e($rst) ?></span>
+              <span class="status <?= $rClass ?>"><?= e($rst) ?></span>
             </div>
           </div>
           <div>
@@ -899,7 +899,7 @@ $isInvManager = !empty($isInventoryManagerOnly);
             <strong><?= e($por['requester_name']) ?></strong>
 
             <p style="margin: 0.5rem 0 0.25rem 0;" class="caption">Reason &amp; Priority</p>
-            <div><strong><?= e($por['reason']) ?></strong> · <span class="badge secondary"><?= e($por['priority']) ?> Priority</span></div>
+            <div><strong><?= e($por['reason']) ?></strong> · <span class="meta-label"><?= e($por['priority']) ?> Priority</span></div>
 
             <?php if (!empty($por['needed_by_date'])): ?>
               <p style="margin: 0.5rem 0 0.25rem 0;" class="caption">Needed by Date</p>
@@ -953,7 +953,7 @@ $isInvManager = !empty($isInventoryManagerOnly);
       <dialog class="modal" id="review-por-<?= (int)$por['request_id'] ?>" aria-labelledby="review-por-title-<?= (int)$por['request_id'] ?>">
         <div class="modal-head">
           <div>
-            <span class="badge secondary" style="margin-bottom: 0.25rem;">Business Manager Review</span>
+            <span class="meta-label" style="margin-bottom: 0.25rem;">Business Manager Review</span>
             <h3 id="review-por-title-<?= (int)$por['request_id'] ?>" style="margin: 0;">Review <?= e($por['request_number']) ?></h3>
           </div>
           <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close">&times;</button>
@@ -1030,10 +1030,10 @@ $isInvManager = !empty($isInventoryManagerOnly);
             <?php foreach ($movements as $m):
               $mQty = (int)$m['quantity'];
               $typeClass = match ($m['movement_type']) {
-                'receiving' => 'badge-success',
-                'adjustment_increase' => 'badge-info',
-                'adjustment_decrease' => 'badge-warning',
-                'write_off_expired' => 'badge-danger',
+                'receiving' => 'ok',
+                'adjustment_increase' => 'info',
+                'adjustment_decrease' => 'warn',
+                'write_off_expired' => 'err',
                 'fefo_allocation' => 'secondary',
                 default => 'secondary'
               };
@@ -1050,7 +1050,7 @@ $isInvManager = !empty($isInventoryManagerOnly);
                   <?= !empty($m['batch_number']) ? '<code>' . e($m['batch_number']) . '</code>' : '<span class="caption muted">—</span>' ?>
                 </td>
                 <td>
-                  <span class="badge <?= e($typeClass) ?>" style="font-size: 0.75rem;">
+                  <span class="status <?= e($typeClass) ?>">
                     <?= e(str_replace('_', ' ', (string)$m['movement_type'])) ?>
                   </span>
                 </td>
@@ -1073,7 +1073,7 @@ $isInvManager = !empty($isInventoryManagerOnly);
 <dialog class="modal modal-wide" id="po-create-modal" aria-labelledby="po-modal-title">
   <div class="modal-head">
     <div>
-      <span class="badge secondary" style="margin-bottom: 0.25rem;">Multi-Step Order</span>
+      <span class="meta-label" style="margin-bottom: 0.25rem;">Multi-Step Order</span>
       <h3 id="po-modal-title" style="margin: 0;">Create Purchase Order</h3>
     </div>
     <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close">&times;</button>
@@ -1187,7 +1187,7 @@ $isInvManager = !empty($isInventoryManagerOnly);
 <dialog class="modal modal-wide" id="po-request-modal" aria-labelledby="por-modal-title">
   <div class="modal-head">
     <div>
-      <span class="badge" style="background: #e0f2fe; color: #0369a1; margin-bottom: 0.25rem;">Stock Requisition</span>
+      <span class="meta-label" style="margin-bottom: 0.25rem;">Stock Requisition</span>
       <h3 id="por-modal-title" style="margin: 0;">Request Purchase Order</h3>
     </div>
     <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close">&times;</button>
@@ -1522,7 +1522,7 @@ $isInvManager = !empty($isInventoryManagerOnly);
           <?= !empty($autoOpenKeyModal) ? 'data-open-on-load="true"' : '' ?>>
     <div class="modal-head">
       <div>
-        <span class="badge badge-success" style="margin-bottom: 0.25rem;">Active Temporary Key</span>
+        <span class="status ok" style="margin-bottom: 0.25rem;">Active Temporary Key</span>
         <h3 id="inv-key-modal-title" style="margin: 0;">Inventory Access Key</h3>
       </div>
       <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close">&times;</button>
@@ -1586,7 +1586,7 @@ $isInvManager = !empty($isInventoryManagerOnly);
   <dialog class="modal" id="revoke-key-modal" aria-labelledby="revoke-key-modal-title" style="max-width: 520px;">
     <div class="modal-head">
       <div>
-        <span class="badge badge-danger" style="margin-bottom: 0.25rem;">Confirm Revocation</span>
+        <span class="status err" style="margin-bottom: 0.25rem;">Confirm Revocation</span>
         <h3 id="revoke-key-modal-title" style="margin: 0; color: var(--danger, #dc2626);">Revoke Inventory Access Key</h3>
       </div>
       <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close">&times;</button>

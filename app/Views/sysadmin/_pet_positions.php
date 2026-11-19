@@ -18,7 +18,7 @@
             <div class="caption position-desc"><?= e($pos['description'] ?? '—') ?></div>
           </div>
           <div class="position-actions">
-            <span class="badge status-<?= e($pos['position_status']) ?> position-badge"><?= e($pos['position_status']) ?></span>
+            <span class="status status-<?= e($pos['position_status']) ?>"><?= e($pos['position_status']) ?></span>
             <form method="post" action="/sysadmin/positions/<?= (int)$pos['position_id'] ?>/toggle<?= $unitQuery ?>" class="position-toggle-form">
               <?= \App\Core\CSRF::field() ?>
               <input type="hidden" name="business_unit_id" value="<?= (int)$unitId ?>">

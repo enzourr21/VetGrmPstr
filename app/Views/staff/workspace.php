@@ -31,7 +31,7 @@ if (!empty($isSuper)) {
       <div>
         <div class="row" style="gap: 0.5rem; align-items: center; margin-bottom: 0.25rem;">
           <h2 style="margin: 0;">Temporary Inventory Access</h2>
-          <span class="badge badge-success">Active</span>
+          <span class="status ok">Active</span>
         </div>
         <p class="caption" style="margin: 0;">
           Authorized for <strong><?= e($emp['business_unit_name'] ?? '') ?></strong> inventory

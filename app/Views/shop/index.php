@@ -81,11 +81,11 @@ $unitImageById = [
             <div class="row" style="justify-content: space-between; margin-bottom: 0.45rem;">
               <span class="caption"><?= !empty($p['product_category']) ? e($p['product_category']) : e($unitName) ?></span>
               <?php if (!$in): ?>
-                <span class="badge err">Out of stock</span>
+                <span class="status err">Out of stock</span>
               <?php elseif ((int)$p['available'] <= 5): ?>
-                <span class="badge warn tabular">Only <?= (int)$p['available'] ?> left</span>
+                <span class="status warn tabular">Only <?= (int)$p['available'] ?> left</span>
               <?php else: ?>
-                <span class="badge ok tabular">In stock (<?= (int)$p['available'] ?>)</span>
+                <span class="status ok tabular">In stock (<?= (int)$p['available'] ?>)</span>
               <?php endif; ?>
             </div>
             <h3><a href="/shop/<?= $buId ?>/product/<?= $bpId ?>"><?= e($p['product_name']) ?></a></h3>
@@ -155,11 +155,11 @@ $unitImageById = [
       <div class="row" style="justify-content: space-between; margin-bottom: 0.45rem;">
         <span class="caption"><?= e($p['business_unit_name']) ?></span>
         <?php if (!$in): ?>
-          <span class="badge err">Out of stock</span>
+          <span class="status err">Out of stock</span>
         <?php elseif ((int)$p['available'] <= 5): ?>
-          <span class="badge warn tabular">Only <?= (int)$p['available'] ?> left</span>
+          <span class="status warn tabular">Only <?= (int)$p['available'] ?> left</span>
         <?php else: ?>
-          <span class="badge ok tabular">In stock (<?= (int)$p['available'] ?>)</span>
+          <span class="status ok tabular">In stock (<?= (int)$p['available'] ?>)</span>
         <?php endif; ?>
       </div>
       <h3><a href="/shop/<?= $buId ?>/product/<?= $bpId ?>"><?= e($p['product_name']) ?></a></h3>

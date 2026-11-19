@@ -12,7 +12,7 @@ $renderRosterItem = function (array $emp) use ($unitId, $unitQuery, $positions, 
           <strong><?= e($emp['first_name'] . ' ' . $emp['last_name']) ?></strong>
           <span class="caption">ID #<?= (int)$emp['employee_id'] ?></span>
         </div>
-        <span class="badge status-<?= e($emp['account_status']) ?>"><?= e($emp['account_status']) ?></span>
+        <span class="status status-<?= e($emp['account_status']) ?>"><?= e($emp['account_status']) ?></span>
       </header>
       <dl class="roster-meta">
         <div><dt>Email</dt><dd><?= e($emp['email']) ?></dd></div>

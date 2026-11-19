@@ -14,7 +14,7 @@ $stFilter = $statusFilter ?? '';
     <p class="muted">Chronological clinical consultation encounters, physical measurements, SOAP evaluations, diagnostic results, and veterinarian prescriptions.</p>
   </div>
   <div>
-    <span class="badge secondary" style="font-size: 0.85rem; padding: 0.35rem 0.75rem; font-weight: 600; display: inline-flex; align-items: center; gap: 0.4rem;">
+    <span class="meta-label">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
         <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
@@ -128,7 +128,7 @@ $stFilter = $statusFilter ?? '';
                 <span style="font-size: 0.88rem; color: var(--ink); font-weight: 550;"><?= e($rec['attending_veterinarian']) ?></span>
               </td>
               <td style="text-align: center; white-space: nowrap;">
-                <span class="badge <?= $badgeClass ?>" style="padding: 0.2rem 0.55rem; font-weight: 650; font-size: 0.76rem; letter-spacing: 0.02em;">
+                <span class="status <?= $badgeClass ?>">
                   <?= e($recStatus) ?>
                 </span>
               </td>
@@ -162,8 +162,8 @@ $stFilter = $statusFilter ?? '';
         <div>
           <div style="display: inline-flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">
             <strong style="font-family: monospace; font-size: 1.1rem; color: var(--primary, #0284c7);"><?= e($rec['record_ref']) ?></strong>
-            <span class="badge <?= $badgeClass ?>" style="padding: 0.15rem 0.5rem; font-size: 0.74rem; font-weight: 650;"><?= e($recStatus) ?></span>
-            <span class="badge secondary" style="font-size: 0.72rem; padding: 0.15rem 0.45rem;">Read-Only</span>
+            <span class="status <?= $badgeClass ?>"><?= e($recStatus) ?></span>
+            <span class="meta-label">Read-Only</span>
           </div>
           <h3 id="view-record-modal-title-<?= $recId ?>" style="margin: 0; font-size: 1.1rem;">
             Veterinary Clinical Encounter Record
@@ -276,7 +276,7 @@ $stFilter = $statusFilter ?? '';
                     <strong style="color: var(--ink);"><?= e($dt['test_name']) ?></strong>
                     <div class="caption muted" style="font-size: 0.76rem;">Ordered: <?= e($dt['ordered_date']) ?></div>
                   </div>
-                  <span class="badge secondary" style="font-size: 0.76rem;"><?= e($dt['status']) ?></span>
+                  <span class="meta-label"><?= e($dt['status']) ?></span>
                 </div>
               <?php endforeach; ?>
             </div>
@@ -299,7 +299,7 @@ $stFilter = $statusFilter ?? '';
               <?php foreach ($rec['treatments'] as $tr): ?>
                 <div style="display: flex; justify-content: space-between; align-items: center; background: var(--surface); padding: 0.45rem 0.75rem; border-radius: 6px; border: 1px solid var(--line);">
                   <strong style="color: var(--ink);"><?= e($tr['treatment_name']) ?></strong>
-                  <span class="badge ok" style="font-size: 0.74rem;"><?= e($tr['status']) ?></span>
+                  <span class="status ok"><?= e($tr['status']) ?></span>
                 </div>
               <?php endforeach; ?>
             </div>

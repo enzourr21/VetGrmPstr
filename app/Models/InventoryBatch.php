@@ -32,7 +32,7 @@ class InventoryBatch
             $b['is_expired'] = ($exp !== null && $exp < $today);
             $b['is_expiring_soon'] = (!$b['is_expired'] && $exp !== null && (strtotime($exp) - strtotime($today) <= 30 * 86400));
             $b['status_label'] = $b['is_expired'] ? 'Expired' : ($b['is_expiring_soon'] ? 'Expiring Soon' : 'Active');
-            $b['badge_class'] = $b['is_expired'] ? 'badge-danger' : ($b['is_expiring_soon'] ? 'badge-warning' : 'secondary');
+            $b['badge_class'] = $b['is_expired'] ? 'err' : ($b['is_expiring_soon'] ? 'warn' : 'secondary');
         }
         unset($b);
 

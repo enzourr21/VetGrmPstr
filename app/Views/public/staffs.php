@@ -76,17 +76,17 @@ $unitIconSvg = static function (string $unitName): string {
       <article class="card overview-card staff-card staff-profile-card" data-staff-units="<?= e($mSlugs) ?>">
         <div class="staff-card-top">
           <span class="staff-avatar staff-profile-avatar" aria-hidden="true"><?= e($initials) ?></span>
-          <?php if ($mUnits): ?>
-            <div class="staff-unit-tags">
-              <?php foreach ($mUnits as $mu): ?>
-                <span class="staff-unit-pill staff-unit-<?= e($slugifyUnit($mu)) ?>"><?= e($mu) ?></span>
-              <?php endforeach; ?>
-            </div>
-          <?php endif; ?>
         </div>
         <div class="staff-card-identity">
           <h3 class="staff-name"><?= e($m['first_name'] . ' ' . $m['last_name']) ?></h3>
           <p class="staff-position"><?= e($m['position']) ?></p>
+          <?php if ($mUnits): ?>
+            <div class="staff-unit-list">
+              <?php foreach ($mUnits as $mu): ?>
+                <span class="staff-unit"><?= e($mu) ?></span>
+              <?php endforeach; ?>
+            </div>
+          <?php endif; ?>
         </div>
       </article>
     <?php endforeach; ?>
@@ -129,11 +129,10 @@ $unitIconSvg = static function (string $unitName): string {
               <article class="card overview-card staff-card staff-profile-card" data-staff-units="<?= e($uSlug) ?>">
                 <div class="staff-card-top">
                   <span class="staff-avatar staff-profile-avatar" aria-hidden="true"><?= e($initials) ?></span>
-                  <span class="staff-unit-pill staff-unit-<?= e($uSlug) ?>"><?= e($uName) ?></span>
                 </div>
                 <div class="staff-card-identity">
                   <h4 class="staff-name"><?= e($t['first_name'] . ' ' . $t['last_name']) ?></h4>
-                  <p class="staff-position"><?= e($t['position']) ?></p>
+                  <p class="staff-position"><?= e($t['position']) ?> &middot; <span class="staff-unit"><?= e($uName) ?></span></p>
                 </div>
               </article>
             <?php endforeach; ?>

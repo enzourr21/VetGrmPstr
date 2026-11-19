@@ -74,7 +74,7 @@ $curFilter = $statusFilter ?? 'all';
             $isPaid = ($r['invoice_status'] ?? '') === 'paid';
             $isPendingPay = !empty($r['is_pending_payment']);
             $stText = $isPaid ? 'Completed' : ($isPendingPay ? 'Pending Payment' : $r['display_status']);
-            $stBadge = $isPaid ? 'badge-success' : ($isPendingPay ? 'badge-warning' : $r['status_badge_class']);
+            $stBadge = $isPaid ? 'ok' : ($isPendingPay ? 'warn' : $r['status_badge_class']);
             ?>
             <tr style="border-bottom: 1px solid var(--color-border, #f3f4f6); cursor: pointer;" onclick="openRecordDetailModal(<?= (int)$r['appointment_id'] ?>)" onmouseover="this.style.background='var(--color-bg-subtle, #f9fafb)'" onmouseout="this.style.background='transparent'">
               <td style="padding: 0.75rem 1rem; font-weight: 700; color: var(--brand, #0e8a75);">
@@ -95,7 +95,7 @@ $curFilter = $statusFilter ?? 'all';
                   <?php if (!empty($r['customer_id_display'])): ?>
                     <span class="caption muted">(#<?= (int)$r['customer_id_display'] ?>)</span>
                   <?php else: ?>
-                    <span class="badge" style="font-size: 0.65rem; background: #e0f2fe; color: #0369a1;">Guest</span>
+                    <span class="meta-label">Guest</span>
                   <?php endif; ?>
                 </div>
               </td>
@@ -109,7 +109,7 @@ $curFilter = $statusFilter ?? 'all';
                 ₱<?= number_format((float)($r['total_amount'] ?? 0), 2) ?>
               </td>
               <td style="padding: 0.75rem 1rem; text-align: center;">
-                <span class="badge <?= $stBadge ?>">
+                <span class="status <?= $stBadge ?>">
                   <?= e($stText) ?>
                 </span>
               </td>
@@ -145,7 +145,7 @@ $curFilter = $statusFilter ?? 'all';
       <h3 style="margin: 0 0 0.5rem 0; font-size: 0.95rem; text-transform: uppercase; color: var(--color-muted, #6b7280);">Appointment Information</h3>
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; font-size: 0.85rem;">
         <div><strong>Appointment ID:</strong> <span id="rd-appt-id">#---</span></div>
-        <div><strong>Status:</strong> <span id="rd-status" class="badge">---</span></div>
+        <div><strong>Status:</strong> <span id="rd-status" class="status">---</span></div>
         <div><strong>Booking Date:</strong> <span id="rd-booking-date">---</span></div>
         <div><strong>Scheduled Time:</strong> <span id="rd-sched-time">---</span></div>
         <div><strong>Customer Name:</strong> <span id="rd-customer-name">---</span></div>
@@ -229,10 +229,10 @@ function openRecordDetailModal(id) {
       var isPaid = r.invoice_status === 'paid';
       var isPendingPay = r.is_pending_payment;
       var stLabel = isPaid ? 'Completed' : (isPendingPay ? 'Pending Payment' : r.display_status);
-      var stClass = isPaid ? 'badge-success' : (isPendingPay ? 'badge-warning' : r.status_badge_class);
+      var stClass = isPaid ? 'ok' : (isPendingPay ? 'warn' : r.status_badge_class);
       var stEl = document.getElementById('rd-status');
       stEl.textContent = stLabel;
-      stEl.className = 'badge ' + stClass;
+      stEl.className = 'status ' + stClass;
 
       document.getElementById('rd-booking-date').textContent = r.created_at ? r.created_at.substring(0, 10) : r.preferred_date;
       document.getElementById('rd-sched-time').textContent = r.formatted_date + ' (' + r.time_coverage + ')';

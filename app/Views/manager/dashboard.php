@@ -62,7 +62,7 @@
                 <td><?= peso((float)$p['selling_price']) ?></td>
                 <td><?= (int)$p['on_hand'] ?></td>
                 <td><strong><?= (int)$p['available'] ?></strong></td>
-                <td><span class="badge status-<?= e($p['product_status']) ?>"><?= e($p['product_status']) ?></span></td>
+                <td><span class="status status-<?= e($p['product_status']) ?>"><?= e($p['product_status']) ?></span></td>
               </tr>
             <?php endforeach; ?>
           </tbody>

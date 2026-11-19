@@ -17,7 +17,6 @@ require __DIR__ . '/_nav.php';
       <h2 class="settings-card-title">1. Business Profile</h2>
       <p class="caption muted" style="margin: 0.15rem 0 0 0;">Store identity &amp; customer contact</p>
     </div>
-    <span class="badge secondary" style="font-weight: 600;">Store Contact</span>
   </div>
 
   <form method="post" action="/manager/settings/profile<?= $unitQuery ?>">
@@ -56,20 +55,19 @@ require __DIR__ . '/_nav.php';
       <h2 class="settings-card-title">2. Operating Hours</h2>
       <p class="caption muted" style="margin: 0.15rem 0 0 0;">Weekly schedule for 7 days (Monday through Sunday). Customers view these operating hours across store channels.</p>
     </div>
-    <span class="badge secondary" style="font-weight: 600;">7-Day Schedule</span>
   </div>
 
   <form method="post" action="/manager/settings/hours<?= $unitQuery ?>">
     <?= \App\Core\CSRF::field() ?>
 
-    <div class="table-wrap" style="overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius-md, 8px); margin-bottom: 1.25rem;">
-      <table style="width: 100%; border-collapse: collapse; margin: 0; box-shadow: none; border: 0;">
+    <div class="table-wrap" style="overflow-x: auto; margin-bottom: 1.25rem;">
+      <table style="width: 100%; border-collapse: collapse; margin: 0;">
         <thead>
-          <tr style="background: var(--surface-subtle, #f8fafc); border-bottom: 1px solid var(--line);">
-            <th style="padding: 0.75rem 1rem; width: 160px; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 650;">Day of Week</th>
-            <th style="padding: 0.75rem 1rem; width: 140px; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 650;">Open / Closed</th>
-            <th style="padding: 0.75rem 1rem; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 650;">Opening Time</th>
-            <th style="padding: 0.75rem 1rem; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 650;">Closing Time</th>
+          <tr style="background: var(--surface-raised); border-bottom: 1px solid var(--line);">
+            <th style="padding: 0.75rem 1rem; width: 160px;">Day of Week</th>
+            <th style="padding: 0.75rem 1rem; width: 140px;">Open / Closed</th>
+            <th style="padding: 0.75rem 1rem;">Opening Time</th>
+            <th style="padding: 0.75rem 1rem;">Closing Time</th>
           </tr>
         </thead>
         <tbody>
@@ -160,7 +158,7 @@ require __DIR__ . '/_nav.php';
       <h2 class="settings-card-title">3. Business Policies</h2>
       <p class="caption muted" style="margin: 0.15rem 0 0 0;">Established <?= e($unitName) ?> operational guidelines, standards, and patient compliance rules</p>
     </div>
-    <span class="badge secondary" style="font-weight: 600;">Read-Only</span>
+    <span class="meta-label">Read-Only</span>
   </div>
 
   <div class="settings-policies-grid">
@@ -274,7 +272,7 @@ require __DIR__ . '/_nav.php';
             Configure the allowed appointment time overlap for <?= e($unitName) ?>.
           </p>
         </div>
-        <span class="badge secondary" style="font-weight: 600;">Configurable Policy</span>
+        <span class="meta-label">Configurable Policy</span>
       </div>
 
       <form method="post" action="/manager/settings/overlap<?= $unitQuery ?>" id="appointment-overlap-form" style="background: var(--surface-subtle, #f8fafc); border: 1px solid var(--line, #e2e8f0); border-radius: var(--radius-md, 8px); padding: 1.25rem;">
@@ -317,7 +315,6 @@ require __DIR__ . '/_nav.php';
       <h2 class="settings-card-title">4. Transaction Settings</h2>
       <p class="caption muted" style="margin: 0.15rem 0 0 0;">Supported <?= e($unitName) ?> payment gateways: GCash, Maya, and Cash on Delivery (COD). E-wallets require server-side OTP verification.</p>
     </div>
-    <span class="badge secondary" style="font-weight: 600;">3 Gateways</span>
   </div>
 
   <div class="settings-gateways-grid">
@@ -326,7 +323,7 @@ require __DIR__ . '/_nav.php';
       <div>
         <div class="row" style="justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
           <h3 style="margin: 0; font-size: 1.05rem; font-weight: 700; color: #005ce6;">GCash Gateway</h3>
-          <span class="badge <?= !empty($settings['gcash_verified']) ? 'badge-success' : 'secondary' ?>" id="gcash-badge" style="font-weight: 600;">
+          <span class="status <?= !empty($settings['gcash_verified']) ? 'ok' : 'neutral' ?>" id="gcash-badge">
             <?= !empty($settings['gcash_verified']) ? 'Verified' : 'Unverified' ?>
           </span>
         </div>
@@ -373,7 +370,7 @@ require __DIR__ . '/_nav.php';
       <div>
         <div class="row" style="justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
           <h3 style="margin: 0; font-size: 1.05rem; font-weight: 700; color: #16a34a;">Maya Gateway</h3>
-          <span class="badge <?= !empty($settings['maya_verified']) ? 'badge-success' : 'secondary' ?>" id="maya-badge" style="font-weight: 600;">
+          <span class="status <?= !empty($settings['maya_verified']) ? 'ok' : 'neutral' ?>" id="maya-badge">
             <?= !empty($settings['maya_verified']) ? 'Verified' : 'Unverified' ?>
           </span>
         </div>
@@ -419,7 +416,7 @@ require __DIR__ . '/_nav.php';
       <div>
         <div class="row" style="justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
           <h3 style="margin: 0; font-size: 1.05rem; font-weight: 700; color: var(--ink, #1f2937);">Cash on Delivery</h3>
-          <span class="badge <?= !empty($settings['cod_enabled']) ? 'badge-success' : 'secondary' ?>" style="font-weight: 600;">
+          <span class="status <?= !empty($settings['cod_enabled']) ? 'ok' : 'neutral' ?>">
             <?= !empty($settings['cod_enabled']) ? 'Enabled' : 'Disabled' ?>
           </span>
         </div>
@@ -461,7 +458,7 @@ require __DIR__ . '/_nav.php';
             Controls whether courier COD handover completions recorded by Pet Store Receptionists automatically count as verified or require Business Manager verification.
           </p>
         </div>
-        <span class="badge <?= $autoVerifyCodOn ? 'badge-success' : 'secondary' ?>" id="cod-auto-verify-badge" style="font-weight: 600;">
+        <span class="status <?= $autoVerifyCodOn ? 'ok' : 'neutral' ?>" id="cod-auto-verify-badge">
           <?= $autoVerifyCodOn ? 'On (Auto-Verify)' : 'Off (Manual Verification)' ?>
         </span>
       </div>

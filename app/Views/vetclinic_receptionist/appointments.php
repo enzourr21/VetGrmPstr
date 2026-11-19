@@ -29,20 +29,20 @@ $selectedApptId = $selectedApptId ?? null;
 </div>
 
 <!-- Navigation Tabs: Exactly 2 Tabs -->
-<div class="tabs-nav" style="display: flex; gap: 0.5rem; border-bottom: 2px solid var(--color-border, #e5e7eb); margin-bottom: 1.5rem;">
+<div class="tabs-nav" style="margin-bottom: 1.5rem;">
   <a href="/vetclinic/receptionist/appointments?tab=requests"
      class="tab-link <?= $activeTab === 'requests' ? 'is-active' : '' ?>"
-     style="padding: 0.65rem 1.25rem; font-weight: 600; text-decoration: none; border-bottom: 2px solid <?= $activeTab === 'requests' ? 'var(--brand, #0e8a75)' : 'transparent' ?>; margin-bottom: -2px; color: <?= $activeTab === 'requests' ? 'var(--brand, #0e8a75)' : 'var(--color-muted, #6b7280)' ?>;">
+    >
     Appointment Requests
     <?php if (count($reqList) > 0): ?>
-      <span class="badge badge-warning" style="margin-left: 0.4rem; font-size: 0.75rem; padding: 0.15rem 0.45rem;">
+      <span class="status warn" style="margin-left: 0.4rem;">
         <?= count($reqList) ?>
       </span>
     <?php endif; ?>
   </a>
   <a href="/vetclinic/receptionist/appointments?tab=calendar"
      class="tab-link <?= $activeTab === 'calendar' ? 'is-active' : '' ?>"
-     style="padding: 0.65rem 1.25rem; font-weight: 600; text-decoration: none; border-bottom: 2px solid <?= $activeTab === 'calendar' ? 'var(--brand, #0e8a75)' : 'transparent' ?>; margin-bottom: -2px; color: <?= $activeTab === 'calendar' ? 'var(--brand, #0e8a75)' : 'var(--color-muted, #6b7280)' ?>;">
+    >
     Appointments Calendar
   </a>
 </div>
@@ -80,7 +80,7 @@ $selectedApptId = $selectedApptId ?? null;
                   <span style="font-size: 1.15rem; font-weight: 700; color: var(--color-text, #111827);">
                     Request #<?= (int)$req['appointment_id'] ?>
                   </span>
-                  <span class="badge <?= e($req['status_badge_class'] ?? 'badge-warning') ?>">
+                  <span class="status <?= e($req['status_badge_class'] ?? 'warn') ?>">
                     <?= e($req['display_status'] ?? 'Pending') ?>
                   </span>
                 </div>
@@ -204,7 +204,7 @@ $selectedApptId = $selectedApptId ?? null;
         <strong class="grooming-cal-range-label" id="grooming-cal-range-label">
           <?= e($rangeHeading) ?>
         </strong>
-        <span class="badge secondary" style="font-size: 0.76rem; font-weight: 600;" id="vet-cal-overlap-badge" title="Maximum allowed appointment overlap configured for Veterinary Clinic">
+        <span class="meta-label" id="vet-cal-overlap-badge" title="Maximum allowed appointment overlap configured for Veterinary Clinic">
           Max Overlap: <?= (int)($maxOverlapMinutes ?? 15) ?>m
         </span>
 
@@ -244,7 +244,7 @@ $selectedApptId = $selectedApptId ?? null;
       <?php foreach ($weekDays as $dayInfo): ?>
         <div class="grooming-cal-day-head <?= !empty($dayInfo['is_today']) ? 'is-today' : '' ?>" data-date="<?= e($dayInfo['date']) ?>">
           <span class="grooming-cal-day-name"><?= e($dayInfo['day_short'] ?? $dayInfo['day_name'] ?? '') ?></span>
-          <strong class="grooming-cal-day-num <?= !empty($dayInfo['is_today']) ? 'is-today-pill' : '' ?>">
+          <strong class="grooming-cal-day-num <?= !empty($dayInfo['is_today']) ? 'is-today-num' : '' ?>">
             <?= e($dayInfo['day_label'] ?? (($dayInfo['month_short'] ?? '') . ' ' . ($dayInfo['day_num'] ?? ''))) ?>
           </strong>
         </div>
@@ -339,7 +339,7 @@ $selectedApptId = $selectedApptId ?? null;
               </h3>
             </div>
             <div style="display: flex; align-items: center; gap: 0.5rem;">
-              <span class="badge <?= e($appt['badge_class']) ?>"><?= e($appt['display_status'] ?? $statusName) ?></span>
+              <span class="status <?= e($appt['badge_class']) ?>"><?= e($appt['display_status'] ?? $statusName) ?></span>
               <button type="button"
                       class="grooming-bubble-close"
                       data-close-bubble="<?= $apptId ?>"
@@ -364,7 +364,7 @@ $selectedApptId = $selectedApptId ?? null;
                   <?php if (!empty($appt['customer_id_display'])): ?>
                     <span class="caption muted">(#<?= (int)$appt['customer_id_display'] ?>)</span>
                   <?php else: ?>
-                    <span class="badge" style="font-size: 0.65rem; background: #e0f2fe; color: #0369a1;">Guest</span>
+                    <span class="meta-label">Guest</span>
                   <?php endif; ?>
                   <?php if (!empty($appt['customer_phone'])): ?>
                     <div class="caption muted">📞 <?= e($appt['customer_phone']) ?></div>
@@ -490,7 +490,7 @@ $selectedApptId = $selectedApptId ?? null;
             <label for="selected-customer-id" class="caption" style="display: block; margin-bottom: 0.25rem; font-weight: 600;">Customer ID (Read-only)</label>
             <input id="selected-customer-id" type="text" name="customer_id" readonly style="width: 100%; background: var(--color-bg-subtle, #f3f4f6); cursor: not-allowed;" placeholder="Selected after clicking a suggestion">
           </div>
-          <div id="selected-customer-display" class="badge badge-success" style="display: none; font-size: 0.85rem; padding: 0.4rem 0.75rem; margin-bottom: 1rem;"></div>
+          <div id="selected-customer-display" class="status ok" style="margin-bottom: 1rem;"></div>
         </div>
 
         <div style="display: flex; justify-content: flex-end; margin-top: 1.5rem;">

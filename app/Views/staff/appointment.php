@@ -4,7 +4,7 @@
     <h1>Request #<?= (int)$a['appointment_id'] ?></h1>
     <p class="muted tabular">Requested at: <?= e($a['created_at']) ?></p>
   </div>
-  <span class="badge <?= $a['status_name'] === 'Confirmed' ? 'ok' : ($a['status_name'] === 'Pending' ? 'warn' : 'err') ?>"><?= e($a['status_name']) ?></span>
+  <span class="status <?= $a['status_name'] === 'Confirmed' ? 'ok' : ($a['status_name'] === 'Pending' ? 'warn' : 'err') ?>"><?= e($a['status_name']) ?></span>
 </div>
 
 <div class="grid-2" style="margin-bottom: 1.5rem;">
@@ -15,7 +15,7 @@
   <div class="card">
     <h2 style="margin-top:0">Request</h2>
     <p>
-      Status: <span class="badge <?= $a['status_name'] === 'Confirmed' ? 'ok' : ($a['status_name'] === 'Pending' ? 'warn' : 'err') ?>"><?= e($a['status_name']) ?></span><br>
+      Status: <span class="status <?= $a['status_name'] === 'Confirmed' ? 'ok' : ($a['status_name'] === 'Pending' ? 'warn' : 'err') ?>"><?= e($a['status_name']) ?></span><br>
       Requested at: <span class="tabular"><?= e($a['created_at']) ?></span><br>
       Preferred: <span class="tabular"><?= e($a['preferred_date']) ?> <?= e($a['preferred_time'] ? substr($a['preferred_time'], 0, 5) : '(no time given)') ?></span>
     </p>

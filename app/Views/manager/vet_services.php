@@ -92,7 +92,7 @@ $statusFilter = $selectedStatus ?? '';
             <tr id="service-row-<?= (int)$srv['service_id'] ?>">
               <td>
                 <strong style="display: block; font-size: 0.92rem; font-weight: 650; word-break: break-word; color: var(--ink);"><?= e($srv['service_name']) ?></strong>
-                <span class="badge secondary" style="font-size: 0.72rem; padding: 0.15rem 0.4rem; margin-top: 0.2rem; display: inline-block;">Medical</span>
+                <span class="meta-label" style="margin-top: 0.2rem;">Medical</span>
               </td>
               <td>
                 <span style="font-size: 0.86rem; color: var(--muted); line-height: 1.4; display: block;">
@@ -104,9 +104,9 @@ $statusFilter = $selectedStatus ?? '';
               </td>
               <td style="text-align: center; white-space: nowrap;">
                 <?php if ($isAvail): ?>
-                  <span class="badge ok">Available</span>
+                  <span class="status ok">Available</span>
                 <?php else: ?>
-                  <span class="badge err">Unavailable</span>
+                  <span class="status err">Unavailable</span>
                 <?php endif; ?>
               </td>
               <td style="text-align: right; white-space: nowrap;">

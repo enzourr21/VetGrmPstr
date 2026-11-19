@@ -19,7 +19,7 @@
     <div>
       <div class="row" style="justify-content: space-between; margin-bottom: 0.4rem;">
         <h3><?= e($p['pet_name']) ?></h3>
-        <span class="badge"><?= e($p['species']) ?></span>
+        <span class="status"><?= e($p['species']) ?></span>
       </div>
       <p class="muted tabular"><?= e($p['breed'] ?: 'Breed not set') ?> · <?= e(ucfirst($p['sex'])) ?><?= $p['weight_kg'] ? ' · ' . e($p['weight_kg']) . ' kg' : '' ?></p>
       <?php if (!empty($p['notes'])): ?>

@@ -66,7 +66,7 @@ $unitQuery = !empty($isSuper) ? '?unit_id=' . (int)$unitId : '';
               <tr>
                 <td><strong><?= e($pos['position_name']) ?></strong></td>
                 <td class="caption"><?= e($pos['description'] ?? '—') ?></td>
-                <td><span class="badge status-<?= e($pos['position_status']) ?>"><?= e($pos['position_status']) ?></span></td>
+                <td><span class="status status-<?= e($pos['position_status']) ?>"><?= e($pos['position_status']) ?></span></td>
                 <td>
                   <form method="post" action="/sysadmin/positions/<?= (int)$pos['position_id'] ?>/toggle<?= $unitQuery ?>" style="display:inline;">
                     <?= \App\Core\CSRF::field() ?>

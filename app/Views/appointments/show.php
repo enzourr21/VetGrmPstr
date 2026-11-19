@@ -4,11 +4,11 @@
     <h1>Appointment request #<?= (int)$a['appointment_id'] ?></h1>
     <p class="muted tabular">Preferred: <?= e($a['preferred_date']) ?> <?= e($a['preferred_time'] ? substr($a['preferred_time'], 0, 5) : '') ?> · Submitted: <?= e($a['created_at']) ?></p>
   </div>
-  <span class="badge <?= $a['status_name'] === 'Confirmed' ? 'ok' : (in_array($a['status_name'], ['Rejected', 'Cancelled', 'No-Show']) ? 'err' : 'warn') ?>"><?= e($a['status_name']) ?></span>
+  <span class="status <?= $a['status_name'] === 'Confirmed' ? 'ok' : (in_array($a['status_name'], ['Rejected', 'Cancelled', 'No-Show']) ? 'err' : 'warn') ?>"><?= e($a['status_name']) ?></span>
 </div>
 
 <div class="card" style="margin-bottom: 1.5rem;">
-  <p>Status: <span class="badge <?= $a['status_name'] === 'Confirmed' ? 'ok' : (in_array($a['status_name'], ['Rejected', 'Cancelled', 'No-Show']) ? 'err' : 'warn') ?>"><?= e($a['status_name']) ?></span></p>
+  <p>Status: <span class="status <?= $a['status_name'] === 'Confirmed' ? 'ok' : (in_array($a['status_name'], ['Rejected', 'Cancelled', 'No-Show']) ? 'err' : 'warn') ?>"><?= e($a['status_name']) ?></span></p>
   <?php if ($a['notes']): ?><p class="muted">Notes: <?= e($a['notes']) ?></p><?php endif; ?>
   <?php if ($a['status_name'] === 'Pending'): ?><p class="notice" style="margin-bottom:0">This is a request, not a confirmed appointment. The receptionist will review it.</p><?php endif; ?>
 </div>

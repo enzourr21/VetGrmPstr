@@ -1458,30 +1458,30 @@ final class GroomingReceptionistController extends Controller
         $rawStatus = (string)($appt['status_name'] ?? 'Pending');
         $invoiceStatus = (string)($appt['invoice_status'] ?? '');
         $displayStatus = $rawStatus;
-        $statusBadge = 'badge-secondary';
+        $statusBadge = 'neutral';
 
         if ($rawStatus === 'Confirmed') {
-            $statusBadge = 'badge-success';
+            $statusBadge = 'ok';
             $colorClass = 'cal-status-green';
             $statusColorName = 'green';
             $badgeClass = 'ok';
         } elseif ($rawStatus === 'In Progress') {
-            $statusBadge = 'badge-warning';
+            $statusBadge = 'warn';
             $colorClass = 'cal-status-yellow';
             $statusColorName = 'yellow';
             $badgeClass = 'warn';
         } elseif ($rawStatus === 'Completed') {
-            $statusBadge = 'badge-success';
+            $statusBadge = 'ok';
             $colorClass = 'cal-status-transparent';
             $statusColorName = 'transparent';
             $badgeClass = 'ok';
         } elseif (in_array($rawStatus, ['Rejected', 'Cancelled'], true)) {
-            $statusBadge = 'badge-danger';
+            $statusBadge = 'err';
             $colorClass = 'cal-status-red';
             $statusColorName = 'red';
             $badgeClass = 'err';
         } elseif ($rawStatus === 'Awaiting Customer Response') {
-            $statusBadge = 'badge-info';
+            $statusBadge = 'info';
             $colorClass = 'cal-status-yellow';
             $statusColorName = 'yellow';
             $badgeClass = 'warn';
@@ -1496,7 +1496,7 @@ final class GroomingReceptionistController extends Controller
         if (($rawStatus === 'Completed' && $invoiceStatus !== 'paid') || ($rawStatus === 'In Progress' && $invoiceStatus !== 'paid')) {
             $isPendingPayment = true;
             $displayStatus = 'Pending Payment';
-            $statusBadge = 'badge-warning';
+            $statusBadge = 'warn';
         }
 
         $appt['customer_name'] = $customerName;

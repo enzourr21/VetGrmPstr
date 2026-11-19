@@ -146,7 +146,7 @@ $renderProfileMenu = static function (string $adminInitials, array $authorizedIn
                             <span class="unit-dot" aria-hidden="true"><?= $isUnitCurrent ? '●' : '▪' ?></span>
                             <span class="unit-name"><?= e($u['name']) ?></span>
                             <?php if ($isUnitCurrent): ?>
-                              <span class="unit-badge">Current</span>
+                              <span class="unit-current">Current</span>
                             <?php endif; ?>
                           </a>
                         <?php endif; ?>
@@ -158,7 +158,7 @@ $renderProfileMenu = static function (string $adminInitials, array $authorizedIn
                     <span class="switcher-opt-indicator" aria-hidden="true"><?= $iface['active'] ? '●' : '○' ?></span>
                     <span class="switcher-opt-name"><?= e($iface['label']) ?></span>
                     <?php if ($iface['active']): ?>
-                      <span class="switcher-opt-badge">Current</span>
+                      <span class="switcher-current">Current</span>
                     <?php endif; ?>
                   </a>
                 <?php endif; ?>

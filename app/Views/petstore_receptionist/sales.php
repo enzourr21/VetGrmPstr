@@ -123,7 +123,7 @@ $title = $title ?? 'Overview · Pet Store Receptionist';
                 <span class="caption muted"><?= date('g:i A', strtotime((string)$s['sale_date'])) ?></span>
               </td>
               <td style="padding: 0.875rem 1rem;">
-                <span class="badge" style="background: var(--color-bg-subtle, #f3f4f6); color: var(--color-text, #374151);">
+                <span class="meta-label">
                   <?= (int)($s['item_count'] ?? count($s['items'] ?? [])) ?> item(s)
                 </span>
                 <?php if (!empty($s['items'])): ?>
@@ -133,7 +133,7 @@ $title = $title ?? 'Overview · Pet Store Receptionist';
                 <?php endif; ?>
               </td>
               <td style="padding: 0.875rem 1rem;">
-                <span class="badge badge-success">Completed</span>
+                <span class="status ok">Completed</span>
                 <div class="caption muted" style="margin-top: 0.2rem;"><?= e($s['payment_method'] ?? 'Cash') ?></div>
               </td>
               <td style="padding: 0.875rem 1rem; text-align: right; font-weight: 700; color: var(--color-text, #111827); font-size: 1.05rem;">
@@ -581,9 +581,9 @@ $title = $title ?? 'Overview · Pet Store Receptionist';
       var rightDiv = document.createElement('div');
       rightDiv.style.textAlign = 'right';
       if (isAvailable) {
-        rightDiv.innerHTML = '<span class="badge" style="background: #d1fae5; color: #065f46; font-size: 0.75rem;">' + p.available_stock + ' in stock</span>';
+        rightDiv.innerHTML = '<span class="status ok">' + p.available_stock + ' in stock</span>';
       } else {
-        rightDiv.innerHTML = '<span class="badge" style="background: #fee2e2; color: #991b1b; font-size: 0.75rem;">Out of stock</span>';
+        rightDiv.innerHTML = '<span class="status err">Out of stock</span>';
       }
 
       li.appendChild(leftDiv);

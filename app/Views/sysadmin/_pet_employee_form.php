@@ -93,12 +93,12 @@ $initialRoleForSelectedPos = $positionRoleMap[$selectedPos] ?? null;
         <label style="margin:0">5. System roles in <?= e($unitName) ?></label>
         <button type="button" class="btn secondary btn-sm" data-role-add aria-haspopup="dialog">+ Add Role</button>
       </div>
-      <div class="role-chips" data-role-chips aria-live="polite">
+      <div class="role-list" data-role-chips aria-live="polite">
         <?php foreach ($selectedRoles as $rn): if ($rn === '' || !isset($roleDescriptions[$rn])) continue; ?>
-          <span class="role-chip" data-role-chip="<?= e($rn) ?>" <?= ($rn === $initialRoleForSelectedPos) ? 'data-role-auto="true"' : '' ?>>
+          <span class="role-item" data-role-chip="<?= e($rn) ?>" <?= ($rn === $initialRoleForSelectedPos) ? 'data-role-auto="true"' : '' ?>>
             <input type="hidden" name="roles[]" value="<?= e($rn) ?>">
             <span><?= e($rn) ?></span>
-            <button type="button" class="role-chip-remove" data-role-remove aria-label="Remove role <?= e($rn) ?>">&times;</button>
+            <button type="button" class="role-item-remove" data-role-remove aria-label="Remove role <?= e($rn) ?>">&times;</button>
           </span>
         <?php endforeach; ?>
       </div>
@@ -111,9 +111,12 @@ $initialRoleForSelectedPos = $positionRoleMap[$selectedPos] ?? null;
     <div class="grid grid-2">
       <div class="field">
         <label for="sa-emp-password">6. Password</label>
-        <input id="sa-emp-password" name="password" type="password" required minlength="10"
-               autocomplete="new-password" placeholder="At least 10 characters"
-               aria-invalid="<?= isset($errors['password']) ? 'true' : 'false' ?>">
+        <div class="password-input-wrap">
+          <input id="sa-emp-password" name="password" type="password" required minlength="10"
+                 autocomplete="new-password" placeholder="At least 10 characters"
+                 aria-invalid="<?= isset($errors['password']) ? 'true' : 'false' ?>">
+          <button type="button" class="password-toggle-btn" data-pw-toggle="sa-emp-password" aria-label="Show password" aria-pressed="false"><svg class="icon-eye" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg><svg class="icon-eye-off" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.4 10.4 0 0 1 12 19c-6.5 0-10-7-10-7a18.6 18.6 0 0 1 4.06-5.06"/><path d="M9.9 5.24A9.7 9.7 0 0 1 12 5c6.5 0 10 7 10 7a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="2" y1="2" x2="22" y2="22"/></svg></button>
+        </div>
         <?php if (isset($errors['password'])): ?>
           <div class="field-error"><?= e($errors['password']) ?></div>
         <?php endif; ?>

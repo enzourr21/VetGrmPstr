@@ -17,11 +17,11 @@
       <div class="row" style="justify-content: space-between; margin-bottom: 0.45rem;">
         <span class="caption"><?= e($p['product_category']) ?></span>
         <?php if (!$in): ?>
-          <span class="badge err">Out of stock</span>
+          <span class="status err">Out of stock</span>
         <?php elseif ((int)$p['available'] <= 5): ?>
-          <span class="badge warn">Only <?= (int)$p['available'] ?> left</span>
+          <span class="status warn">Only <?= (int)$p['available'] ?> left</span>
         <?php else: ?>
-          <span class="badge ok">In stock</span>
+          <span class="status ok">In stock</span>
         <?php endif; ?>
       </div>
       <h3><a href="/shop/<?= (int)$unit['business_unit_id'] ?>/product/<?= (int)$p['business_product_id'] ?>"><?= e($p['product_name']) ?></a></h3>

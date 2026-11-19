@@ -11,14 +11,14 @@
 <!-- Hierarchy Distinction Card -->
 <div class="grid-2" style="margin-bottom: 2rem;">
   <article class="card">
-    <span class="unit-pill unit-pill-global">Global Scope</span>
+    <span class="meta-label">Global Scope</span>
     <h3 style="margin-top: 0.5rem;">Super Administrator</h3>
     <p class="muted">
       Permanent system-wide administrative authority. Can access the Super Administrator interface, all three System Administrator interfaces, all Business Manager interfaces, Employee interfaces, and the Customer interface without requiring extra role assignments.
     </p>
   </article>
   <article class="card">
-    <span class="unit-pill">Business-Unit Scope</span>
+    <span class="meta-label">Business-Unit Scope</span>
     <h3 style="margin-top: 0.5rem;">Business-Unit System Administrators</h3>
     <p class="muted">
       Assigned through <code>account_role</code> scoped to a single <code>business_unit_id</code> (Pet Store, Veterinary Clinic, or Grooming Services). Can manage employees, positions, and roles only within their assigned unit and cannot elevate accounts to Super Administrator.
@@ -50,9 +50,9 @@
           <td><strong><code><?= e($r['role_name']) ?></code></strong></td>
           <td>
             <?php if ($r['role_name'] === 'SUPER_ADMINISTRATOR'): ?>
-              <span class="unit-pill unit-pill-global">System-Wide</span>
+              <span class="meta-label">System-Wide</span>
             <?php else: ?>
-              <span class="unit-pill">Per Business Unit</span>
+              <span class="meta-label">Per Business Unit</span>
             <?php endif; ?>
           </td>
           <td><?= e($r['description']) ?></td>

@@ -75,13 +75,13 @@ $totalEmployees = count($allEmployees);
           <?php foreach ($allEmployees as $emp): ?>
             <?php
             $ws = (string)($emp['work_status'] ?? 'Free');
-            $wsBadge = 'badge-secondary';
+            $wsBadge = 'neutral';
             if ($ws === 'On Duty') {
-                $wsBadge = 'badge-success';
+                $wsBadge = 'ok';
             } elseif ($ws === 'Free') {
-                $wsBadge = 'badge-info';
+                $wsBadge = 'info';
             } elseif ($ws === 'Not Present') {
-                $wsBadge = 'badge-danger';
+                $wsBadge = 'err';
             }
             ?>
             <tr style="border-bottom: 1px solid var(--color-border, #f3f4f6);">
@@ -92,7 +92,7 @@ $totalEmployees = count($allEmployees);
                 <span class="caption muted">ID #<?= (int)$emp['employee_id'] ?></span>
               </td>
               <td style="padding: 0.875rem 1rem;">
-                <span class="badge" style="background: var(--color-bg-subtle, #f3f4f6); color: var(--color-text, #374151); font-weight: 500;">
+                <span class="meta-label">
                   <?= e($emp['position'] ?: 'Clinical Staff') ?>
                 </span>
               </td>
@@ -105,7 +105,7 @@ $totalEmployees = count($allEmployees);
                 </div>
               </td>
               <td style="padding: 0.875rem 1rem; text-align: center;">
-                <span class="badge <?= $wsBadge ?>" style="font-weight: 600;">
+                <span class="status <?= $wsBadge ?>">
                   <?= e($ws) ?>
                 </span>
               </td>
@@ -113,7 +113,7 @@ $totalEmployees = count($allEmployees);
                 <?= (int)($emp['today_assignments'] ?? 0) ?>
               </td>
               <td style="padding: 0.875rem 1rem; text-align: center;">
-                <span class="badge <?= ($emp['employee_status'] ?? 'active') === 'active' ? 'badge-success' : 'badge-danger' ?>">
+                <span class="status <?= ($emp['employee_status'] ?? 'active') === 'active' ? 'ok' : 'err' ?>">
                   <?= ucfirst((string)($emp['employee_status'] ?? 'active')) ?>
                 </span>
               </td>

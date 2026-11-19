@@ -6,16 +6,6 @@ $unitQuery = !empty($isSuper) && !empty($unitId) ? '?unit_id=' . (int)$unitId : 
 $q = $searchQuery ?? '';
 $catFilter = $selectedCategory ?? '';
 $statusFilter = $selectedStatus ?? '';
-
-$catStyle = function(string $cat): array {
-    return match($cat) {
-        'Bathing & Brushing' => ['bg' => '#e0f2fe', 'color' => '#0369a1', 'border' => '#bae6fd'],
-        'Styling' => ['bg' => '#f3e8ff', 'color' => '#6b21a8', 'border' => '#e9d5ff'],
-        'Wellness' => ['bg' => '#ecfdf5', 'color' => '#047857', 'border' => '#a7f3d0'],
-        'Specialized' => ['bg' => '#fef3c7', 'color' => '#92400e', 'border' => '#fde68a'],
-        default => ['bg' => '#f3f4f6', 'color' => '#374151', 'border' => '#e5e7eb'],
-    };
-};
 ?>
 
 <div class="page-head" style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap;">
@@ -104,7 +94,6 @@ $catStyle = function(string $cat): array {
           <?php foreach ($services as $srv): ?>
             <?php
               $cat = $srv['grooming_category'] ?: 'Bathing & Brushing';
-              $cStyle = $catStyle($cat);
               $isAvail = ($srv['service_status'] === 'active');
             ?>
             <tr id="service-row-<?= (int)$srv['service_id'] ?>">
@@ -112,9 +101,7 @@ $catStyle = function(string $cat): array {
                 <strong style="display: block; font-size: 0.88rem; font-weight: 650; word-break: break-word; color: var(--ink);"><?= e($srv['service_name']) ?></strong>
               </td>
               <td>
-                <span style="display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.18rem 0.5rem; border-radius: 999px; font-size: 0.74rem; font-weight: 600; background: <?= $cStyle['bg'] ?>; color: <?= $cStyle['color'] ?>; border: 1px solid <?= $cStyle['border'] ?>; white-space: nowrap;">
-                  <?= e($cat) ?>
-                </span>
+                <span class="meta-label"><?= e($cat) ?></span>
               </td>
               <td class="tabular" style="text-align: right; font-weight: 700; color: var(--text, #1e293b); white-space: nowrap; font-size: 0.85rem;">
                 <?= peso((float)$srv['base_price']) ?>
@@ -130,9 +117,9 @@ $catStyle = function(string $cat): array {
               </td>
               <td style="text-align: center; white-space: nowrap;">
                 <?php if ($isAvail): ?>
-                  <span class="badge ok">Available</span>
+                  <span class="status ok">Available</span>
                 <?php else: ?>
-                  <span class="badge err">Unavailable</span>
+                  <span class="status err">Unavailable</span>
                 <?php endif; ?>
               </td>
               <td style="text-align: right; white-space: nowrap;">

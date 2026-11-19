@@ -4,9 +4,9 @@
   <div class="row" style="justify-content: space-between; margin-bottom: 0.5rem;">
     <span class="caption"><?= e($unit['business_unit_name']) ?> · <?= e($p['product_category']) ?></span>
     <?php if ($in): ?>
-      <span class="badge ok tabular"><?= (int)$p['available'] ?> available</span>
+      <span class="status ok tabular"><?= (int)$p['available'] ?> available</span>
     <?php else: ?>
-      <span class="badge err">Out of stock</span>
+      <span class="status err">Out of stock</span>
     <?php endif; ?>
   </div>
   <h1><?= e($p['product_name']) ?></h1>

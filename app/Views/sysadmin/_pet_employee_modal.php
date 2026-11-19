@@ -97,12 +97,12 @@ $initialRolesForSelectedPos = \App\Models\AdminAccountService::initialRolesForPo
           <label style="margin:0">5. System roles in <?= e($unitName) ?></label>
           <button type="button" class="btn secondary btn-sm" data-role-add aria-haspopup="dialog">+ Add Role</button>
         </div>
-        <div class="role-chips" data-role-chips aria-live="polite">
+        <div class="role-list" data-role-chips aria-live="polite">
           <?php foreach ($selectedRoles as $rn): if ($rn === '' || !isset($roleDescriptions[$rn])) continue; ?>
-            <span class="role-chip" data-role-chip="<?= e($rn) ?>" <?= in_array($rn, $initialRolesForSelectedPos, true) ? 'data-role-auto="true"' : '' ?>>
+            <span class="role-item" data-role-chip="<?= e($rn) ?>" <?= in_array($rn, $initialRolesForSelectedPos, true) ? 'data-role-auto="true"' : '' ?>>
               <input type="hidden" name="roles[]" value="<?= e($rn) ?>">
               <span><?= e($rn) ?></span>
-              <button type="button" class="role-chip-remove" data-role-remove aria-label="Remove role <?= e($rn) ?>">&times;</button>
+              <button type="button" class="role-item-remove" data-role-remove aria-label="Remove role <?= e($rn) ?>">&times;</button>
             </span>
           <?php endforeach; ?>
         </div>

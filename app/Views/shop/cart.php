@@ -20,8 +20,8 @@
     <tr>
       <td>
         <strong><?= e($i['product_name']) ?></strong>
-        <?php if ($i['product_status'] !== 'active'): ?><br><span class="badge err">No longer available</span>
-        <?php elseif ((int)$i['available'] < (int)$i['quantity']): ?><br><span class="badge warn">Only <?= (int)$i['available'] ?> available</span><?php endif; ?>
+        <?php if ($i['product_status'] !== 'active'): ?><br><span class="status err">No longer available</span>
+        <?php elseif ((int)$i['available'] < (int)$i['quantity']): ?><br><span class="status warn">Only <?= (int)$i['available'] ?> available</span><?php endif; ?>
       </td>
       <td class="tabular"><?= money($i['selling_price']) ?></td>
       <td>

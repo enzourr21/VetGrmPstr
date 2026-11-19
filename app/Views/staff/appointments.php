@@ -29,7 +29,7 @@
       <td><?= e($r['pets']) ?></td>
       <td class="tabular"><?= e($r['preferred_date']) ?> <?= e($r['preferred_time'] ? substr($r['preferred_time'], 0, 5) : '') ?></td>
       <td class="tabular caption"><?= e($r['created_at']) ?></td>
-      <td><span class="badge <?= $r['status_name'] === 'Pending' ? 'warn' : ($r['status_name'] === 'Confirmed' ? 'ok' : '') ?>"><?= e($r['status_name']) ?></span></td>
+      <td><span class="status <?= $r['status_name'] === 'Pending' ? 'warn' : ($r['status_name'] === 'Confirmed' ? 'ok' : '') ?>"><?= e($r['status_name']) ?></span></td>
     </tr>
   <?php endforeach; ?>
   </tbody>

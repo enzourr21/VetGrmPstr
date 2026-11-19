@@ -505,10 +505,10 @@ final class ManagerController extends Controller
 
             if ($avail <= 0) {
                 $alertLabel = 'Out of Stock';
-                $badgeClass = 'badge-danger';
+                $badgeClass = 'err';
             } elseif ($isExpired) {
                 $alertLabel = 'Batch Expired';
-                $badgeClass = 'badge-danger';
+                $badgeClass = 'err';
             } elseif ($isNearExp) {
                 $alertLabel = 'Expiring Soon';
                 $badgeClass = 'warn';
@@ -2881,8 +2881,8 @@ final class ManagerController extends Controller
 
         // Badge class for UI
         $appt['status_badge_class'] = match($recStatus) {
-            'FINALIZED' => 'badge-success',
-            'REVISED' => 'badge-warn',
+            'FINALIZED' => 'ok',
+            'REVISED' => 'warn',
             'AWAITING_TEST_RESULTS' => 'warn',
             default => 'secondary',
         };
@@ -3793,7 +3793,7 @@ final class ManagerController extends Controller
                 $b['is_expired'] = $isExp;
                 $b['is_expiring_soon'] = $isSoon;
                 $b['status_label'] = $isExp ? 'Expired' : ($isSoon ? 'Expiring Soon' : 'Active');
-                $b['badge_class'] = $isExp ? 'badge-danger' : ($isSoon ? 'warn' : 'secondary');
+                $b['badge_class'] = $isExp ? 'err' : ($isSoon ? 'warn' : 'secondary');
                 $batches[] = $b;
                 if ($isExp) {
                     $expiredQty += (int)$b['quantity'];

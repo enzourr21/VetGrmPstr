@@ -129,28 +129,28 @@ $totalOrders = count($ordersList);
                 <?php endif; ?>
               </td>
               <td>
-                <span class="badge secondary"><?= e(ucfirst((string)$o['fulfillment_method'])) ?></span>
+                <span class="meta-label"><?= e(ucfirst((string)$o['fulfillment_method'])) ?></span>
               </td>
               <td><strong><?= peso((float)$o['total_amount']) ?></strong></td>
               <td>
-                <span class="badge secondary"><?= e($o['payment_method'] ?? 'COD') ?></span>
+                <span class="meta-label"><?= e($o['payment_method'] ?? 'COD') ?></span>
                 <div class="caption"><?= e(ucfirst((string)($o['payment_status'] ?? 'Completed'))) ?></div>
               </td>
               <td>
                 <?php
                 $st = (string)$o['order_status'];
-                $badgeClass = 'badge-secondary';
+                $badgeClass = 'neutral';
                 if (in_array($st, ['completed', 'confirmed'], true)) {
-                    $badgeClass = 'badge-success';
+                    $badgeClass = 'ok';
                 } elseif (in_array($st, ['ready_for_pickup', 'out_for_delivery', 'processing'], true)) {
-                    $badgeClass = 'badge-info';
+                    $badgeClass = 'info';
                 } elseif ($st === 'pending') {
-                    $badgeClass = 'badge-warning';
+                    $badgeClass = 'warn';
                 } elseif (in_array($st, ['cancelled', 'delivery_failed'], true)) {
-                    $badgeClass = 'badge-danger';
+                    $badgeClass = 'err';
                 }
                 ?>
-                <span class="badge <?= $badgeClass ?>">
+                <span class="status <?= $badgeClass ?>">
                   <?= e(ucwords(str_replace('_', ' ', $st))) ?>
                 </span>
               </td>
@@ -172,7 +172,7 @@ $totalOrders = count($ordersList);
   <dialog class="modal modal-wide" id="order-modal-<?= (int)$o['order_id'] ?>" aria-labelledby="order-title-<?= (int)$o['order_id'] ?>">
     <div class="modal-head">
       <div>
-        <span class="badge" style="background: #fef3c7; color: #92400e; margin-bottom: 0.25rem;">
+        <span class="meta-label" style="margin-bottom: 0.25rem;">
           Online <?= e(ucfirst((string)$o['fulfillment_method'])) ?> Order
         </span>
         <h3 id="order-title-<?= (int)$o['order_id'] ?>" style="margin: 0;">Order #ORD-<?= (int)$o['order_id'] ?></h3>
@@ -192,18 +192,18 @@ $totalOrders = count($ordersList);
           <div>
             <?php
             $st = (string)$o['order_status'];
-            $badgeClass = 'badge-secondary';
+            $badgeClass = 'neutral';
             if (in_array($st, ['completed', 'confirmed'], true)) {
-                $badgeClass = 'badge-success';
+                $badgeClass = 'ok';
             } elseif (in_array($st, ['ready_for_pickup', 'out_for_delivery', 'processing'], true)) {
-                $badgeClass = 'badge-info';
+                $badgeClass = 'info';
             } elseif ($st === 'pending') {
-                $badgeClass = 'badge-warning';
+                $badgeClass = 'warn';
             } elseif (in_array($st, ['cancelled', 'delivery_failed'], true)) {
-                $badgeClass = 'badge-danger';
+                $badgeClass = 'err';
             }
             ?>
-            <span class="badge <?= $badgeClass ?>">
+            <span class="status <?= $badgeClass ?>">
               <?= e(ucwords(str_replace('_', ' ', $st))) ?>
             </span>
           </div>
@@ -244,8 +244,8 @@ $totalOrders = count($ordersList);
 
           <p style="margin: 0.5rem 0 0.25rem 0;" class="caption">Payment Information</p>
           <div>
-            <span class="badge secondary"><?= e($o['payment_method'] ?? 'COD') ?></span>
-            <span class="badge badge-success"><?= e(ucfirst((string)($o['payment_status'] ?? 'Completed'))) ?></span>
+            <span class="meta-label"><?= e($o['payment_method'] ?? 'COD') ?></span>
+            <span class="status ok"><?= e(ucfirst((string)($o['payment_status'] ?? 'Completed'))) ?></span>
           </div>
         </div>
       </div>

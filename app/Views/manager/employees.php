@@ -112,7 +112,7 @@ $pageUrl = function (int $p) use ($unitId, $isSuper, $q, $posFilter, $statusFilt
           <?php foreach ($employees as $emp):
             $initials = strtoupper(substr((string)$emp['first_name'], 0, 1) . substr((string)$emp['last_name'], 0, 1));
             $ws = $emp['work_status'] ?? 'Free';
-            $wsBadgeClass = $ws === 'On Duty' ? 'badge-success' : ($ws === 'Free' ? 'secondary' : 'badge-danger');
+            $wsBadgeClass = $ws === 'On Duty' ? 'ok' : ($ws === 'Free' ? 'secondary' : 'err');
             $dac = (int)($emp['daily_assignment_count'] ?? 0);
           ?>
             <tr>
@@ -128,12 +128,12 @@ $pageUrl = function (int $p) use ($unitId, $isSuper, $q, $posFilter, $statusFilt
               <td><?= e($emp['position']) ?></td>
               <td><?= e($emp['email']) ?></td>
               <td>
-                <span class="badge <?= $wsBadgeClass ?>">
+                <span class="status <?= $wsBadgeClass ?>">
                   <?= e($ws) ?>
                 </span>
               </td>
               <td>
-                <span class="badge secondary" style="font-weight: 500;">
+                <span class="meta-label">
                   <?= $dac ?> <?= $dac === 1 ? 'appointment' : 'appointments' ?>
                 </span>
               </td>
@@ -173,7 +173,7 @@ $pageUrl = function (int $p) use ($unitId, $isSuper, $q, $posFilter, $statusFilt
 <?php foreach ($allEmployeesList as $emp):
   $initials = strtoupper(substr((string)$emp['first_name'], 0, 1) . substr((string)$emp['last_name'], 0, 1));
   $ws = $emp['work_status'] ?? 'Free';
-  $wsBadgeClass = $ws === 'On Duty' ? 'badge-success' : ($ws === 'Free' ? 'secondary' : 'badge-danger');
+  $wsBadgeClass = $ws === 'On Duty' ? 'ok' : ($ws === 'Free' ? 'secondary' : 'err');
 ?>
   <dialog class="modal" id="emp-detail-<?= (int)$emp['employee_id'] ?>" aria-labelledby="emp-title-<?= (int)$emp['employee_id'] ?>">
     <div class="modal-head">
@@ -189,7 +189,7 @@ $pageUrl = function (int $p) use ($unitId, $isSuper, $q, $posFilter, $statusFilt
           <h4 style="margin: 0; font-size: 1.2rem;"><?= e($emp['first_name'] . ' ' . $emp['last_name']) ?></h4>
           <div class="caption"><?= e($emp['position']) ?> · <?= e($unitName) ?></div>
           <div style="margin-top: 0.25rem;">
-            <span class="badge <?= $wsBadgeClass ?>">Work Status: <?= e($ws) ?></span>
+            <span class="status <?= $wsBadgeClass ?>">Work Status: <?= e($ws) ?></span>
           </div>
         </div>
       </div>
@@ -230,7 +230,7 @@ $pageUrl = function (int $p) use ($unitId, $isSuper, $q, $posFilter, $statusFilt
         </div>
         <div class="row" style="justify-content: space-between;">
           <span class="caption">Employment Status:</span>
-          <span class="badge badge-success"><?= e(ucfirst((string)$emp['employee_status'])) ?></span>
+          <span class="status ok"><?= e(ucfirst((string)$emp['employee_status'])) ?></span>
         </div>
       </div>
 

@@ -91,7 +91,6 @@
         }, 140);
       }
       input.type = showing ? 'password' : 'text';
-      btn.textContent = showing ? 'Show' : 'Hide';
       btn.setAttribute('aria-pressed', showing ? 'false' : 'true');
       btn.setAttribute('aria-label', (showing ? 'Show ' : 'Hide ') + (input.name === 'password_confirm' ? 'confirmation password' : 'password'));
     });
@@ -1232,7 +1231,7 @@
         return;
       }
       var chip = document.createElement('span');
-      chip.className = 'role-chip' + (isAuto ? ' is-auto-role' : '');
+      chip.className = 'role-item' + (isAuto ? ' is-auto-role' : '');
       chip.setAttribute('data-role-chip', name);
       if (isAuto) {
         chip.setAttribute('data-role-auto', 'true');
@@ -1245,7 +1244,7 @@
       label.textContent = name;
       var rm = document.createElement('button');
       rm.type = 'button';
-      rm.className = 'role-chip-remove';
+      rm.className = 'role-item-remove';
       rm.setAttribute('data-role-remove', '');
       rm.setAttribute('aria-label', 'Remove role ' + name);
       rm.innerHTML = '&times;';
@@ -1363,7 +1362,7 @@
 
     // Clicking anywhere on the role card outside interactive form elements also toggles
     var card = ev.target.closest('[data-role-card]');
-    if (card && !ev.target.closest('a, button, input, select, textarea, label, form, .badge, code')) {
+    if (card && !ev.target.closest('a, button, input, select, textarea, label, form, .status, .meta-label, code')) {
       var btn = card.querySelector('[data-role-toggle]');
       if (btn) {
         toggleRoleCard(card, btn);
@@ -1405,7 +1404,7 @@
       } else if (window.performance && window.performance.navigation && window.performance.navigation.type === 1) {
         isReload = true;
       }
-    } catch (e) {}
+    } catch (e) { }
 
     navConfigs.forEach(function (cfg) {
       var container = cfg.container;
@@ -1507,7 +1506,7 @@
         try {
           var raw = sessionStorage.getItem(cfg.storageKey);
           if (raw) prevStored = JSON.parse(raw);
-        } catch (e) {}
+        } catch (e) { }
 
         var hadTransition = prevStored && (Date.now() - prevStored.time < 4000) && prevStored.path !== currentPath;
 
@@ -1529,7 +1528,7 @@
               indicator.style.width = targetWidth + 'px';
             });
           });
-          try { sessionStorage.removeItem(cfg.storageKey); } catch (e) {}
+          try { sessionStorage.removeItem(cfg.storageKey); } catch (e) { }
         } else if (!reducedMotion && !prevStored) {
           var center = targetLeft + (targetWidth / 2);
           indicator.style.transition = 'none';
@@ -1559,7 +1558,7 @@
             path: currentPath,
             time: Date.now()
           }));
-        } catch (e) {}
+        } catch (e) { }
       }
 
       container.addEventListener('click', function (ev) {
@@ -1580,7 +1579,7 @@
             path: window.location.pathname,
             time: Date.now()
           }));
-        } catch (e) {}
+        } catch (e) { }
 
         indicator.style.transition = 'left 220ms cubic-bezier(0.23, 1, 0.32, 1), width 220ms cubic-bezier(0.23, 1, 0.32, 1), opacity 180ms ease';
         indicator.style.left = targetLeft + 'px';
@@ -2416,12 +2415,12 @@
 
         row.innerHTML =
           '<div style="flex: 2;">' +
-            '<select name="items[' + poItemIndex + '][business_product_id]" required style="width: 100%;">' +
-              optTpl.innerHTML +
-            '</select>' +
+          '<select name="items[' + poItemIndex + '][business_product_id]" required style="width: 100%;">' +
+          optTpl.innerHTML +
+          '</select>' +
           '</div>' +
           '<div style="width: 130px;">' +
-            '<input type="number" name="items[' + poItemIndex + '][quantity_ordered]" min="1" value="10" required style="width: 100%;" placeholder="Quantity">' +
+          '<input type="number" name="items[' + poItemIndex + '][quantity_ordered]" min="1" value="10" required style="width: 100%;" placeholder="Quantity">' +
           '</div>' +
           '<button type="button" class="btn ghost btn-sm po-remove-row-btn" style="color: var(--danger, #dc2626);" title="Remove row">&times;</button>';
 
@@ -2505,34 +2504,34 @@
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: body.toString()
       })
-      .then(function (r) { return r.json(); })
-      .then(function (data) {
-        sendBtn.textContent = 'Send OTP';
-        sendBtn.disabled = false;
-        if (data.ok) {
-          if (noticeEl) {
-            noticeEl.style.color = 'var(--success, #16a34a)';
-            noticeEl.textContent = data.message;
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          sendBtn.textContent = 'Send OTP';
+          sendBtn.disabled = false;
+          if (data.ok) {
+            if (noticeEl) {
+              noticeEl.style.color = 'var(--success, #16a34a)';
+              noticeEl.textContent = data.message;
+            }
+            if (otpInput) {
+              otpInput.disabled = false;
+              otpInput.focus();
+            }
+          } else {
+            if (noticeEl) {
+              noticeEl.style.color = 'var(--danger, #dc2626)';
+              noticeEl.textContent = data.message || 'Failed to dispatch verification code.';
+            }
           }
-          if (otpInput) {
-            otpInput.disabled = false;
-            otpInput.focus();
-          }
-        } else {
+        })
+        .catch(function () {
+          sendBtn.textContent = 'Send OTP';
+          sendBtn.disabled = false;
           if (noticeEl) {
             noticeEl.style.color = 'var(--danger, #dc2626)';
-            noticeEl.textContent = data.message || 'Failed to dispatch verification code.';
+            noticeEl.textContent = 'Network error while contacting verification service.';
           }
-        }
-      })
-      .catch(function () {
-        sendBtn.textContent = 'Send OTP';
-        sendBtn.disabled = false;
-        if (noticeEl) {
-          noticeEl.style.color = 'var(--danger, #dc2626)';
-          noticeEl.textContent = 'Network error while contacting verification service.';
-        }
-      });
+        });
     });
 
     if (otpInput && verifyBtn) {
@@ -2556,36 +2555,36 @@
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: body.toString()
         })
-        .then(function (r) { return r.json(); })
-        .then(function (data) {
-          verifyBtn.textContent = 'Verify OTP';
-          if (data.ok) {
-            if (statusEl) {
-              statusEl.style.color = 'var(--success, #16a34a)';
-              statusEl.textContent = 'Verified: ' + data.message;
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            verifyBtn.textContent = 'Verify OTP';
+            if (data.ok) {
+              if (statusEl) {
+                statusEl.style.color = 'var(--success, #16a34a)';
+                statusEl.textContent = 'Verified: ' + data.message;
+              }
+              if (badgeEl) {
+                badgeEl.className = 'status ok';
+                badgeEl.textContent = 'Verified';
+              }
+              if (isVerifiedInput) isVerifiedInput.value = '1';
+              if (confirmBtn) confirmBtn.disabled = false;
+            } else {
+              verifyBtn.disabled = false;
+              if (statusEl) {
+                statusEl.style.color = 'var(--danger, #dc2626)';
+                statusEl.textContent = data.message || 'OTP verification failed.';
+              }
             }
-            if (badgeEl) {
-              badgeEl.className = 'badge badge-success';
-              badgeEl.textContent = 'Verified';
-            }
-            if (isVerifiedInput) isVerifiedInput.value = '1';
-            if (confirmBtn) confirmBtn.disabled = false;
-          } else {
+          })
+          .catch(function () {
+            verifyBtn.textContent = 'Verify OTP';
             verifyBtn.disabled = false;
             if (statusEl) {
               statusEl.style.color = 'var(--danger, #dc2626)';
-              statusEl.textContent = data.message || 'OTP verification failed.';
+              statusEl.textContent = 'Verification server error.';
             }
-          }
-        })
-        .catch(function () {
-          verifyBtn.textContent = 'Verify OTP';
-          verifyBtn.disabled = false;
-          if (statusEl) {
-            statusEl.style.color = 'var(--danger, #dc2626)';
-            statusEl.textContent = 'Verification server error.';
-          }
-        });
+          });
       });
     }
   }
@@ -2735,7 +2734,7 @@
           setTimeout(function () {
             copyKeyBtn.textContent = 'Copy Key';
           }, 1600);
-        }).catch(function () {});
+        }).catch(function () { });
       }
     });
   }
@@ -2871,10 +2870,10 @@
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
         if (isDark) {
           document.documentElement.removeAttribute('data-theme');
-          try { localStorage.setItem('vetgrpet_theme', 'light'); } catch (err) {}
+          try { localStorage.setItem('vetgrpet_theme', 'light'); } catch (err) { }
         } else {
           document.documentElement.setAttribute('data-theme', 'dark');
-          try { localStorage.setItem('vetgrpet_theme', 'dark'); } catch (err) {}
+          try { localStorage.setItem('vetgrpet_theme', 'dark'); } catch (err) { }
         }
       });
     }

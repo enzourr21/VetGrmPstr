@@ -46,15 +46,15 @@
             <td class="tabular"><?= e($emp['username'] ?: '—') ?></td>
             <td>
               <?php if ((bool)$emp['is_super_admin']): ?>
-                <span class="unit-pill unit-pill-global">All Business Units</span>
+                <span class="meta-label">All Business Units</span>
               <?php else: ?>
-                <span class="unit-pill"><?= e($emp['business_unit_name'] ?: 'Unassigned') ?></span>
+                <span class="meta-label"><?= e($emp['business_unit_name'] ?: 'Unassigned') ?></span>
               <?php endif; ?>
             </td>
             <td><?= e($emp['position']) ?></td>
             <td><code><?= e($emp['roles'] ?: ((bool)$emp['is_super_admin'] ? 'SUPER_ADMINISTRATOR' : 'None')) ?></code></td>
             <td>
-              <span class="badge <?= $emp['account_status'] === 'active' ? 'ok' : ($emp['account_status'] === 'suspended' ? 'err' : 'warn') ?>">
+              <span class="status <?= $emp['account_status'] === 'active' ? 'ok' : ($emp['account_status'] === 'suspended' ? 'err' : 'warn') ?>">
                 <?= e(ucfirst($emp['account_status'])) ?>
               </span>
             </td>
@@ -144,7 +144,7 @@
           <label for="emp_password">6. Initial password <span class="label-optional">(Min 10 characters)</span></label>
           <div class="password-input-wrap">
             <input id="emp_password" name="password" type="password" required minlength="10" autocomplete="new-password" placeholder="At least 10 characters">
-            <button type="button" class="password-toggle-btn" data-pw-toggle="emp_password" aria-label="Show password" aria-pressed="false">Show</button>
+            <button type="button" class="password-toggle-btn" data-pw-toggle="emp_password" aria-label="Show password" aria-pressed="false"><svg class="icon-eye" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg><svg class="icon-eye-off" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.4 10.4 0 0 1 12 19c-6.5 0-10-7-10-7a18.6 18.6 0 0 1 4.06-5.06"/><path d="M9.9 5.24A9.7 9.7 0 0 1 12 5c6.5 0 10 7 10 7a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="2" y1="2" x2="22" y2="22"/></svg></button>
           </div>
           <?php if (isset($errors['password'])): ?><div class="field-error"><?= e($errors['password']) ?></div><?php endif; ?>
         </div>

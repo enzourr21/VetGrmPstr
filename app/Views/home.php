@@ -144,13 +144,8 @@ $businessUnitCards = [
         <article class="card home-care-card">
           <span class="staff-avatar home-care-avatar" aria-hidden="true"><?= e($initials) ?></span>
           <div class="home-care-meta">
-            <div class="home-care-title-row">
-              <h3 class="home-staff-name"><?= e($st['first_name'] . ' ' . $st['last_name']) ?></h3>
-              <?php if (!empty($st['units'])): ?>
-                <span class="staff-unit-pill"><?= e($st['units']) ?></span>
-              <?php endif; ?>
-            </div>
-            <p class="home-staff-position"><?= e($st['position']) ?></p>
+            <h3 class="home-staff-name"><?= e($st['first_name'] . ' ' . $st['last_name']) ?></h3>
+            <p class="home-staff-position"><?= e($st['position']) ?><?php if (!empty($st['units'])): ?> &middot; <span class="staff-unit"><?= e($st['units']) ?></span><?php endif; ?></p>
           </div>
         </article>
       <?php endforeach; ?>
@@ -222,7 +217,7 @@ $businessUnitCards = [
         <ol class="home-how-steps" role="list">
           <li class="home-how-step-item" data-how-step-item="0">
             <button type="button" class="home-how-step is-active" data-how-step="0" aria-pressed="true" aria-current="step">
-              <span class="home-how-step-badge" aria-hidden="true">
+              <span class="home-how-step-marker" aria-hidden="true">
                 <span class="home-how-step-num tabular">01</span>
                 <svg class="home-how-step-check" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
               </span>
@@ -235,7 +230,7 @@ $businessUnitCards = [
 
           <li class="home-how-step-item" data-how-step-item="1">
             <button type="button" class="home-how-step" data-how-step="1" aria-pressed="false">
-              <span class="home-how-step-badge" aria-hidden="true">
+              <span class="home-how-step-marker" aria-hidden="true">
                 <span class="home-how-step-num tabular">02</span>
                 <svg class="home-how-step-check" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
               </span>
@@ -248,7 +243,7 @@ $businessUnitCards = [
 
           <li class="home-how-step-item" data-how-step-item="2">
             <button type="button" class="home-how-step" data-how-step="2" aria-pressed="false">
-              <span class="home-how-step-badge" aria-hidden="true">
+              <span class="home-how-step-marker" aria-hidden="true">
                 <span class="home-how-step-num tabular">03</span>
                 <svg class="home-how-step-check" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
               </span>
@@ -261,7 +256,7 @@ $businessUnitCards = [
 
           <li class="home-how-step-item" data-how-step-item="3">
             <button type="button" class="home-how-step" data-how-step="3" aria-pressed="false">
-              <span class="home-how-step-badge" aria-hidden="true">
+              <span class="home-how-step-marker" aria-hidden="true">
                 <span class="home-how-step-num tabular">04</span>
                 <svg class="home-how-step-check" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
               </span>
@@ -274,7 +269,7 @@ $businessUnitCards = [
 
           <li class="home-how-step-item" data-how-step-item="4">
             <button type="button" class="home-how-step" data-how-step="4" aria-pressed="false">
-              <span class="home-how-step-badge" aria-hidden="true">
+              <span class="home-how-step-marker" aria-hidden="true">
                 <span class="home-how-step-num tabular">05</span>
                 <svg class="home-how-step-check" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
               </span>
@@ -322,8 +317,8 @@ $businessUnitCards = [
                 <div class="how-phone-screen">
                   <div class="how-subview is-visible" data-how-view="auth-email">
                     <div class="how-auth-steps">
-                      <span class="how-auth-pill is-current">1. Email</span>
-                      <span class="how-auth-pill">2. Password</span>
+                      <span class="how-auth-step is-current">1. Email</span>
+                      <span class="how-auth-step">2. Password</span>
                     </div>
                     <div class="how-phone-label">Sign in to PawCariño</div>
                     <div class="how-mock-field">
@@ -338,8 +333,8 @@ $businessUnitCards = [
 
                   <div class="how-subview" data-how-view="auth-password">
                     <div class="how-auth-steps">
-                      <span class="how-auth-pill is-done">1. Email &#10003;</span>
-                      <span class="how-auth-pill is-current">2. Password</span>
+                      <span class="how-auth-step is-done">1. Email &#10003;</span>
+                      <span class="how-auth-step is-current">2. Password</span>
                     </div>
                     <div class="how-phone-label">Step 2 &middot; Enter Password</div>
                     <div class="how-mock-field">
@@ -357,11 +352,11 @@ $businessUnitCards = [
                   </div>
                   <div class="how-done-title">Welcome, Alex</div>
                   <div class="how-done-meta">Customer account active</div>
-                  <div class="how-account-chips">
-                    <span class="how-account-chip">My pets</span>
-                    <span class="how-account-chip">Orders</span>
-                    <span class="how-account-chip">Appointments</span>
-                    <span class="how-account-chip">Profile</span>
+                  <div class="how-account-links">
+                    <span class="how-account-link">My pets</span>
+                    <span class="how-account-link">Orders</span>
+                    <span class="how-account-link">Appointments</span>
+                    <span class="how-account-link">Profile</span>
                   </div>
                 </div>
               </div>
@@ -435,7 +430,7 @@ $businessUnitCards = [
                   </div>
                   <div class="how-done-title">Pet Profile Updated</div>
                   <div class="how-done-meta">Bella &middot; Dog &middot; 27.0 kg &middot; Notes saved</div>
-                  <div class="how-done-pill">Ready for grooming requests</div>
+                  <div class="how-done-note">Ready for grooming requests</div>
                 </div>
               </div>
 
@@ -456,7 +451,7 @@ $businessUnitCards = [
                   <span></span><span></span><span></span>
                 </div>
                 <div class="how-browser-url">pawcarino / shop / pet-store</div>
-                <div class="how-cart-pill" data-how-target="store-cart">
+                <div class="how-cart" data-how-target="store-cart">
                   <span>Cart</span>
                   <span class="how-cart-count tabular" data-how-cart-count>0</span>
                 </div>
@@ -472,7 +467,7 @@ $businessUnitCards = [
                     <div class="how-product-card" data-how-product="1">
                       <div class="how-product-top">
                         <span class="how-cat-label">Food</span>
-                        <span class="how-stock-tag">In stock</span>
+                        <span class="how-stock">In stock</span>
                       </div>
                       <div class="how-product-name">Adult Dog Kibble 2kg</div>
                       <div class="how-product-foot">
@@ -487,7 +482,7 @@ $businessUnitCards = [
                     <div class="how-product-card">
                       <div class="how-product-top">
                         <span class="how-cat-label">Grooming Supplies</span>
-                        <span class="how-stock-tag">In stock</span>
+                        <span class="how-stock">In stock</span>
                       </div>
                       <div class="how-product-name">Oatmeal Pet Shampoo</div>
                       <div class="how-product-foot">
@@ -509,8 +504,8 @@ $businessUnitCards = [
                       <strong class="tabular">$24.00</strong>
                     </div>
                     <div class="how-checkout-options">
-                      <span class="how-option-chip is-picked">Branch Pickup &middot; $0.00</span>
-                      <span class="how-option-chip is-picked">Cash on Delivery</span>
+                      <span class="how-option-choice is-picked">Branch Pickup &middot; $0.00</span>
+                      <span class="how-option-choice is-picked">Cash on Delivery</span>
                     </div>
                   </div>
                   <div class="how-checkout-foot">
@@ -528,7 +523,7 @@ $businessUnitCards = [
                   </div>
                   <div class="how-done-title">Order #1042 Confirmed</div>
                   <div class="how-done-meta">Pet Store &middot; Branch Pickup &middot; Stock reserved</div>
-                  <div class="how-done-pill tabular">Total $24.00 &middot; COD</div>
+                  <div class="how-done-note tabular">Total $24.00 &middot; COD</div>
                 </div>
               </div>
 
@@ -583,14 +578,14 @@ $businessUnitCards = [
                 <div class="how-subview" data-how-view="schedule">
                   <div class="how-phone-label">Preferred date &amp; time</div>
                   <div class="how-date-row">
-                    <span class="how-date-chip">Thu 20</span>
-                    <span class="how-date-chip" data-how-target="vet-date">Fri 21</span>
-                    <span class="how-date-chip">Sat 22</span>
+                    <span class="how-date-choice">Thu 20</span>
+                    <span class="how-date-choice" data-how-target="vet-date">Fri 21</span>
+                    <span class="how-date-choice">Sat 22</span>
                   </div>
                   <div class="how-time-row">
-                    <span class="how-time-chip">09:30 AM</span>
-                    <span class="how-time-chip" data-how-target="vet-time">11:00 AM</span>
-                    <span class="how-time-chip">02:00 PM</span>
+                    <span class="how-time-choice">09:30 AM</span>
+                    <span class="how-time-choice" data-how-target="vet-time">11:00 AM</span>
+                    <span class="how-time-choice">02:00 PM</span>
                   </div>
                   <div class="how-phone-cta-wrap">
                     <span class="how-mock-btn how-mock-btn-full" data-how-target="vet-submit">Submit request</span>
@@ -603,7 +598,7 @@ $businessUnitCards = [
                   </div>
                   <div class="how-done-title">Request Submitted</div>
                   <div class="how-done-meta">Wellness Exam &middot; Fri 21, 11:00 AM</div>
-                  <div class="how-done-pill is-pending">Pending review</div>
+                  <div class="how-done-note is-pending">Pending review</div>
                 </div>
               </div>
 
@@ -656,8 +651,8 @@ $businessUnitCards = [
                     <div class="how-studio-tray">
                       <div class="how-tray-label">Preferred slot</div>
                       <div class="how-slot-list">
-                        <span class="how-slot-chip">Fri 2:00 PM</span>
-                        <span class="how-slot-chip" data-how-target="groom-slot">Sat 10:00 AM</span>
+                        <span class="how-slot-choice">Fri 2:00 PM</span>
+                        <span class="how-slot-choice" data-how-target="groom-slot">Sat 10:00 AM</span>
                       </div>
                       <div class="how-tray-summary">
                         <span data-how-groom-count>0 services</span>
@@ -674,7 +669,7 @@ $businessUnitCards = [
                   </div>
                   <div class="how-done-title">Grooming Request Sent</div>
                   <div class="how-done-meta">Bella &middot; Full Grooming + Nail Trim &middot; Sat 10:00 AM</div>
-                  <div class="how-done-pill is-pending tabular">Est. $63.00 &middot; Pending review</div>
+                  <div class="how-done-note is-pending tabular">Est. $63.00 &middot; Pending review</div>
                 </div>
               </div>
 
@@ -720,7 +715,7 @@ $businessUnitCards = [
             <div class="home-review-head">
               <span class="stars" aria-label="<?= (int)$rev['rating'] ?> out of 5 stars"><?= str_repeat('★', (int)$rev['rating']) . str_repeat('☆', 5 - (int)$rev['rating']) ?></span>
               <?php if (!empty($rev['business_unit_name'])): ?>
-                <span class="staff-unit-pill"><?= e($rev['business_unit_name']) ?></span>
+                <span class="staff-unit"><?= e($rev['business_unit_name']) ?></span>
               <?php endif; ?>
             </div>
             <h3 class="home-review-title"><?= e($rev['review_title']) ?></h3>

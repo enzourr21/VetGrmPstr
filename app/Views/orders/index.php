@@ -26,10 +26,10 @@
       <td class="tabular caption"><?= e($o['order_date']) ?></td>
       <td><?= e(ucfirst($o['fulfillment_method'])) ?></td>
       <td>
-        <span class="badge secondary"><?= e($payMethod) ?></span>
+        <span class="meta-label"><?= e($payMethod) ?></span>
         <span class="caption muted"><?= e($payStatus) ?></span>
       </td>
-      <td><span class="badge warn"><?= e(str_replace('_', ' ', ucfirst($o['order_status']))) ?></span></td>
+      <td><span class="status warn"><?= e(str_replace('_', ' ', ucfirst($o['order_status']))) ?></span></td>
       <td class="right price"><?= money($o['total_amount']) ?></td>
     </tr>
   <?php endforeach; ?>

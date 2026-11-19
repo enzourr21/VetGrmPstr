@@ -29,7 +29,7 @@
       <strong class="grooming-cal-range-label" id="grooming-cal-range-label">
         <?= e($rangeHeading) ?>
       </strong>
-      <span class="badge secondary" style="font-size: 0.76rem; font-weight: 600;" id="grooming-cal-overlap-badge" title="Maximum allowed appointment overlap configured for <?= e($unitName) ?>">
+      <span class="meta-label" id="grooming-cal-overlap-badge" title="Maximum allowed appointment overlap configured for <?= e($unitName) ?>">
         Max Overlap: <?= (int)($maxOverlapMinutes ?? 15) ?>m
       </span>
 
@@ -65,7 +65,7 @@
     <?php foreach ($weekDays as $dayInfo): ?>
       <div class="grooming-cal-day-head <?= $dayInfo['is_today'] ? 'is-today' : '' ?>" data-date="<?= e($dayInfo['date']) ?>">
         <span class="grooming-cal-day-name"><?= e($dayInfo['day_short']) ?></span>
-        <strong class="grooming-cal-day-num <?= $dayInfo['is_today'] ? 'is-today-pill' : '' ?>">
+        <strong class="grooming-cal-day-num <?= $dayInfo['is_today'] ? 'is-today-num' : '' ?>">
           <?= e($dayInfo['day_label']) ?>
         </strong>
       </div>
@@ -158,7 +158,7 @@
             </h3>
           </div>
           <div style="display: flex; align-items: center; gap: 0.5rem;">
-            <span class="badge <?= e($appt['badge_class']) ?>"><?= e($statusName) ?></span>
+            <span class="status <?= e($appt['badge_class']) ?>"><?= e($statusName) ?></span>
             <button type="button"
                     class="grooming-bubble-close"
                     data-close-bubble="<?= $apptId ?>"

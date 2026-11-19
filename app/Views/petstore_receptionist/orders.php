@@ -32,63 +32,60 @@ $buildTabUrl = function(string $t) use ($statusFilter, $q): string {
 </div>
 
 <!-- Exactly Three Tabs: All Orders, Delivery Orders, Pickup Orders -->
-<nav class="tabs" style="margin-bottom: 1.5rem; display: flex; gap: 0.5rem; border-bottom: 1px solid var(--color-border, #e5e7eb);">
+<nav class="tabs" style="margin-bottom: 1.5rem;">
   <?php foreach ($tabs as $tabKey => $tabLabel): ?>
     <a href="<?= e($buildTabUrl($tabKey)) ?>"
        class="tab-link <?= $activeTab === $tabKey ? 'is-active' : '' ?>"
-       style="padding: 0.65rem 1.25rem; font-weight: 600; text-decoration: none; border-bottom: 2px solid <?= $activeTab === $tabKey ? 'var(--color-primary, #047857)' : 'transparent' ?>; color: <?= $activeTab === $tabKey ? 'var(--color-primary, #047857)' : 'var(--color-muted, #6b7280)' ?>;">
+      >
       <?= e($tabLabel) ?>
     </a>
   <?php endforeach; ?>
 </nav>
 
-<!-- Filters & Search Bar -->
-<section class="card" style="margin-bottom: 1.5rem; padding: 1rem 1.25rem;">
-  <form method="get" action="/petstore/receptionist/orders" class="row" style="gap: 1rem; align-items: flex-end; flex-wrap: wrap;">
-    <input type="hidden" name="tab" value="<?= e($activeTab) ?>">
-
-    <div class="field" style="margin: 0; min-width: 260px; flex: 1;">
-      <label for="order-search" class="caption" style="display: block; margin-bottom: 0.25rem;">Search Order #, Customer, Phone, or Email</label>
-      <input id="order-search" type="search" name="q" value="<?= e($q) ?>" placeholder="Search Order ID, Customer Name, Phone... (Press Enter)" class="search-input">
-    </div>
-
-    <div class="field" style="margin: 0; width: 200px;">
-      <label for="status-filter" class="caption" style="display: block; margin-bottom: 0.25rem;">Filter by Status</label>
-      <select id="status-filter" name="status" style="width: 100%;" onchange="this.form.submit()">
-        <option value="all" <?= $statusFilter === 'all' ? 'selected' : '' ?>>All Statuses</option>
-        <option value="pending" <?= $statusFilter === 'pending' ? 'selected' : '' ?>>Pending</option>
-        <option value="confirmed" <?= $statusFilter === 'confirmed' ? 'selected' : '' ?>>Confirmed</option>
-        <option value="processing" <?= $statusFilter === 'processing' ? 'selected' : '' ?>>Processing</option>
-        <option value="ready_for_pickup" <?= $statusFilter === 'ready_for_pickup' ? 'selected' : '' ?>>Ready for Pickup</option>
-        <option value="out_for_delivery" <?= $statusFilter === 'out_for_delivery' ? 'selected' : '' ?>>Out for Delivery</option>
-        <option value="delivery_failed" <?= $statusFilter === 'delivery_failed' ? 'selected' : '' ?>>Delivery Failed</option>
-        <option value="completed" <?= $statusFilter === 'completed' ? 'selected' : '' ?>>Completed</option>
-        <option value="cancelled" <?= $statusFilter === 'cancelled' ? 'selected' : '' ?>>Cancelled</option>
-      </select>
-    </div>
-
-    <?php if ($q !== '' || $statusFilter !== 'all'): ?>
-      <div class="row" style="align-items: center;">
-        <a href="/petstore/receptionist/orders?tab=<?= e($activeTab) ?>" class="btn ghost btn-sm">Reset</a>
-      </div>
-    <?php endif; ?>
-  </form>
-</section>
-
-<!-- Orders Table -->
+<!-- Orders Table & Integrated Filter Bar -->
 <section class="card" style="margin-bottom: 2rem;">
-  <div class="row" style="justify-content: space-between; align-items: baseline; margin-bottom: 1rem;">
+  <div class="row" style="justify-content: space-between; align-items: flex-end; gap: 1rem; margin-bottom: 1.25rem; flex-wrap: wrap;">
     <div>
       <h2 style="margin: 0; font-size: 1.25rem;"><?= e($tabs[$activeTab] ?? 'Pet Store Orders') ?> (<?= count($orders) ?>)</h2>
       <p class="caption muted" style="margin: 0.25rem 0 0 0;">
         Click any order row to inspect full order details, line items, delivery status, or advance pickup transitions.
       </p>
     </div>
+
+    <form method="get" action="/petstore/receptionist/orders" class="row" style="gap: 0.75rem; align-items: flex-end; flex-wrap: wrap; flex: 1 1 420px; justify-content: flex-end;">
+      <input type="hidden" name="tab" value="<?= e($activeTab) ?>">
+
+      <div class="field" style="margin: 0; min-width: 240px; flex: 1; max-width: 340px;">
+        <label for="order-search" class="caption" style="display: block; margin-bottom: 0.25rem;">Search Order #, Customer, Phone, or Email</label>
+        <input id="order-search" type="search" name="q" value="<?= e($q) ?>" placeholder="Search Order ID, Customer Name, Phone... (Press Enter)" class="search-input">
+      </div>
+
+      <div class="field" style="margin: 0; width: 190px;">
+        <label for="status-filter" class="caption" style="display: block; margin-bottom: 0.25rem;">Filter by Status</label>
+        <select id="status-filter" name="status" style="width: 100%;" onchange="this.form.submit()">
+          <option value="all" <?= $statusFilter === 'all' ? 'selected' : '' ?>>All Statuses</option>
+          <option value="pending" <?= $statusFilter === 'pending' ? 'selected' : '' ?>>Pending</option>
+          <option value="confirmed" <?= $statusFilter === 'confirmed' ? 'selected' : '' ?>>Confirmed</option>
+          <option value="processing" <?= $statusFilter === 'processing' ? 'selected' : '' ?>>Processing</option>
+          <option value="ready_for_pickup" <?= $statusFilter === 'ready_for_pickup' ? 'selected' : '' ?>>Ready for Pickup</option>
+          <option value="out_for_delivery" <?= $statusFilter === 'out_for_delivery' ? 'selected' : '' ?>>Out for Delivery</option>
+          <option value="delivery_failed" <?= $statusFilter === 'delivery_failed' ? 'selected' : '' ?>>Delivery Failed</option>
+          <option value="completed" <?= $statusFilter === 'completed' ? 'selected' : '' ?>>Completed</option>
+          <option value="cancelled" <?= $statusFilter === 'cancelled' ? 'selected' : '' ?>>Cancelled</option>
+        </select>
+      </div>
+
+      <?php if ($q !== '' || $statusFilter !== 'all'): ?>
+        <div class="row" style="align-items: center;">
+          <a href="/petstore/receptionist/orders?tab=<?= e($activeTab) ?>" class="btn ghost btn-sm">Reset</a>
+        </div>
+      <?php endif; ?>
+    </form>
   </div>
 
   <?php if (empty($orders)): ?>
     <div class="empty" style="padding: 3rem 1rem; text-align: center;">
-      <p style="margin: 0; font-size: 1rem; color: var(--color-muted, #6b7280);">
+      <p style="margin: 0; font-size: 1rem; color: var(--muted);">
         No orders found in <strong><?= e($tabs[$activeTab] ?? 'Orders') ?></strong> matching the specified criteria.
       </p>
     </div>
@@ -96,40 +93,40 @@ $buildTabUrl = function(string $t) use ($statusFilter, $q): string {
     <div style="overflow-x: auto; width: 100%;">
       <table style="width: 100%; border-collapse: collapse;">
         <thead>
-          <tr style="border-bottom: 1px solid var(--color-border, #e5e7eb); text-align: left; background: var(--color-bg-subtle, #f9fafb);">
-            <th style="padding: 0.75rem 1rem; font-size: 0.8rem; font-weight: 600; text-transform: uppercase;">Order ID</th>
-            <th style="padding: 0.75rem 1rem; font-size: 0.8rem; font-weight: 600; text-transform: uppercase;">Customer</th>
-            <th style="padding: 0.75rem 1rem; font-size: 0.8rem; font-weight: 600; text-transform: uppercase;">Date &amp; Time</th>
-            <th style="padding: 0.75rem 1rem; font-size: 0.8rem; font-weight: 600; text-transform: uppercase;">Type</th>
-            <th style="padding: 0.75rem 1rem; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; text-align: right;">Total Amount</th>
-            <th style="padding: 0.75rem 1rem; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; text-align: center;">Status</th>
-            <th style="padding: 0.75rem 1rem; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; text-align: right;">Action</th>
+          <tr style="border-bottom: 1px solid var(--line); text-align: left; background: var(--surface-raised);">
+            <th style="padding: 0.75rem 1rem;">Order ID</th>
+            <th style="padding: 0.75rem 1rem;">Customer</th>
+            <th style="padding: 0.75rem 1rem;">Date &amp; Time</th>
+            <th style="padding: 0.75rem 1rem;">Type</th>
+            <th style="padding: 0.75rem 1rem; text-align: right;">Total Amount</th>
+            <th style="padding: 0.75rem 1rem; text-align: center;">Status</th>
+            <th style="padding: 0.75rem 1rem; text-align: right;">Action</th>
           </tr>
         </thead>
         <tbody>
           <?php foreach ($orders as $o): ?>
             <?php
             $st = (string)$o['order_status'];
-            $badgeClass = 'badge-secondary';
+            $badgeClass = 'neutral';
             if (in_array($st, ['completed', 'confirmed'], true)) {
-                $badgeClass = 'badge-success';
+                $badgeClass = 'ok';
             } elseif (in_array($st, ['ready_for_pickup', 'out_for_delivery', 'processing'], true)) {
-                $badgeClass = 'badge-info';
+                $badgeClass = 'info';
             } elseif ($st === 'pending') {
-                $badgeClass = 'badge-warning';
+                $badgeClass = 'warn';
             } elseif (in_array($st, ['cancelled', 'delivery_failed'], true)) {
-                $badgeClass = 'badge-danger';
+                $badgeClass = 'err';
             }
             $isDelivery = $o['fulfillment_method'] === 'delivery';
             ?>
-            <tr style="border-bottom: 1px solid var(--color-border, #f3f4f6); cursor: pointer;"
+            <tr style="border-bottom: 1px solid var(--line); cursor: pointer;"
                 data-modal-open="order-modal-<?= (int)$o['order_id'] ?>"
                 class="order-table-row">
               <td style="padding: 0.875rem 1rem; font-weight: 600; font-family: var(--font-mono, monospace);">
                 #ORD-<?= (int)$o['order_id'] ?>
               </td>
               <td style="padding: 0.875rem 1rem;">
-                <div style="font-weight: 500; color: var(--color-text, #111827);">
+                <div style="font-weight: 500; color: var(--ink);">
                   <?= e($o['customer_name']) ?>
                 </div>
                 <div class="caption muted">
@@ -142,20 +139,20 @@ $buildTabUrl = function(string $t) use ($statusFilter, $q): string {
               </td>
               <td style="padding: 0.875rem 1rem;">
                 <?php if ($isDelivery): ?>
-                  <span class="badge" style="background: #e0f2fe; color: #0369a1; font-weight: 600;">
+                  <span class="meta-label">
                     🚚 Delivery
                   </span>
                 <?php else: ?>
-                  <span class="badge" style="background: #fef3c7; color: #92400e; font-weight: 600;">
+                  <span class="meta-label">
                     🛍️ Pickup
                   </span>
                 <?php endif; ?>
               </td>
-              <td style="padding: 0.875rem 1rem; text-align: right; font-weight: 700; color: var(--color-text, #111827);">
+              <td style="padding: 0.875rem 1rem; text-align: right; font-weight: 700; color: var(--ink);">
                 ₱<?= number_format((float)$o['total_amount'], 2) ?>
               </td>
               <td style="padding: 0.875rem 1rem; text-align: center;">
-                <span class="badge <?= $badgeClass ?>">
+                <span class="status <?= $badgeClass ?>">
                   <?= e(ucwords(str_replace('_', ' ', $st))) ?>
                 </span>
                 <?php if ($st === 'delivery_failed' && !empty($o['rescheduled_date'])): ?>
@@ -245,7 +242,7 @@ if (!empty($selectedOrder)) {
           </div>
           <div class="caption" style="margin-top: 0.25rem;">
             Payment Status:
-            <span class="badge <?= ($orderModal['payment_status'] ?? '') === 'completed' ? 'badge-success' : 'badge-warning' ?>" style="font-size: 0.75rem;">
+            <span class="status <?= ($orderModal['payment_status'] ?? '') === 'completed' ? 'ok' : 'warn' ?>">
               <?= e(ucfirst($orderModal['payment_status'] ?? 'pending')) ?>
             </span>
           </div>
@@ -263,7 +260,7 @@ if (!empty($selectedOrder)) {
         <div style="background: var(--color-bg-subtle, #f9fafb); padding: 1rem; border-radius: 8px; border: 1px solid var(--color-border, #e5e7eb);">
           <span class="caption muted" style="font-weight: 600; text-transform: uppercase;">Current Status</span>
           <div style="margin-top: 0.25rem;">
-            <span class="badge <?= in_array($st, ['completed', 'confirmed'], true) ? 'badge-success' : ($st === 'delivery_failed' ? 'badge-danger' : 'badge-info') ?>" style="font-size: 0.95rem; padding: 0.35rem 0.65rem;">
+            <span class="status <?= in_array($st, ['completed', 'confirmed'], true) ? 'ok' : ($st === 'delivery_failed' ? 'err' : 'info') ?>">
               <?= e(ucwords(str_replace('_', ' ', $st))) ?>
             </span>
           </div>
@@ -462,7 +459,7 @@ if (!empty($selectedOrder)) {
                 </button>
               </form>
             <?php elseif ($st === 'completed'): ?>
-              <span class="badge badge-success" style="padding: 0.4rem 0.75rem;">
+              <span class="status ok">
                 ✓ Order has been completed and released to customer.
               </span>
               <?php if ($isPickupPendingCod): ?>
@@ -504,11 +501,11 @@ if (!empty($selectedOrder)) {
                 </button>
               </form>
             <?php elseif ($st === 'processing'): ?>
-              <span class="badge badge-info" style="padding: 0.4rem 0.75rem;">
+              <span class="status info">
                 ✓ Stock reserved &amp; prepared — ready in Delivery Personnel Dispatch Queue.
               </span>
             <?php elseif ($st === 'completed'): ?>
-              <span class="badge badge-success" style="padding: 0.4rem 0.75rem;">
+              <span class="status ok">
                 ✓ Delivery completed by Delivery Personnel.
               </span>
             <?php else: ?>

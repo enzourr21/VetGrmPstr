@@ -9,26 +9,26 @@ $baseQuerySep = !empty($unitQuery) ? '&' : '?';
 
 $orderStatusBadgeClass = static function (string $st): string {
     if (in_array($st, ['completed', 'confirmed'], true)) {
-        return 'badge-success';
+        return 'ok';
     }
     if (in_array($st, ['ready_for_pickup', 'out_for_delivery', 'processing'], true)) {
-        return 'badge-info';
+        return 'info';
     }
     if (in_array($st, ['cancelled', 'delivery_failed'], true)) {
-        return 'badge-danger';
+        return 'err';
     }
-    return 'badge-warning';
+    return 'warn';
 };
 
 $paymentStatusBadgeClass = static function (string $pStatus): string {
     $pStatus = strtolower($pStatus);
     if ($pStatus === 'completed') {
-        return 'badge-success';
+        return 'ok';
     }
     if ($pStatus === 'refunded') {
-        return 'badge-danger';
+        return 'err';
     }
-    return 'badge-warning';
+    return 'warn';
 };
 
 $formatPaymentStatus = static function (string $pStatus): string {
@@ -44,21 +44,21 @@ $renderRefundNotice = static function (array $tx): string {
     $paidAmt = (float)($tx['paid_amount'] ?? 0.0);
 
     if ($scope === 'partial') {
-        $badgeClass = 'badge-warning';
+        $badgeClass = 'warn';
         $badgeText = 'Partial Refund Recorded';
         $headline = peso($refundedAmt) . ' refunded of ' . peso($paidAmt) . ' paid';
         $detail = 'Refunds are recorded at the transaction level; item-level refund attribution is not stored in the current schema, so individual product rows are not marked.';
         $boxBg = '#fffbeb';
         $boxBorder = '#f59e0b';
     } elseif ($scope === 'full') {
-        $badgeClass = 'badge-danger';
+        $badgeClass = 'err';
         $badgeText = 'Full Refund Recorded';
         $headline = peso($refundedAmt) . ' refunded of ' . peso($paidAmt) . ' paid';
         $detail = 'Refunds are recorded at the transaction level; item-level refund attribution is not stored in the current schema, so individual product rows are not marked.';
         $boxBg = '#fef2f2';
         $boxBorder = '#ef4444';
     } else {
-        $badgeClass = 'badge-danger';
+        $badgeClass = 'err';
         $badgeText = 'Refund Recorded';
         if (!empty($tx['refund_inconsistent'])) {
             $headline = peso($refundedAmt) . ' refunded vs. ' . peso($paidAmt) . ' paid (inconsistent amount)';
@@ -73,7 +73,7 @@ $renderRefundNotice = static function (array $tx): string {
 
     return '<div class="refund-notice" style="margin-bottom: 1rem; padding: 0.75rem 1rem; border-radius: 6px; background: ' . $boxBg . '; border-left: 4px solid ' . $boxBorder . ';">'
         . '<div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">'
-        . '<span class="badge ' . $badgeClass . '">' . e($badgeText) . '</span>'
+        . '<span class="status ' . $badgeClass . '">' . e($badgeText) . '</span>'
         . '<strong>' . e($headline) . '</strong>'
         . '</div>'
         . '<p class="caption" style="margin: 0.4rem 0 0 0;">' . e($detail) . '</p>'
@@ -91,26 +91,26 @@ $renderRefundNotice = static function (array $tx): string {
 
 <!-- Segmented Control for Sales Categories -->
 <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.5rem;">
-  <div class="segmented-bar" role="tablist" aria-label="Sales channel selector">
+  <div class="tabs" role="tablist" aria-label="Sales channel selector">
     <a href="/manager/sales<?= $unitQuery ?><?= $baseQuerySep ?>tab=walkin"
-       class="segmented-pill <?= $activeSalesTab === 'walkin' ? 'is-active' : '' ?>"
+       class="tab-link <?= $activeSalesTab === 'walkin' ? 'is-active' : '' ?>"
        role="tab"
        aria-selected="<?= $activeSalesTab === 'walkin' ? 'true' : 'false' ?>">
-      <span class="badge" style="background: <?= $activeSalesTab === 'walkin' ? 'var(--brand-soft, #e6f4f0)' : 'var(--bg-subtle, #f3f4f6)' ?>; color: <?= $activeSalesTab === 'walkin' ? 'var(--brand, #0d6e57)' : 'var(--muted, #6b7280)' ?>; border: 1px solid <?= $activeSalesTab === 'walkin' ? 'rgba(16, 185, 129, 0.35)' : 'var(--border, #e5e7eb)' ?>; font-size: 0.75rem; font-weight: 600;">Walk-in</span>
+      <span class="meta-label">Walk-in</span>
       Walk-in (<?= count($walkInSales) ?>)
     </a>
     <a href="/manager/sales<?= $unitQuery ?><?= $baseQuerySep ?>tab=delivery"
-       class="segmented-pill <?= $activeSalesTab === 'delivery' ? 'is-active' : '' ?>"
+       class="tab-link <?= $activeSalesTab === 'delivery' ? 'is-active' : '' ?>"
        role="tab"
        aria-selected="<?= $activeSalesTab === 'delivery' ? 'true' : 'false' ?>">
-      <span class="badge" style="background: <?= $activeSalesTab === 'delivery' ? 'var(--brand-soft, #e6f4f0)' : 'var(--bg-subtle, #f3f4f6)' ?>; color: <?= $activeSalesTab === 'delivery' ? 'var(--brand, #0d6e57)' : 'var(--muted, #6b7280)' ?>; border: 1px solid <?= $activeSalesTab === 'delivery' ? 'rgba(16, 185, 129, 0.35)' : 'var(--border, #e5e7eb)' ?>; font-size: 0.75rem; font-weight: 600;">Delivery</span>
+      <span class="meta-label">Delivery</span>
       Online — Delivery (<?= count($onlineDeliveryOrders) ?>)
     </a>
     <a href="/manager/sales<?= $unitQuery ?><?= $baseQuerySep ?>tab=pickup"
-       class="segmented-pill <?= $activeSalesTab === 'pickup' ? 'is-active' : '' ?>"
+       class="tab-link <?= $activeSalesTab === 'pickup' ? 'is-active' : '' ?>"
        role="tab"
        aria-selected="<?= $activeSalesTab === 'pickup' ? 'true' : 'false' ?>">
-      <span class="badge" style="background: <?= $activeSalesTab === 'pickup' ? 'var(--brand-soft, #e6f4f0)' : 'var(--bg-subtle, #f3f4f6)' ?>; color: <?= $activeSalesTab === 'pickup' ? 'var(--brand, #0d6e57)' : 'var(--muted, #6b7280)' ?>; border: 1px solid <?= $activeSalesTab === 'pickup' ? 'rgba(16, 185, 129, 0.35)' : 'var(--border, #e5e7eb)' ?>; font-size: 0.75rem; font-weight: 600;">Pick-up</span>
+      <span class="meta-label">Pick-up</span>
       Online — Pick-up (<?= count($onlinePickupOrders) ?>)
     </a>
   </div>
@@ -172,17 +172,17 @@ $renderRefundNotice = static function (array $tx): string {
                   <div class="caption"><?= e(date('g:i:s A', strtotime((string)$s['sale_date']))) ?></div>
                 </td>
                 <td><?= e($s['customer_name']) ?></td>
-                <td><span class="badge secondary">Walk-in</span></td>
+                <td><span class="meta-label">Walk-in</span></td>
                 <td><?= (int)$s['item_count'] ?> item(s)</td>
                 <td><strong><?= peso((float)$s['total_amount']) ?></strong></td>
                 <td>
-                  <span class="badge secondary"><?= e($s['payment_method'] ?? 'Cash') ?></span>
+                  <span class="meta-label"><?= e($s['payment_method'] ?? 'Cash') ?></span>
                   <div style="margin-top: 0.2rem;">
-                    <span class="badge <?= $paymentStatusBadgeClass($pStat) ?>" style="font-size: 0.72rem;"><?= e($formatPaymentStatus($pStat)) ?></span>
+                    <span class="status <?= $paymentStatusBadgeClass($pStat) ?>"><?= e($formatPaymentStatus($pStat)) ?></span>
                   </div>
                 </td>
                 <td>
-                  <span class="badge <?= $s['sale_status'] === 'completed' ? 'badge-success' : 'badge-danger' ?>">
+                  <span class="status <?= $s['sale_status'] === 'completed' ? 'ok' : 'err' ?>">
                     <?= e(ucfirst((string)$s['sale_status'])) ?>
                   </span>
                 </td>
@@ -206,7 +206,7 @@ $renderRefundNotice = static function (array $tx): string {
     <dialog class="modal modal-wide" id="walkin-modal-<?= (int)$s['sale_id'] ?>" aria-labelledby="walkin-title-<?= (int)$s['sale_id'] ?>" <?= (!empty($viewId) && (int)$viewId === (int)$s['sale_id']) ? 'data-open-on-load="true"' : '' ?>>
       <div class="modal-head">
         <div>
-          <span class="badge" style="background: #e0f2fe; color: #0369a1; margin-bottom: 0.25rem;">Walk-in Sale</span>
+          <span class="meta-label" style="margin-bottom: 0.25rem;">Walk-in Sale</span>
           <h3 id="walkin-title-<?= (int)$s['sale_id'] ?>" style="margin: 0;">Transaction #REC-S-<?= (int)$s['sale_id'] ?></h3>
         </div>
         <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close dialog">&times;</button>
@@ -222,7 +222,7 @@ $renderRefundNotice = static function (array $tx): string {
             <code>REC-S-<?= (int)$s['sale_id'] ?></code>
             <p style="margin: 0.5rem 0 0.25rem 0;" class="caption">Sale Status</p>
             <div>
-              <span class="badge <?= $s['sale_status'] === 'completed' ? 'badge-success' : 'badge-danger' ?>">
+              <span class="status <?= $s['sale_status'] === 'completed' ? 'ok' : 'err' ?>">
                 <?= e(ucfirst((string)$s['sale_status'])) ?>
               </span>
             </div>
@@ -234,8 +234,8 @@ $renderRefundNotice = static function (array $tx): string {
             <div>In-Store Walk-in Counter Sale</div>
             <p style="margin: 0.5rem 0 0.25rem 0;" class="caption">Payment Method &amp; Status</p>
             <div>
-              <span class="badge secondary"><?= e($s['payment_method'] ?? 'Cash (In-store)') ?></span>
-              <span class="badge <?= $paymentStatusBadgeClass($pStat) ?>"><?= e($formatPaymentStatus($pStat)) ?></span>
+              <span class="meta-label"><?= e($s['payment_method'] ?? 'Cash (In-store)') ?></span>
+              <span class="status <?= $paymentStatusBadgeClass($pStat) ?>"><?= e($formatPaymentStatus($pStat)) ?></span>
             </div>
           </div>
         </div>
@@ -353,16 +353,16 @@ $renderRefundNotice = static function (array $tx): string {
                     <div class="caption"><?= e($o['customer_phone']) ?></div>
                   <?php endif; ?>
                 </td>
-                <td><span class="badge secondary"><?= e($channelLabel) ?></span></td>
+                <td><span class="meta-label"><?= e($channelLabel) ?></span></td>
                 <td><strong><?= peso((float)$o['total_amount']) ?></strong></td>
                 <td>
-                  <span class="badge secondary"><?= e($o['payment_method'] ?? 'COD') ?></span>
+                  <span class="meta-label"><?= e($o['payment_method'] ?? 'COD') ?></span>
                   <div style="margin-top: 0.2rem;">
-                    <span class="badge <?= $paymentStatusBadgeClass($pStat) ?>" style="font-size: 0.72rem;"><?= e($formatPaymentStatus($pStat)) ?></span>
+                    <span class="status <?= $paymentStatusBadgeClass($pStat) ?>"><?= e($formatPaymentStatus($pStat)) ?></span>
                   </div>
                 </td>
                 <td>
-                  <span class="badge <?= $orderStatusBadgeClass($oStat) ?>">
+                  <span class="status <?= $orderStatusBadgeClass($oStat) ?>">
                     <?= e(ucwords(str_replace('_', ' ', $oStat))) ?>
                   </span>
                 </td>
@@ -388,7 +388,7 @@ $renderRefundNotice = static function (array $tx): string {
     <dialog class="modal modal-wide" id="online-modal-<?= (int)$o['order_id'] ?>" aria-labelledby="online-title-<?= (int)$o['order_id'] ?>" <?= (!empty($viewId) && (int)$viewId === (int)$o['order_id']) ? 'data-open-on-load="true"' : '' ?>>
       <div class="modal-head">
         <div>
-          <span class="badge" style="background: #fef3c7; color: #92400e; margin-bottom: 0.25rem;">Online — <?= e($channelLabel) ?></span>
+          <span class="meta-label" style="margin-bottom: 0.25rem;">Online — <?= e($channelLabel) ?></span>
           <h3 id="online-title-<?= (int)$o['order_id'] ?>" style="margin: 0;">Order #ORD-<?= (int)$o['order_id'] ?></h3>
         </div>
         <button type="button" class="btn ghost btn-sm" data-modal-close aria-label="Close dialog">&times;</button>
@@ -404,7 +404,7 @@ $renderRefundNotice = static function (array $tx): string {
             <code>REC-ORD-<?= (int)$o['order_id'] ?></code>
             <p style="margin: 0.5rem 0 0.25rem 0;" class="caption">Order Status</p>
             <div>
-              <span class="badge <?= $orderStatusBadgeClass($oStat) ?>">
+              <span class="status <?= $orderStatusBadgeClass($oStat) ?>">
                 <?= e(ucwords(str_replace('_', ' ', $oStat))) ?>
               </span>
             </div>
@@ -432,8 +432,8 @@ $renderRefundNotice = static function (array $tx): string {
 
             <p style="margin: 0.5rem 0 0.25rem 0;" class="caption">Payment Method &amp; Status</p>
             <div>
-              <span class="badge secondary"><?= e($o['payment_method'] ?? 'COD') ?></span>
-              <span class="badge <?= $paymentStatusBadgeClass($pStat) ?>"><?= e($formatPaymentStatus($pStat)) ?></span>
+              <span class="meta-label"><?= e($o['payment_method'] ?? 'COD') ?></span>
+              <span class="status <?= $paymentStatusBadgeClass($pStat) ?>"><?= e($formatPaymentStatus($pStat)) ?></span>
             </div>
           </div>
         </div>

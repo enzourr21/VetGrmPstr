@@ -30,7 +30,7 @@
             ? 'ok'
             : (in_array($stName, ['Cancelled', 'Rejected', 'No-Show'], true) ? 'err' : 'warn'));
         ?>
-        <span class="badge <?= $stBadge ?>" style="font-weight: 700;"><?= e($stName) ?></span>
+        <span class="status <?= $stBadge ?>"><?= e($stName) ?></span>
       </div>
     <?php endif; ?>
   </div>
@@ -156,7 +156,7 @@
         <h2 style="margin: 0; font-size: 1.15rem;">Stock Alerts</h2>
         <p class="caption" style="margin: 0.2rem 0 0 0;">Grooming inventory products at or below threshold (≤ 10)</p>
       </div>
-      <span class="badge <?= count($stockAlerts) > 0 ? 'err' : 'ok' ?>" style="font-weight: 600;">
+      <span class="status <?= count($stockAlerts) > 0 ? 'err' : 'ok' ?>">
         <?= count($stockAlerts) ?> low stock
       </span>
     </div>
@@ -220,9 +220,7 @@
         ?>
         <div class="grooming-employee-present-row" style="display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.85rem 1rem; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-subtle);">
           <div style="display: flex; align-items: center; gap: 0.75rem; min-width: 0;">
-            <div style="width: 38px; height: 38px; border-radius: 9999px; background: var(--brand-soft, #e6f4f0); color: var(--brand, #0d6e57); font-weight: 700; font-size: 0.85rem; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border: 1px solid rgba(16, 185, 129, 0.25);">
-              <?= e($initials) ?>
-            </div>
+            <span class="staff-avatar" aria-hidden="true"><?= e($initials) ?></span>
             <div style="min-width: 0;">
               <strong style="display: block; font-size: 0.95rem; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
                 <?= e($emp['first_name'] . ' ' . $emp['last_name']) ?>
@@ -232,7 +230,7 @@
               </span>
             </div>
           </div>
-          <span class="badge <?= $indBadgeClass ?>" style="flex-shrink: 0; font-weight: 700;">
+          <span class="status <?= $indBadgeClass ?>" style="flex-shrink: 0;">
             <?= e($indStatus) ?>
           </span>
         </div>

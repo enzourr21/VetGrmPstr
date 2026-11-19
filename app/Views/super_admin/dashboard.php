@@ -63,8 +63,8 @@
       <article class="card overview-card">
         <div>
           <div class="row" style="justify-content: space-between; margin-bottom: 0.5rem;">
-            <span class="unit-pill"><?= e($u['business_unit_name']) ?></span>
-            <span class="badge <?= $u['business_unit_status'] === 'active' ? 'ok' : 'warn' ?>"><?= e(ucfirst($u['business_unit_status'])) ?></span>
+            <span class="meta-label"><?= e($u['business_unit_name']) ?></span>
+            <span class="status <?= $u['business_unit_status'] === 'active' ? 'ok' : 'warn' ?>"><?= e(ucfirst($u['business_unit_status'])) ?></span>
           </div>
           <h3><?= e($u['business_unit_name']) ?></h3>
           <dl class="meta-list">

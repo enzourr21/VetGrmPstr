@@ -1630,34 +1630,34 @@ final class VetClinicReceptionistController extends Controller
         $rawStatus = (string)($appt['status_name'] ?? 'Pending');
         $invoiceStatus = (string)($appt['invoice_status'] ?? '');
 
-        $statusBadge = 'badge-secondary';
+        $statusBadge = 'neutral';
         $displayStatus = $rawStatus;
 
         if ($rawStatus === 'Confirmed') {
-            $statusBadge = 'badge-success';
+            $statusBadge = 'ok';
         } elseif ($rawStatus === 'In Progress') {
-            $statusBadge = 'badge-info';
+            $statusBadge = 'info';
         } elseif ($rawStatus === 'Completed') {
             if ($invoiceStatus === 'paid') {
-                $statusBadge = 'badge-primary';
+                $statusBadge = 'primary';
                 $displayStatus = 'Completed';
             } else {
-                $statusBadge = 'badge-warning';
+                $statusBadge = 'warn';
                 $displayStatus = 'Pending Payment';
             }
         } elseif ($rawStatus === 'Pending') {
-            $statusBadge = 'badge-warning';
+            $statusBadge = 'warn';
         } elseif ($rawStatus === 'Awaiting Customer Response') {
-            $statusBadge = 'badge-purple';
+            $statusBadge = 'purple';
         } elseif ($rawStatus === 'Rejected' || $rawStatus === 'Cancelled') {
-            $statusBadge = 'badge-danger';
+            $statusBadge = 'err';
         }
 
         // Check if eligible for PENDING_PAYMENT
         $isPendingPayment = false;
         if (($rawStatus === 'Completed' && $invoiceStatus !== 'paid') || ($rawStatus === 'In Progress' && $invoiceStatus !== 'paid')) {
             $displayStatus = 'Pending Payment';
-            $statusBadge = 'badge-warning';
+            $statusBadge = 'warn';
             $isPendingPayment = true;
         }
 

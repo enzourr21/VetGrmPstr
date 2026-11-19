@@ -13,15 +13,15 @@ $secondsRemaining = (int)($attempt['seconds_remaining'] ?? 0);
     <p class="muted tabular"><?= e($attempt['business_unit_name']) ?> · Attempt Reference: <code><?= e(substr((string)$attempt['attempt_token'], 0, 16)) ?></code></p>
   </div>
   <?php if ($holdActive): ?>
-    <span class="badge ok">Hold Active (<?= (int)ceil($secondsRemaining / 60) ?>m / <?= $secondsRemaining ?>s left)</span>
+    <span class="status ok">Hold Active (<?= (int)ceil($secondsRemaining / 60) ?>m / <?= $secondsRemaining ?>s left)</span>
   <?php elseif ($attStatus === 'reconciliation_required'): ?>
-    <span class="badge warn">Payment Reconciliation Pending</span>
+    <span class="status warn">Payment Reconciliation Pending</span>
   <?php elseif ($holdStatus === 'expired' || ($holdStatus === 'active' && !$holdActive)): ?>
-    <span class="badge err">Hold Expired</span>
+    <span class="status err">Hold Expired</span>
   <?php elseif ($holdStatus === 'released' || $attStatus === 'failed'): ?>
-    <span class="badge err">Hold Released / Cancelled</span>
+    <span class="status err">Hold Released / Cancelled</span>
   <?php else: ?>
-    <span class="badge secondary"><?= e(ucwords(str_replace('_', ' ', $attStatus))) ?></span>
+    <span class="meta-label"><?= e(ucwords(str_replace('_', ' ', $attStatus))) ?></span>
   <?php endif; ?>
 </div>
 
@@ -29,7 +29,7 @@ $secondsRemaining = (int)($attempt['seconds_remaining'] ?? 0);
   <p>
     <strong>Shop:</strong> <?= e($attempt['business_unit_name']) ?><br>
     <strong>Fulfillment:</strong> <?= e(ucfirst((string)$attempt['fulfillment_method'])) ?><br>
-    <strong>Checkout Status:</strong> <span class="badge secondary"><?= e(ucwords(str_replace('_', ' ', $attStatus))) ?></span><br>
+    <strong>Checkout Status:</strong> <span class="meta-label"><?= e(ucwords(str_replace('_', ' ', $attStatus))) ?></span><br>
     <?php if (!empty($attempt['hold_created_at']) && !empty($attempt['hold_expires_at'])): ?>
       <strong>Hold Created (UTC):</strong> <span class="tabular"><?= e($attempt['hold_created_at']) ?></span><br>
       <strong>Hold Expires (UTC):</strong> <span class="tabular"><?= e($attempt['hold_expires_at']) ?></span>

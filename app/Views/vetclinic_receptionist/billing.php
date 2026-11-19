@@ -65,7 +65,7 @@ $completed = $recentlyCompleted ?? [];
                   <?php if (!empty($item['customer_id_display'])): ?>
                     <span class="caption muted">(#<?= (int)$item['customer_id_display'] ?>)</span>
                   <?php else: ?>
-                    <span class="badge" style="font-size: 0.65rem; background: #e0f2fe; color: #0369a1;">Guest</span>
+                    <span class="meta-label">Guest</span>
                   <?php endif; ?>
                 </div>
                 <div class="caption muted" style="margin-top: 0.15rem;">
@@ -81,7 +81,7 @@ $completed = $recentlyCompleted ?? [];
                 <?= e($item['services_summary']) ?>
               </td>
               <td style="padding: 0.75rem 1rem; text-align: center;">
-                <span class="badge <?= e($item['status_badge_class']) ?>">
+                <span class="status <?= e($item['status_badge_class']) ?>">
                   <?= e($item['display_status']) ?>
                 </span>
               </td>
@@ -142,7 +142,7 @@ $completed = $recentlyCompleted ?? [];
                 <div class="caption muted">🐾 <?= e($c['pets_summary']) ?></div>
               </td>
               <td style="padding: 0.75rem 1rem;">
-                <span class="badge" style="background: #f3f4f6; color: #374151; font-weight: 500; text-transform: uppercase; font-size: 0.75rem;">
+                <span class="meta-label">
                   <?= e($c['payment_method'] ?? 'Cash') ?>
                 </span>
               </td>
@@ -150,7 +150,7 @@ $completed = $recentlyCompleted ?? [];
                 ₱<?= number_format((float)($c['total_amount'] ?? 0), 2) ?>
               </td>
               <td style="padding: 0.75rem 1rem; text-align: center;">
-                <span class="badge badge-success">
+                <span class="status ok">
                   Paid
                 </span>
               </td>

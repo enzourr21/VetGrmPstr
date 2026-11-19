@@ -4,10 +4,10 @@
     <h1>Veterinary &amp; Grooming Services</h1>
   </div>
   <div class="services-controls">
-    <div class="segmented-bar" role="group" aria-label="Filter service category">
-      <button type="button" class="segmented-pill is-active" data-service-filter="all" aria-pressed="true">All (<?= count($vetServices) + count($groomingServices) ?>)</button>
-      <button type="button" class="segmented-pill" data-service-filter="veterinary" aria-pressed="false">Veterinary (<?= count($vetServices) ?>)</button>
-      <button type="button" class="segmented-pill" data-service-filter="grooming" aria-pressed="false">Grooming (<?= count($groomingServices) ?>)</button>
+    <div class="tabs" role="group" aria-label="Filter service category">
+      <button type="button" class="tab-link is-active" data-service-filter="all" aria-pressed="true">All (<?= count($vetServices) + count($groomingServices) ?>)</button>
+      <button type="button" class="tab-link" data-service-filter="veterinary" aria-pressed="false">Veterinary (<?= count($vetServices) ?>)</button>
+      <button type="button" class="tab-link" data-service-filter="grooming" aria-pressed="false">Grooming (<?= count($groomingServices) ?>)</button>
     </div>
     <?php if ($signedIn): ?>
       <a class="btn" href="/appointments/new">Request Grooming Appointment</a>

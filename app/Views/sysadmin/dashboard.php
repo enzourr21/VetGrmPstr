@@ -39,7 +39,7 @@ if (!empty($isPetStore)) {
       <h2 id="attention-heading" style="margin: 0; font-size: 1.25rem;">Administrative Attention</h2>
       <p class="caption" style="margin: 0.25rem 0 0;">Items and accounts in <?= e($unitName) ?> requiring administrative follow-up.</p>
     </div>
-    <span class="badge <?= !empty($attentionItems) ? 'badge-attention-active' : 'badge-attention-clear' ?>">
+    <span class="status <?= !empty($attentionItems) ? 'warn' : 'ok' ?>">
       <?= count($attentionItems) ?> <?= count($attentionItems) === 1 ? 'item' : 'items' ?>
     </span>
   </div>
@@ -56,7 +56,7 @@ if (!empty($isPetStore)) {
         <li class="attention-item">
           <div class="attention-content">
             <div class="row" style="gap: 0.5rem; align-items: center; flex-wrap: wrap;">
-              <span class="badge badge-tag badge-<?= e($item['badge_class']) ?>"><?= e($item['badge']) ?></span>
+              <span class="status <?= e($item['badge_class']) ?>"><?= e($item['badge']) ?></span>
               <strong><?= e($item['title']) ?></strong>
             </div>
             <p class="caption" style="margin: 0.35rem 0 0;"><?= e($item['subtitle']) ?></p>
@@ -197,7 +197,7 @@ foreach ($positions as $pos) {
                 </td>
                 <td><?= e($emp['position']) ?></td>
                 <td><span class="caption"><?= e($emp['unit_roles'] ?: '—') ?></span></td>
-                <td><span class="badge status-<?= e($emp['account_status']) ?>"><?= e($emp['account_status']) ?></span></td>
+                <td><span class="status status-<?= e($emp['account_status']) ?>"><?= e($emp['account_status']) ?></span></td>
               </tr>
             <?php endforeach; ?>
           </tbody>

@@ -12,15 +12,15 @@ $subtotalAmount = isset($o['subtotal_amount']) && $o['subtotal_amount'] !== null
     <h1>Order #<?= (int)$o['order_id'] ?></h1>
     <p class="muted tabular"><?= e($o['business_unit_name']) ?> · <?= e($o['order_date']) ?></p>
   </div>
-  <span class="badge warn"><?= e(str_replace('_', ' ', ucfirst($o['order_status']))) ?></span>
+  <span class="status warn"><?= e(str_replace('_', ' ', ucfirst($o['order_status']))) ?></span>
 </div>
 
 <div class="card" style="margin-bottom: 1.5rem;">
   <p>
     <strong><?= e($o['business_unit_name']) ?></strong> · <span class="tabular"><?= e($o['order_date']) ?></span><br>
-    Status: <span class="badge warn"><?= e(str_replace('_', ' ', ucfirst($o['order_status']))) ?></span><br>
+    Status: <span class="status warn"><?= e(str_replace('_', ' ', ucfirst($o['order_status']))) ?></span><br>
     Fulfillment: <strong><?= e(ucfirst($o['fulfillment_method'])) ?></strong><br>
-    Payment: <strong><?= e($payMethod) ?></strong> (<span class="badge <?= ($o['payment_status'] ?? '') === 'completed' ? 'ok' : 'secondary' ?>"><?= e($payStatus) ?></span>)
+    Payment: <strong><?= e($payMethod) ?></strong> (<span class="status <?= ($o['payment_status'] ?? '') === 'completed' ? 'ok' : 'neutral' ?>"><?= e($payStatus) ?></span>)
   </p>
   <?php if ($o['fulfillment_method'] === 'delivery'): ?>
     <p class="muted">Deliver to: <?= e(implode(', ', array_filter([$o['delivery_address_line1'], $o['delivery_address_line2'], $o['delivery_city'], $o['delivery_province'], $o['delivery_postal_code']]))) ?></p>

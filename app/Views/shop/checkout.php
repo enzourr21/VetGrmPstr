@@ -53,14 +53,14 @@ $submitBlocked = $noPaymentAvailable || ($selectedFulfillment === 'delivery' && 
       <td>
         <strong><?= e($i['product_name']) ?></strong>
         <?php if ($avail < $minThreshold): ?>
-          <br><span class="badge warn">Requires at least <?= $minThreshold ?> in stock (<?= $avail ?> available)</span>
+          <br><span class="status warn">Requires at least <?= $minThreshold ?> in stock (<?= $avail ?> available)</span>
         <?php elseif ($avail < $qty): ?>
-          <br><span class="badge err">Only <?= $avail ?> available</span>
+          <br><span class="status err">Only <?= $avail ?> available</span>
         <?php endif; ?>
       </td>
       <td class="tabular"><?= money($i['selling_price']) ?></td>
       <td class="tabular"><?= $qty ?></td>
-      <td class="tabular"><span class="badge <?= $eligible ? 'ok' : 'warn' ?>"><?= $avail ?></span></td>
+      <td class="tabular"><span class="status <?= $eligible ? 'ok' : 'warn' ?>"><?= $avail ?></span></td>
       <td class="right price"><?= money((float)$i['selling_price'] * $qty) ?></td>
     </tr>
   <?php endforeach; ?>
@@ -131,7 +131,7 @@ $submitBlocked = $noPaymentAvailable || ($selectedFulfillment === 'delivery' && 
         <span>
           <strong>Delivery</strong>
           <?php if (!$deliveryFeeConfigured): ?>
-            <span class="badge secondary">Unavailable</span>
+            <span class="meta-label">Unavailable</span>
           <?php endif; ?><br>
           <span class="caption">
             <?php if ($deliveryFeeConfigured && $configuredDeliveryFee !== null): ?>
@@ -162,7 +162,7 @@ $submitBlocked = $noPaymentAvailable || ($selectedFulfillment === 'delivery' && 
         <span>
           <strong>Online Payment</strong>
           <?php if (!$onlineEnabled): ?>
-            <span class="badge secondary">Unavailable</span>
+            <span class="meta-label">Unavailable</span>
           <?php endif; ?><br>
           <span class="caption">
             <?php if ($onlineEnabled): ?>

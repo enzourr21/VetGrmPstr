@@ -13,11 +13,11 @@ $statusFilter = $statusFilter ?? '';
   </div>
 </div>
 
-<div class="segmented-bar" role="tablist" style="margin-bottom: 1.5rem;" aria-label="Products & Inventory Sections">
-  <a href="/manager/products<?= $unitQuery ?>" class="segmented-pill is-active" role="tab" aria-selected="true">
+<div class="tabs" role="tablist" style="margin-bottom: 1.5rem;" aria-label="Products & Inventory Sections">
+  <a href="/manager/products<?= $unitQuery ?>" class="tab-link is-active" role="tab" aria-selected="true">
     Product Catalog (<?= count($products) ?>)
   </a>
-  <a href="/manager/inventory<?= $unitQuery ?>" class="segmented-pill" role="tab" aria-selected="false">
+  <a href="/manager/inventory<?= $unitQuery ?>" class="tab-link" role="tab" aria-selected="false">
     Inventory &amp; Stock Control
   </a>
 </div>
@@ -118,10 +118,10 @@ $statusFilter = $statusFilter ?? '';
                 <?php endif; ?>
               </td>
               <td><code><?= e($p['sku'] ?: '—') ?></code></td>
-              <td><span class="badge secondary"><?= e($p['product_category']) ?></span></td>
+              <td><span class="meta-label"><?= e($p['product_category']) ?></span></td>
               <td><strong><?= peso((float)$p['selling_price']) ?></strong></td>
               <td>
-                <span class="badge <?= $p['product_status'] === 'active' ? 'badge-success' : 'badge-danger' ?>">
+                <span class="status <?= $p['product_status'] === 'active' ? 'ok' : 'err' ?>">
                   <?= e(ucfirst((string)$p['product_status'])) ?>
                 </span>
               </td>
@@ -225,8 +225,8 @@ $statusFilter = $statusFilter ?? '';
         </div>
         <div>
           <h4 style="margin: 0 0 0.25rem 0; font-size: 1.15rem;"><?= e($p['product_name']) ?></h4>
-          <span class="badge secondary"><?= e($p['product_category']) ?></span>
-          <span class="badge <?= $p['product_status'] === 'active' ? 'badge-success' : 'badge-danger' ?>">
+          <span class="meta-label"><?= e($p['product_category']) ?></span>
+          <span class="status <?= $p['product_status'] === 'active' ? 'ok' : 'err' ?>">
             <?= e(ucfirst((string)$p['product_status'])) ?>
           </span>
           <div style="margin-top: 0.5rem; font-size: 1.1rem; font-weight: 600; color: var(--primary, #0284c7);">

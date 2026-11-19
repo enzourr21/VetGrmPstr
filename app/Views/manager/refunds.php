@@ -107,7 +107,7 @@ $totalRefundsCount = $totalRefundsCount ?? count($refundRequests);
                   <strong><?= e($rf['transaction_ref']) ?></strong>
                 </a>
                 <div>
-                  <span class="badge secondary" style="font-size: 0.72rem;"><?= e($rf['channel_label']) ?></span>
+                  <span class="meta-label"><?= e($rf['channel_label']) ?></span>
                 </div>
               </td>
               <td>
@@ -126,13 +126,13 @@ $totalRefundsCount = $totalRefundsCount ?? count($refundRequests);
               </td>
               <td>
                 <?php if ($rf['request_status'] === 'pending'): ?>
-                  <span class="badge badge-warning" style="font-weight: 600;">Pending Review</span>
+                  <span class="status warn">Pending Review</span>
                 <?php elseif ($rf['request_status'] === 'approved'): ?>
-                  <span class="badge badge-success" style="font-weight: 600;">Approved</span>
+                  <span class="status ok">Approved</span>
                 <?php elseif ($rf['request_status'] === 'rejected'): ?>
-                  <span class="badge badge-danger" style="font-weight: 600;">Rejected</span>
+                  <span class="status err">Rejected</span>
                 <?php else: ?>
-                  <span class="badge secondary"><?= e(ucfirst((string)$rf['request_status'])) ?></span>
+                  <span class="meta-label"><?= e(ucfirst((string)$rf['request_status'])) ?></span>
                 <?php endif; ?>
               </td>
               <td>
@@ -158,13 +158,13 @@ $totalRefundsCount = $totalRefundsCount ?? count($refundRequests);
     <div class="modal-head">
       <div>
         <div style="display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.35rem;">
-          <span class="badge" style="background: var(--brand-soft, #e6f4f0); color: var(--brand, #0d6e57); font-weight: 600;">Refund Request</span>
+          <span class="meta-label">Refund Request</span>
           <?php if ($rf['request_status'] === 'pending'): ?>
-            <span class="badge badge-warning">Pending Review</span>
+            <span class="status warn">Pending Review</span>
           <?php elseif ($rf['request_status'] === 'approved'): ?>
-            <span class="badge badge-success">Approved</span>
+            <span class="status ok">Approved</span>
           <?php elseif ($rf['request_status'] === 'rejected'): ?>
-            <span class="badge badge-danger">Rejected</span>
+            <span class="status err">Rejected</span>
           <?php endif; ?>
         </div>
         <h3 id="refund-title-<?= (int)$rf['refund_request_id'] ?>" style="margin: 0;">Request <?= e($rf['refund_reference']) ?></h3>
@@ -194,7 +194,7 @@ $totalRefundsCount = $totalRefundsCount ?? count($refundRequests);
           <p style="margin: 0 0 0.25rem 0;" class="caption">Original Transaction</p>
           <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
             <strong><?= e($rf['transaction_ref']) ?></strong>
-            <span class="badge secondary" style="font-size: 0.75rem;"><?= e($rf['channel_label']) ?></span>
+            <span class="meta-label"><?= e($rf['channel_label']) ?></span>
             <a href="/manager/sales<?= $unitQuery ?><?= !empty($unitQuery) ? '&' : '?' ?>tab=<?= e($origTab) ?>&view=<?= (int)($rf['order_id'] ?: $rf['sale_id']) ?>"
                class="btn secondary btn-sm"
                style="padding: 0.15rem 0.5rem; font-size: 0.75rem;">
@@ -264,7 +264,7 @@ $totalRefundsCount = $totalRefundsCount ?? count($refundRequests);
       <?php if ($rf['request_status'] === 'approved'): ?>
         <div style="background: #ecfdf5; border: 1px solid #a7f3d0; padding: 1rem; border-radius: 6px; margin-top: 1rem;">
           <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">
-            <span class="badge badge-success">Decision: Approved</span>
+            <span class="status ok">Decision: Approved</span>
             <strong style="color: #065f46;">Approved Amount: <?= peso((float)$rf['approved_amount']) ?></strong>
           </div>
           <div class="caption" style="color: #047857;">
@@ -281,7 +281,7 @@ $totalRefundsCount = $totalRefundsCount ?? count($refundRequests);
       <?php elseif ($rf['request_status'] === 'rejected'): ?>
         <div style="background: #fef2f2; border: 1px solid #fecaca; padding: 1rem; border-radius: 6px; margin-top: 1rem;">
           <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">
-            <span class="badge badge-danger">Decision: Rejected</span>
+            <span class="status err">Decision: Rejected</span>
           </div>
           <div class="caption" style="color: #991b1b;">
             Decided by <strong><?= e($rf['decided_by_name'] ?: 'Authorized Pet Store Manager') ?></strong>

@@ -34,44 +34,42 @@ $buildTabUrl = function (string $t) use ($q): string {
   </div>
 <?php endif; ?>
 
-<nav class="tabs" style="margin-bottom: 1.5rem; display: flex; gap: 0.5rem; border-bottom: 1px solid var(--color-border, #e5e7eb);">
+<nav class="tabs" style="margin-bottom: 1.5rem;">
   <?php foreach ($tabs as $tabKey => $tabLabel): ?>
     <a href="<?= e($buildTabUrl($tabKey)) ?>"
        class="tab-link <?= $activeTab === $tabKey ? 'is-active' : '' ?>"
-       style="padding: 0.65rem 1.25rem; font-weight: 600; text-decoration: none; border-bottom: 2px solid <?= $activeTab === $tabKey ? 'var(--color-primary, #047857)' : 'transparent' ?>; color: <?= $activeTab === $tabKey ? 'var(--color-primary, #047857)' : 'var(--color-muted, #6b7280)' ?>;">
+      >
       <?= e($tabLabel) ?>
     </a>
   <?php endforeach; ?>
 </nav>
 
-<section class="card" style="margin-bottom: 1.5rem; padding: 1rem 1.25rem;">
-  <form method="get" action="/delivery/orders" class="row" style="gap: 1rem; align-items: flex-end; flex-wrap: wrap;">
-    <input type="hidden" name="tab" value="<?= e($activeTab) ?>">
-    <div class="field" style="margin: 0; min-width: 260px; flex: 1;">
-      <label for="delivery-search" class="caption" style="display: block; margin-bottom: 0.25rem;">Search Order #, Customer, Phone, or City</label>
-      <input id="delivery-search" type="search" name="q" value="<?= e($q) ?>" placeholder="Search Order ID, Customer Name, Phone, City..." class="search-input">
-    </div>
-    <?php if ($q !== ''): ?>
-      <div class="row" style="align-items: center;">
-        <a href="/delivery/orders?tab=<?= e($activeTab) ?>" class="btn ghost btn-sm">Reset</a>
-      </div>
-    <?php endif; ?>
-  </form>
-</section>
-
 <section class="card" style="margin-bottom: 2rem;">
-  <div class="row" style="justify-content: space-between; align-items: baseline; margin-bottom: 1rem;">
+  <div class="row" style="justify-content: space-between; align-items: flex-end; gap: 1rem; margin-bottom: 1.25rem; flex-wrap: wrap;">
     <div>
       <h2 style="margin: 0; font-size: 1.25rem;"><?= e($tabs[$activeTab] ?? 'Delivery Orders') ?> (<?= count($orders) ?>)</h2>
       <p class="caption muted" style="margin: 0.25rem 0 0 0;">
         Click any order row to inspect delivery address, customer contact, items, and available actions.
       </p>
     </div>
+
+    <form method="get" action="/delivery/orders" class="row" style="gap: 0.75rem; align-items: flex-end; flex-wrap: wrap; flex: 1 1 280px; max-width: 440px;">
+      <input type="hidden" name="tab" value="<?= e($activeTab) ?>">
+      <div class="field" style="margin: 0; min-width: 220px; flex: 1;">
+        <label for="delivery-search" class="caption" style="display: block; margin-bottom: 0.25rem;">Search Order #, Customer, Phone, or City</label>
+        <input id="delivery-search" type="search" name="q" value="<?= e($q) ?>" placeholder="Search Order ID, Customer Name, Phone, City..." class="search-input">
+      </div>
+      <?php if ($q !== ''): ?>
+        <div class="row" style="align-items: center;">
+          <a href="/delivery/orders?tab=<?= e($activeTab) ?>" class="btn ghost btn-sm">Reset</a>
+        </div>
+      <?php endif; ?>
+    </form>
   </div>
 
   <?php if (empty($orders)): ?>
     <div class="empty" style="padding: 3rem 1rem; text-align: center;">
-      <p style="margin: 0; font-size: 1rem; color: var(--color-muted, #6b7280);">
+      <p style="margin: 0; font-size: 1rem; color: var(--muted);">
         No delivery orders found in <strong><?= e($tabs[$activeTab] ?? 'this view') ?></strong>.
       </p>
     </div>
@@ -79,35 +77,35 @@ $buildTabUrl = function (string $t) use ($q): string {
     <div style="overflow-x: auto; width: 100%;">
       <table style="width: 100%; border-collapse: collapse;">
         <thead>
-          <tr style="border-bottom: 1px solid var(--color-border, #e5e7eb); text-align: left; background: var(--color-bg-subtle, #f9fafb);">
-            <th style="padding: 0.75rem 1rem; font-size: 0.8rem; font-weight: 600; text-transform: uppercase;">Order ID</th>
-            <th style="padding: 0.75rem 1rem; font-size: 0.8rem; font-weight: 600; text-transform: uppercase;">Customer</th>
-            <th style="padding: 0.75rem 1rem; font-size: 0.8rem; font-weight: 600; text-transform: uppercase;">Destination</th>
-            <th style="padding: 0.75rem 1rem; font-size: 0.8rem; font-weight: 600; text-transform: uppercase;">Payment</th>
-            <th style="padding: 0.75rem 1rem; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; text-align: right;">Total</th>
-            <th style="padding: 0.75rem 1rem; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; text-align: center;">Status</th>
-            <th style="padding: 0.75rem 1rem; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; text-align: right;">Action</th>
+          <tr style="border-bottom: 1px solid var(--line); text-align: left; background: var(--surface-raised);">
+            <th style="padding: 0.75rem 1rem;">Order ID</th>
+            <th style="padding: 0.75rem 1rem;">Customer</th>
+            <th style="padding: 0.75rem 1rem;">Destination</th>
+            <th style="padding: 0.75rem 1rem;">Payment</th>
+            <th style="padding: 0.75rem 1rem; text-align: right;">Total</th>
+            <th style="padding: 0.75rem 1rem; text-align: center;">Status</th>
+            <th style="padding: 0.75rem 1rem; text-align: right;">Action</th>
           </tr>
         </thead>
         <tbody>
           <?php foreach ($orders as $o): ?>
             <?php
             $st = (string)$o['order_status'];
-            $badgeClass = 'badge-secondary';
+            $badgeClass = 'neutral';
             if (in_array($st, ['completed', 'confirmed'], true)) {
-                $badgeClass = 'badge-success';
+                $badgeClass = 'ok';
             } elseif (in_array($st, ['out_for_delivery', 'processing'], true)) {
-                $badgeClass = 'badge-info';
+                $badgeClass = 'info';
             } elseif ($st === 'pending') {
-                $badgeClass = 'badge-warning';
+                $badgeClass = 'warn';
             } elseif ($st === 'delivery_failed') {
-                $badgeClass = 'badge-danger';
+                $badgeClass = 'err';
             }
             $payLabel = !empty($o['is_refunded'])
                 ? 'Refunded'
                 : (!empty($o['payment_status']) ? ucfirst((string)$o['payment_status']) . ' (' . strtoupper((string)$o['payment_method']) . ')' : 'Unverified (No Record)');
             ?>
-            <tr style="border-bottom: 1px solid var(--color-border, #f3f4f6); cursor: pointer;"
+            <tr style="border-bottom: 1px solid var(--line); cursor: pointer;"
                 data-modal-open="delivery-modal-<?= (int)$o['order_id'] ?>"
                 class="order-table-row">
               <td style="padding: 0.875rem 1rem; font-weight: 600; font-family: var(--font-mono, monospace);">
@@ -123,7 +121,7 @@ $buildTabUrl = function (string $t) use ($q): string {
                 <div class="caption muted"><?= e(implode(', ', array_filter([$o['delivery_city'] ?? '', $o['delivery_province'] ?? '', $o['delivery_postal_code'] ?? '']))) ?></div>
               </td>
               <td style="padding: 0.875rem 1rem;">
-                <span class="badge <?= !empty($o['payment_eligible']) ? 'badge-success' : 'badge-warning' ?>" style="font-size: 0.75rem;">
+                <span class="status <?= !empty($o['payment_eligible']) ? 'ok' : 'warn' ?>">
                   <?= e($payLabel) ?>
                 </span>
               </td>
@@ -131,7 +129,7 @@ $buildTabUrl = function (string $t) use ($q): string {
                 ₱<?= number_format((float)$o['total_amount'], 2) ?>
               </td>
               <td style="padding: 0.875rem 1rem; text-align: center;">
-                <span class="badge <?= $badgeClass ?>"><?= e(ucwords(str_replace('_', ' ', $st))) ?></span>
+                <span class="status <?= $badgeClass ?>"><?= e(ucwords(str_replace('_', ' ', $st))) ?></span>
                 <?php if (!empty($o['rescheduled_date'])): ?>
                   <div class="caption muted" style="font-size: 0.75rem; margin-top: 0.2rem; color: <?= !empty($o['rescheduled_future']) ? '#b91c1c' : '#0369a1' ?>;">
                     Scheduled: <?= date('M j, Y', strtotime((string)$o['rescheduled_date'])) ?>
@@ -162,7 +160,7 @@ $buildTabUrl = function (string $t) use ($q): string {
             <div style="overflow-x: auto; margin-bottom: 0.75rem;">
               <table style="width: 100%; border-collapse: collapse;">
                 <thead>
-                  <tr style="border-bottom: 1px solid var(--color-border, #e5e7eb); text-align: left;">
+                  <tr style="border-bottom: 1px solid var(--line); text-align: left;">
                     <th style="padding: 0.5rem;">Include</th>
                     <th style="padding: 0.5rem;">Order</th>
                     <th style="padding: 0.5rem;">Customer</th>
@@ -174,7 +172,7 @@ $buildTabUrl = function (string $t) use ($q): string {
                 </thead>
                 <tbody>
                   <?php foreach ($unremittedCodPayments as $up): ?>
-                    <tr style="border-bottom: 1px solid var(--color-border, #f3f4f6);">
+                    <tr style="border-bottom: 1px solid var(--line);">
                       <td style="padding: 0.5rem;">
                         <input type="checkbox" name="payment_ids[]" value="<?= (int)$up['payment_id'] ?>" checked>
                       </td>
@@ -221,7 +219,7 @@ $buildTabUrl = function (string $t) use ($q): string {
                     <td style="padding: 0.5rem; text-align: center;"><?= (int)$rmt['payment_count'] ?></td>
                     <td style="padding: 0.5rem; text-align: right; font-weight: 600;">₱<?= number_format((float)$rmt['remitted_total'], 2) ?></td>
                     <td style="padding: 0.5rem; text-align: center;">
-                      <span class="badge badge-info"><?= e(ucfirst((string)$rmt['remittance_status'])) ?></span>
+                      <span class="status info"><?= e(ucfirst((string)$rmt['remittance_status'])) ?></span>
                     </td>
                   </tr>
                 <?php endforeach; ?>
@@ -290,12 +288,12 @@ if (!empty($selectedOrder)) {
         <div style="background: var(--color-bg-subtle, #f9fafb); padding: 1rem; border-radius: 8px; border: 1px solid var(--color-border, #e5e7eb);">
           <span class="caption muted" style="font-weight: 600; text-transform: uppercase;">Payment Eligibility</span>
           <?php if (!empty($orderModal['is_refunded'])): ?>
-            <div style="margin-top: 0.35rem;"><span class="badge badge-danger">Refunded (Ineligible)</span></div>
+            <div style="margin-top: 0.35rem;"><span class="status err">Refunded (Ineligible)</span></div>
           <?php elseif (!empty($orderModal['payment_status'])): ?>
             <div class="caption muted" style="margin-top: 0.25rem;">Method: <strong><?= e($orderModal['payment_method']) ?></strong></div>
             <div class="caption" style="margin-top: 0.25rem;">
               Status:
-              <span class="badge <?= !empty($orderModal['payment_eligible']) ? 'badge-success' : 'badge-warning' ?>" style="font-size: 0.75rem;">
+              <span class="status <?= !empty($orderModal['payment_eligible']) ? 'ok' : 'warn' ?>">
                 <?= e(ucfirst((string)$orderModal['payment_status'])) ?>
               </span>
             </div>
@@ -314,7 +312,7 @@ if (!empty($selectedOrder)) {
               </div>
             <?php endif; ?>
           <?php else: ?>
-            <div style="margin-top: 0.35rem;"><span class="badge badge-warning">No Payment Record</span></div>
+            <div style="margin-top: 0.35rem;"><span class="status warn">No Payment Record</span></div>
             <div class="caption muted" style="margin-top: 0.25rem;">Blocked until payment or COD is verified.</div>
           <?php endif; ?>
         </div>
@@ -322,7 +320,7 @@ if (!empty($selectedOrder)) {
         <div style="background: var(--color-bg-subtle, #f9fafb); padding: 1rem; border-radius: 8px; border: 1px solid var(--color-border, #e5e7eb);">
           <span class="caption muted" style="font-weight: 600; text-transform: uppercase;">Delivery Status</span>
           <div style="margin-top: 0.25rem;">
-            <span class="badge <?= $st === 'completed' ? 'badge-success' : ($st === 'delivery_failed' ? 'badge-danger' : 'badge-info') ?>" style="font-size: 0.95rem; padding: 0.35rem 0.65rem;">
+            <span class="status <?= $st === 'completed' ? 'ok' : ($st === 'delivery_failed' ? 'err' : 'info') ?>">
               <?= e(ucwords(str_replace('_', ' ', $st))) ?>
             </span>
           </div>
@@ -449,7 +447,7 @@ if (!empty($selectedOrder)) {
             <?php endif; ?>
 
           <?php elseif ($st === 'delivery_failed'): ?>
-            <span class="badge badge-danger" style="padding: 0.4rem 0.75rem;">
+            <span class="status err">
               ⚠️ Delivery Failed — re-dispatch is disabled pending failed-delivery return inspection and reconciliation.
             </span>
 
@@ -486,7 +484,7 @@ if (!empty($selectedOrder)) {
 
           <?php elseif ($st === 'completed'): ?>
             <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
-              <span class="badge badge-success">✓ Delivery completed.</span>
+              <span class="status ok">✓ Delivery completed.</span>
               <?php if ($isPendingCod): ?>
                 <form method="post" action="/delivery/orders/<?= $ordId ?>/collect-cod" style="margin: 0;">
                   <?= \App\Core\CSRF::field() ?>

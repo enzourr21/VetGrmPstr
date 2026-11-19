@@ -15,8 +15,8 @@
     <article class="card overview-card">
       <div>
         <div class="row" style="justify-content: space-between; margin-bottom: 0.65rem;">
-          <span class="unit-pill">Unit #<?= $uid ?></span>
-          <span class="badge <?= $u['business_unit_status'] === 'active' ? 'ok' : 'warn' ?>"><?= e(strtoupper($u['business_unit_status'])) ?></span>
+          <span class="meta-label">Unit #<?= $uid ?></span>
+          <span class="status <?= $u['business_unit_status'] === 'active' ? 'ok' : 'warn' ?>"><?= e(strtoupper($u['business_unit_status'])) ?></span>
         </div>
         <h2><?= e($u['business_unit_name']) ?></h2>
         <dl class="meta-list">
@@ -60,11 +60,11 @@
       <?php foreach ($branches as $b): ?>
         <tr>
           <td class="tabular">#<?= (int)$b['branch_id'] ?></td>
-          <td><span class="unit-pill"><?= e($b['business_unit_name']) ?></span></td>
+          <td><span class="meta-label"><?= e($b['business_unit_name']) ?></span></td>
           <td><strong><?= e($b['branch_name']) ?></strong></td>
           <td><?= e($b['city'] ?: '—') ?></td>
           <td class="tabular"><?= e($b['phone'] ?: '—') ?></td>
-          <td><span class="badge <?= $b['branch_status'] === 'active' ? 'ok' : 'warn' ?>"><?= e(ucfirst($b['branch_status'])) ?></span></td>
+          <td><span class="status <?= $b['branch_status'] === 'active' ? 'ok' : 'warn' ?>"><?= e(ucfirst($b['branch_status'])) ?></span></td>
         </tr>
       <?php endforeach; ?>
     </tbody>

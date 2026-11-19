@@ -80,7 +80,7 @@ $unitQuery = !empty($isSuper) ? '?unit_id=' . (int)$unitId : '';
     <article class="card role-card" data-role-card>
       <div class="row" style="justify-content: space-between; margin-bottom: 0.5rem;">
         <h3 style="margin: 0;"><code><?= e($r['role_name']) ?></code></h3>
-        <span class="badge"><?= count($r['permissions'] ?? []) ?> permissions</span>
+        <span class="status"><?= count($r['permissions'] ?? []) ?> permissions</span>
       </div>
       <div class="role-desc-wrap">
         <p class="caption role-short-desc"><?= e($short) ?></p>
@@ -115,7 +115,7 @@ $unitQuery = !empty($isSuper) ? '?unit_id=' . (int)$unitId : '';
     <article class="card">
       <div class="row" style="justify-content: space-between; margin-bottom: 0.5rem;">
         <h3 style="margin: 0;"><code><?= e($r['role_name']) ?></code></h3>
-        <span class="badge"><?= count($r['permissions'] ?? []) ?> permissions</span>
+        <span class="status"><?= count($r['permissions'] ?? []) ?> permissions</span>
       </div>
       <p class="caption" style="margin-bottom: 0.75rem;"><?= e($r['description']) ?></p>
       <?php if (!empty($r['permissions'])): ?>

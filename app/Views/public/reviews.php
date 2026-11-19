@@ -29,15 +29,15 @@ $totalReviews = count($reviews);
           <article class="card review-card <?= $isSample ? 'review-card-sample' : '' ?>">
             <header class="review-card-head">
               <div class="review-author-wrap">
-                <span class="review-author-badge" aria-hidden="true"><?= e($authorInitial) ?></span>
+                <span class="review-author-avatar" aria-hidden="true"><?= e($authorInitial) ?></span>
                 <div class="review-author-meta">
                   <div class="review-author-line">
                     <strong class="review-author-name"><?= e($authorDisplay) ?></strong>
                     <?php if ($isSample): ?>
-                      <span class="review-sample-tag">Sample</span>
+                      <span class="meta-label">Sample</span>
                     <?php endif; ?>
                     <?php if (!empty($rev['business_unit_name'])): ?>
-                      <span class="staff-unit-pill"><?= e($rev['business_unit_name']) ?></span>
+                      <span class="staff-unit"><?= e($rev['business_unit_name']) ?></span>
                     <?php endif; ?>
                   </div>
                   <time class="caption tabular review-date" datetime="<?= e($reviewDate) ?>"><?= e($reviewDate) ?></time>

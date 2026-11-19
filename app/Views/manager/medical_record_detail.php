@@ -16,14 +16,14 @@ $backUrl = !empty($isSuper) && !empty($unitId) ? '/manager/units/' . (int)$unitI
     </div>
     <div style="display: inline-flex; align-items: center; gap: 0.5rem; margin-top: 0.25rem;">
       <h1 style="margin: 0;"><?= e($record['record_ref']) ?></h1>
-      <span class="badge <?= $badgeClass ?>" style="padding: 0.2rem 0.65rem; font-size: 0.82rem; font-weight: 650;"><?= e($recStatus) ?></span>
+      <span class="status <?= $badgeClass ?>"><?= e($recStatus) ?></span>
     </div>
     <p class="muted" style="margin: 0.35rem 0 0 0;">
       Encounter Date: <strong><?= e($record['formatted_date']) ?></strong> at <strong><?= e($record['formatted_time']) ?></strong> · Attending: <strong><?= e($record['attending_veterinarian']) ?></strong>
     </p>
   </div>
   <div>
-    <span class="badge secondary" style="font-size: 0.85rem; padding: 0.35rem 0.75rem; font-weight: 600;">
+    <span class="meta-label">
       Read-Only BM Access
     </span>
   </div>
@@ -130,7 +130,7 @@ $backUrl = !empty($isSuper) && !empty($unitId) ? '/manager/units/' . (int)$unitI
             <strong style="color: var(--ink);"><?= e($dt['test_name']) ?></strong>
             <div class="caption muted" style="font-size: 0.78rem;">Ordered: <?= e($dt['ordered_date']) ?></div>
           </div>
-          <span class="badge secondary" style="font-size: 0.78rem;"><?= e($dt['status']) ?></span>
+          <span class="meta-label"><?= e($dt['status']) ?></span>
         </div>
       <?php endforeach; ?>
     </div>
@@ -153,7 +153,7 @@ $backUrl = !empty($isSuper) && !empty($unitId) ? '/manager/units/' . (int)$unitI
       <?php foreach ($record['treatments'] as $tr): ?>
         <div style="display: flex; justify-content: space-between; align-items: center; background: var(--surface-subtle, #f8fafc); padding: 0.55rem 0.85rem; border-radius: 6px; border: 1px solid var(--line);">
           <strong style="color: var(--ink);"><?= e($tr['treatment_name']) ?></strong>
-          <span class="badge ok" style="font-size: 0.76rem;"><?= e($tr['status']) ?></span>
+          <span class="status ok"><?= e($tr['status']) ?></span>
         </div>
       <?php endforeach; ?>
     </div>

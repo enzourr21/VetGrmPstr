@@ -14,9 +14,9 @@
       <?php endif; ?>
     </div>
     <?php if ($c['email_verified_at']): ?>
-      <span class="badge ok">Email verified</span>
+      <span class="status ok">Email verified</span>
     <?php else: ?>
-      <span class="badge warn">Email not verified</span>
+      <span class="status warn">Email not verified</span>
     <?php endif; ?>
   </div>
 </div>

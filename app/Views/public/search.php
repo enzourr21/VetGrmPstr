@@ -65,7 +65,7 @@
         <div class="card overview-card">
           <div class="row" style="justify-content: space-between; margin-bottom: 0.35rem;">
             <span class="caption"><?= e($p['business_unit_name']) ?></span>
-            <span class="badge <?= (int)$p['available'] > 0 ? ((int)$p['available'] <= 5 ? 'warn' : 'ok') : 'err' ?> tabular"><?= (int)$p['available'] > 0 ? (int)$p['available'] . ' in stock' : 'Out of stock' ?></span>
+            <span class="status <?= (int)$p['available'] > 0 ? ((int)$p['available'] <= 5 ? 'warn' : 'ok') : 'err' ?> tabular"><?= (int)$p['available'] > 0 ? (int)$p['available'] . ' in stock' : 'Out of stock' ?></span>
           </div>
           <h3><a href="/shop/<?= $buId ?>/product/<?= $bpId ?>"><?= e($p['product_name']) ?></a></h3>
           <p class="muted" style="margin: 0.35rem 0 0.85rem;"><?= e($p['description']) ?></p>

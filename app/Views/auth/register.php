@@ -7,21 +7,21 @@ if (!empty($errors)) {
 <section class="auth-shell">
   <div class="auth-card">
     <div class="step-tracker" aria-label="Registration progress">
-      <div class="step-chip <?= $stage > 1 ? 'is-done' : 'is-active' ?>" data-step-chip="1">
-        <div class="step-chip-bar"></div>
-        <span class="step-chip-label">1. Full Name</span>
+      <div class="step-item <?= $stage > 1 ? 'is-done' : 'is-active' ?>" data-step-chip="1">
+        <div class="step-item-bar"></div>
+        <span class="step-item-label">1. Full Name</span>
       </div>
-      <div class="step-chip <?= $stage > 2 ? 'is-done' : ($stage === 2 ? 'is-active' : '') ?>" data-step-chip="2">
-        <div class="step-chip-bar"></div>
-        <span class="step-chip-label">2. Details</span>
+      <div class="step-item <?= $stage > 2 ? 'is-done' : ($stage === 2 ? 'is-active' : '') ?>" data-step-chip="2">
+        <div class="step-item-bar"></div>
+        <span class="step-item-label">2. Details</span>
       </div>
-      <div class="step-chip <?= $stage > 3 ? 'is-done' : ($stage === 3 ? 'is-active' : '') ?>" data-step-chip="3">
-        <div class="step-chip-bar"></div>
-        <span class="step-chip-label">3. Verify Email</span>
+      <div class="step-item <?= $stage > 3 ? 'is-done' : ($stage === 3 ? 'is-active' : '') ?>" data-step-chip="3">
+        <div class="step-item-bar"></div>
+        <span class="step-item-label">3. Verify Email</span>
       </div>
-      <div class="step-chip <?= $stage === 4 ? 'is-active' : '' ?>" data-step-chip="4">
-        <div class="step-chip-bar"></div>
-        <span class="step-chip-label">4. Set Password</span>
+      <div class="step-item <?= $stage === 4 ? 'is-active' : '' ?>" data-step-chip="4">
+        <div class="step-item-bar"></div>
+        <span class="step-item-label">4. Set Password</span>
       </div>
     </div>
 
@@ -34,8 +34,8 @@ if (!empty($errors)) {
       <!-- Step 1: Full Name (First, Middle, Last aligned evenly) -->
       <div id="reg-stage-1" data-progressive-stage="1">
         <div class="progressive-stage-header">
-          <span class="stage-pill">Step 1 · Full Name</span>
-          <span class="stage-status-badge" data-stage1-done <?= $stage > 1 ? '' : 'hidden' ?>>Completed</span>
+          <span class="stage-label">Step 1 · Full Name</span>
+          <span class="status ok" data-stage1-done <?= $stage > 1 ? '' : 'hidden' ?>>Completed</span>
         </div>
         <div class="form-grid-3">
           <div class="field">
@@ -72,8 +72,8 @@ if (!empty($errors)) {
       <!-- Step 2: Additional Details -->
       <div id="reg-stage-2" class="progressive-stage" data-progressive-stage="2" <?= $stage >= 2 ? '' : 'hidden' ?>>
         <div class="progressive-stage-header">
-          <span class="stage-pill">Step 2 · Additional Details</span>
-          <span class="stage-status-badge" data-stage2-done <?= $stage > 2 ? '' : 'hidden' ?>>Completed</span>
+          <span class="stage-label">Step 2 · Additional Details</span>
+          <span class="status ok" data-stage2-done <?= $stage > 2 ? '' : 'hidden' ?>>Completed</span>
         </div>
         <div class="form-grid-2">
           <div class="field">
@@ -127,8 +127,8 @@ if (!empty($errors)) {
       <!-- Step 3: Set and Verify Email -->
       <div id="reg-stage-3" class="progressive-stage" data-progressive-stage="3" <?= $stage >= 3 ? '' : 'hidden' ?>>
         <div class="progressive-stage-header">
-          <span class="stage-pill">Step 3 · Set and Verify Email</span>
-          <span class="stage-status-badge" data-stage3-done <?= $stage > 3 ? '' : 'hidden' ?>>Completed</span>
+          <span class="stage-label">Step 3 · Set and Verify Email</span>
+          <span class="status ok" data-stage3-done <?= $stage > 3 ? '' : 'hidden' ?>>Completed</span>
         </div>
         <div class="field">
           <div class="field-label-row">
@@ -168,7 +168,7 @@ if (!empty($errors)) {
       <!-- Step 4: Set Password & Live Confirmation -->
       <div id="reg-stage-4" class="progressive-stage" data-progressive-stage="4" <?= $stage >= 4 ? '' : 'hidden' ?>>
         <div class="progressive-stage-header">
-          <span class="stage-pill">Step 4 · Set Password</span>
+          <span class="stage-label">Step 4 · Set Password</span>
         </div>
         <div class="form-grid-2">
           <div class="field">
@@ -178,7 +178,7 @@ if (!empty($errors)) {
             </div>
             <div class="password-input-wrap">
               <input id="password" name="password" type="password" autocomplete="new-password" placeholder="Create password" required>
-              <button type="button" class="password-toggle-btn" data-pw-toggle="password" aria-label="Show password" aria-pressed="false">Show</button>
+              <button type="button" class="password-toggle-btn" data-pw-toggle="password" aria-label="Show password" aria-pressed="false"><svg class="icon-eye" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg><svg class="icon-eye-off" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.4 10.4 0 0 1 12 19c-6.5 0-10-7-10-7a18.6 18.6 0 0 1 4.06-5.06"/><path d="M9.9 5.24A9.7 9.7 0 0 1 12 5c6.5 0 10 7 10 7a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="2" y1="2" x2="22" y2="22"/></svg></button>
             </div>
             <?php if (isset($errors['password'])): ?><div class="field-error"><?= e($errors['password']) ?></div><?php endif; ?>
           </div>
@@ -188,7 +188,7 @@ if (!empty($errors)) {
             </div>
             <div class="password-input-wrap">
               <input id="password_confirm" name="password_confirm" type="password" autocomplete="new-password" placeholder="Repeat password" required>
-              <button type="button" class="password-toggle-btn" data-pw-toggle="password_confirm" aria-label="Show confirmation password" aria-pressed="false">Show</button>
+              <button type="button" class="password-toggle-btn" data-pw-toggle="password_confirm" aria-label="Show confirmation password" aria-pressed="false"><svg class="icon-eye" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg><svg class="icon-eye-off" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.4 10.4 0 0 1 12 19c-6.5 0-10-7-10-7a18.6 18.6 0 0 1 4.06-5.06"/><path d="M9.9 5.24A9.7 9.7 0 0 1 12 5c6.5 0 10 7 10 7a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="2" y1="2" x2="22" y2="22"/></svg></button>
             </div>
             <?php if (isset($errors['password_confirm'])): ?><div class="field-error"><?= e($errors['password_confirm']) ?></div><?php endif; ?>
           </div>

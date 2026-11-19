@@ -315,7 +315,7 @@ a {
   margin: 0 0.25rem;
 }
 
-/* Header Navigation Links: Default #4b5563, Hover #111827 + subtle pill + -1px lift */
+/* Header Navigation Links: Default #4b5563, Hover #111827 + subtle hover surface + -1px lift */
 .topbar nav a,
 button.link {
   display: inline-flex;
@@ -445,42 +445,41 @@ main {
   margin: 0 0 0.2rem;
 }
 
-/* Segmented Filter Pills (Services / Catalog Quick Switcher) */
-.segmented-bar {
-  display: inline-flex;
+/* Tab Navigation (Services / Catalog / Workspace Filters) */
+.tabs,
+.tabs-nav {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 0.25rem;
-  padding: 0.28rem;
-  background: var(--bg-subtle);
-  border: 1px solid var(--line);
-  border-radius: 0.75rem;
+  gap: 1.25rem;
+  border-bottom: 1px solid var(--line);
 }
 
-.segmented-pill {
+.tab-link {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  padding: 0.38rem 0.85rem;
+  padding: 0.55rem 0.15rem;
+  margin-bottom: -1px;
   border: 0;
-  border-radius: 0.55rem;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
   background: transparent;
-  color: var(--nav-default);
+  color: var(--muted);
   font: inherit;
-  font-size: 0.85rem;
+  font-size: 0.875rem;
   font-weight: 600;
   text-decoration: none;
   cursor: pointer;
-  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out), transform var(--dur-press) var(--ease-out);
+  white-space: nowrap;
+  transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 
-.segmented-pill:active {
-  transform: scale(0.97);
-}
-
-.segmented-pill.is-active {
-  background: var(--surface);
-  color: var(--ink);
-  box-shadow: var(--shadow-xs);
+.tab-link.is-active,
+.tab-link[aria-selected="true"] {
+  color: var(--brand-text);
+  border-bottom-color: var(--brand-text);
 }
 
 .foot {
@@ -876,7 +875,7 @@ input[type=number].qty {
   opacity: 0.72;
 }
 
-/* Password Input Wrapper & Show/Hide Toggle */
+/* Password Input Wrapper & Eye Icon Visibility Toggle */
 .password-input-wrap {
   position: relative;
   display: flex;
@@ -884,27 +883,37 @@ input[type=number].qty {
 }
 
 .password-input-wrap input {
-  padding-right: 4.5rem;
+  padding-right: 2.75rem;
 }
 
 .password-toggle-btn {
   position: absolute;
-  right: 0.45rem;
+  right: 0.4rem;
   top: 50%;
   transform: translateY(-50%) scale(1);
   display: inline-flex;
   align-items: center;
-  gap: 0.25rem;
-  padding: 0.3rem 0.55rem;
+  justify-content: center;
+  width: 2.1rem;
+  height: 2.1rem;
+  padding: 0;
   border: 0;
-  border-radius: 0.4rem;
-  background: var(--bg);
-  color: var(--ink-secondary);
+  border-radius: 0.375rem;
+  background: transparent;
+  color: var(--muted);
   font: inherit;
-  font-size: 0.76rem;
-  font-weight: 620;
   cursor: pointer;
-  transition: opacity var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out), transform var(--dur-press) var(--ease-out);
+  transition: color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out), transform var(--dur-press) var(--ease-out);
+}
+
+.password-toggle-btn svg {
+  display: block;
+  pointer-events: none;
+}
+
+.password-toggle-btn:not([aria-pressed="true"]) .icon-eye-off,
+.password-toggle-btn[aria-pressed="true"] .icon-eye {
+  display: none;
 }
 
 .password-toggle-btn:active {
@@ -938,7 +947,7 @@ input[type=number].qty {
   justify-content: center;
   width: 1.1rem;
   height: 1.1rem;
-  border-radius: 999px;
+  border-radius: 50%;
   font-size: 0.7rem;
   font-weight: 700;
   background: var(--line);
@@ -980,20 +989,20 @@ input[type=number].qty {
   grid-template-columns: repeat(2, 1fr);
 }
 
-.step-chip {
+.step-item {
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
 }
 
-.step-chip-bar {
-  height: 0.28rem;
-  border-radius: 999px;
+.step-item-bar {
+  height: 0.25rem;
+  border-radius: 1px;
   background: var(--line);
   transition: background-color var(--dur-ui) var(--ease-out);
 }
 
-.step-chip-label {
+.step-item-label {
   font-size: 0.72rem;
   font-weight: 620;
   color: var(--muted);
@@ -1004,19 +1013,19 @@ input[type=number].qty {
   transition: color var(--dur-ui) var(--ease-out);
 }
 
-.step-chip.is-active .step-chip-bar {
+.step-item.is-active .step-item-bar {
   background: var(--brand);
 }
 
-.step-chip.is-active .step-chip-label {
+.step-item.is-active .step-item-label {
   color: var(--brand-text);
 }
 
-.step-chip.is-done .step-chip-bar {
+.step-item.is-done .step-item-bar {
   background: var(--ok);
 }
 
-.step-chip.is-done .step-chip-label {
+.step-item.is-done .step-item-label {
   color: var(--ok);
 }
 
@@ -1048,7 +1057,7 @@ input[type=number].qty {
   margin-bottom: 0.85rem;
 }
 
-.stage-pill {
+.stage-label {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
@@ -1057,22 +1066,6 @@ input[type=number].qty {
   letter-spacing: 0.008em;
   line-height: 1.25;
   color: var(--brand-text);
-}
-
-.stage-status-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 0.75rem;
-  font-weight: 640;
-  letter-spacing: 0.008em;
-  line-height: 1.25;
-  color: var(--ok);
-  background: var(--ok-bg);
-  border: 1px solid var(--ok-border);
-  padding: 0.16rem 0.54rem;
-  border-radius: 999px;
-  white-space: nowrap;
 }
 
 .stage-actions {
@@ -1418,13 +1411,13 @@ form.inline {
     transform: translateX(-3px);
   }
 
-  .segmented-pill:hover:not(.is-active) {
+  .tab-link:hover:not(.is-active) {
     color: var(--ink);
-    background: rgba(255, 255, 255, 0.55);
   }
 
   .password-toggle-btn:hover {
-    background: var(--line);
+    color: var(--ink);
+    background: var(--surface-subtle);
   }
 
   .check:hover {
@@ -1540,95 +1533,92 @@ tr:last-child td {
   border-bottom: 0;
 }
 
-/* Shared Status Badges, Pills & Semantic Variants */
-.badge,
-.badge-tag {
+/* Clean Non-Pill Status Text & Semantic Dot Indicators */
+.status {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  gap: 0.28rem;
-  padding: 0.18rem 0.56rem;
-  border-radius: 999px;
-  border: 1px solid var(--line-strong);
-  font-size: 0.75rem;
-  font-weight: 640;
-  letter-spacing: 0.008em;
-  line-height: 1.25;
-  background: var(--bg-subtle);
+  gap: 0.4rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.005em;
+  line-height: 1.35;
   color: var(--ink-secondary);
   white-space: nowrap;
 }
 
-.badge.neutral,
-.badge.secondary,
-.badge.badge-secondary,
-.badge-secondary,
-.badge-tag.badge-neutral {
-  background: var(--bg-subtle);
-  color: var(--ink-secondary);
-  border-color: var(--line-strong);
+.status::before {
+  content: "";
+  display: inline-block;
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
 }
 
-.badge.warn,
-.badge.badge-warning,
-.badge-warning,
-.badge.badge-warn,
-.badge-warn,
-.badge-tag.badge-warn,
-.badge-attention-active {
-  background: var(--warn-bg);
+.status.neutral,
+.status.secondary,
+.status.badge-secondary,
+.status.badge-neutral {
+  color: var(--muted);
+}
+
+.status.warn,
+.status.badge-warning,
+.status.badge-warn {
   color: var(--warn);
-  border-color: var(--warn-border);
 }
 
-.badge.err,
-.badge.badge-danger,
-.badge-danger,
-.badge.status-inactive,
-.badge.status-suspended {
-  background: var(--err-bg);
+.status.err,
+.status.badge-danger,
+.status.status-inactive,
+.status.status-suspended {
   color: var(--err);
-  border-color: var(--err-border);
 }
 
-.badge.ok,
-.badge.badge-success,
-.badge-success,
-.badge.status-active,
-.badge-attention-clear {
-  background: var(--ok-bg);
+.status.ok,
+.status.badge-success,
+.status.status-active {
   color: var(--ok);
-  border-color: var(--ok-border);
 }
 
-.badge.info,
-.badge.badge-info,
-.badge-info {
-  background: var(--info-bg);
+.status.info,
+.status.badge-info {
   color: var(--info);
-  border-color: var(--info-border);
 }
 
-.badge.primary,
-.badge.badge-primary,
-.badge-primary {
-  background: var(--brand-soft);
+.status.primary,
+.status.badge-primary {
   color: var(--brand-text);
-  border-color: var(--brand-border);
 }
 
-.badge.badge-purple,
-.badge-purple {
-  background: #f3effb;
+.status.badge-purple {
   color: #5b21b6;
-  border-color: #d8ccf4;
 }
 
-[data-theme="dark"] .badge.badge-purple,
-[data-theme="dark"] .badge-purple {
-  background: rgba(167, 139, 250, 0.16);
+[data-theme="dark"] .status.badge-purple {
   color: #c4b5fd;
-  border-color: rgba(196, 181, 253, 0.34);
+}
+
+/* Plain Metadata & Unit Labels (Non-Pill) */
+.meta-label,
+.staff-unit {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 0.8125rem;
+  font-weight: 560;
+  line-height: 1.35;
+  color: var(--muted);
+  white-space: nowrap;
 }
 
 .price {
@@ -1958,23 +1948,20 @@ body:not(.js-pet-world-ready) .anim-bunny-ear-right {
 
 .scenic-caption {
   font-size: 0.74rem;
-  font-weight: 640;
-  letter-spacing: 0.02em;
-  color: var(--ink-secondary);
-  background: rgba(255, 255, 255, 0.92);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border: 1px solid var(--line);
-  padding: 0.22rem 0.7rem;
-  border-radius: 999px;
-  margin-top: -0.25rem;
-  box-shadow: var(--shadow-xs);
-  transition: opacity var(--dur-ui) var(--ease-out), transform var(--dur-ui) var(--ease-out), border-color var(--dur-ui) var(--ease-out), color var(--dur-ui) var(--ease-out);
+  font-weight: 600;
+  letter-spacing: 0.015em;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  padding: 0.15rem 0;
+  border-radius: 0;
+  margin-top: -0.15rem;
+  box-shadow: none;
+  transition: opacity var(--dur-ui) var(--ease-out), transform var(--dur-ui) var(--ease-out), color var(--dur-ui) var(--ease-out);
 }
 
 .scenic-figure.is-active .scenic-caption {
-  color: var(--brand);
-  border-color: rgba(13, 110, 87, 0.28);
+  color: var(--ink-secondary);
 }
 
 @media (max-width: 1180px) {
@@ -1986,8 +1973,7 @@ body:not(.js-pet-world-ready) .anim-bunny-ear-right {
 /* Apple Accessibility Signal 1: Reduced Transparency */
 @media (prefers-reduced-transparency: reduce) {
 
-  .topbar,
-  .scenic-caption {
+  .topbar {
     background: var(--surface) !important;
     backdrop-filter: none !important;
     -webkit-backdrop-filter: none !important;
@@ -2029,7 +2015,7 @@ body:not(.js-pet-world-ready) .anim-bunny-ear-right {
   .flash,
   .password-toggle-btn,
   .check,
-  .segmented-pill,
+  .tab-link,
   .delivery-fields-wrap {
     transform: none !important;
     filter: none !important;
@@ -2041,28 +2027,6 @@ body:not(.js-pet-world-ready) .anim-bunny-ear-right {
 /* ==========================================================================
    Super Administrator, System Administrator & Workspace Components
    ========================================================================== */
-.unit-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.32rem;
-  padding: 0.18rem 0.6rem;
-  font-size: 0.75rem;
-  font-weight: 640;
-  letter-spacing: 0.008em;
-  line-height: 1.25;
-  border-radius: 999px;
-  background: var(--brand-soft);
-  color: var(--brand-text);
-  border: 1px solid var(--brand-border);
-  white-space: nowrap;
-}
-
-.unit-pill-global {
-  background: var(--brand);
-  color: var(--brand-ink);
-  border-color: var(--brand);
-}
-
 .stat-card {
   display: flex;
   flex-direction: column;
@@ -2355,18 +2319,6 @@ a.btn.btn-sm {
   width: 12.5rem;
 }
 
-.position-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 5.25rem;
-  min-width: 5.25rem;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-  flex-shrink: 0;
-  box-sizing: border-box;
-}
-
 .position-toggle-form {
   margin: 0;
   display: inline-flex;
@@ -2459,42 +2411,42 @@ body.has-modal-open {
   min-height: 0;
 }
 
-/* Role picker */
-.role-chips {
+/* Role picker (Non-Pill Rectangular Selection Items) */
+.role-list {
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem;
   margin-top: 0.5rem;
 }
 
-.role-chip {
+.role-item {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  padding: 0.22rem 0.35rem 0.22rem 0.65rem;
-  border-radius: 999px;
-  background: var(--brand-soft);
-  color: var(--brand-text);
-  border: 1px solid var(--brand-border);
-  font-size: 0.76rem;
-  font-weight: 640;
+  padding: 0.24rem 0.38rem 0.24rem 0.62rem;
+  border-radius: 0.375rem;
+  background: var(--surface-raised);
+  color: var(--ink);
+  border: 1px solid var(--line-strong);
+  font-size: 0.78rem;
+  font-weight: 600;
   line-height: 1.25;
 }
 
-.role-chip-remove {
-  width: 1.3rem;
-  height: 1.3rem;
+.role-item-remove {
+  width: 1.25rem;
+  height: 1.25rem;
   border: 0;
-  border-radius: 999px;
+  border-radius: 0.25rem;
   background: transparent;
-  color: inherit;
+  color: var(--muted);
   font: inherit;
   line-height: 1;
   cursor: pointer;
-  transition: background-color var(--dur-fast) var(--ease-out), transform var(--dur-press) var(--ease-out);
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), transform var(--dur-press) var(--ease-out);
 }
 
-.role-chip-remove:active {
+.role-item-remove:active {
   transform: scale(0.92);
 }
 
@@ -2684,9 +2636,7 @@ body.has-modal-open {
 
 /* Green dot beside active navigation item */
 .topbar nav a.is-current::before,
-.topbar nav a.is-active::before,
-.segmented-bar a.segmented-pill.is-active::before,
-.segmented-bar .segmented-pill.is-active::before {
+.topbar nav a.is-active::before {
   content: "";
   display: inline-block;
   width: 6px;
@@ -2714,7 +2664,7 @@ body.has-modal-open {
   right: 0.65rem;
   bottom: 0;
   height: 2.5px;
-  border-radius: 999px;
+  border-radius: 1px;
   background-color: var(--brand-emerald, #10b981);
   box-shadow: 0 1px 4px rgba(16, 185, 129, 0.35);
   transform-origin: center;
@@ -2731,7 +2681,7 @@ body.has-modal-open {
   position: absolute;
   bottom: 0;
   height: 2.5px;
-  border-radius: 999px;
+  border-radius: 1px;
   background-color: var(--brand-emerald, #10b981);
   box-shadow: 0 1px 5px rgba(16, 185, 129, 0.4);
   pointer-events: none;
@@ -2747,8 +2697,9 @@ body.has-modal-open {
     background: var(--surface-tint);
   }
 
-  .role-chip-remove:hover {
-    background: var(--brand-soft-hover);
+  .role-item-remove:hover {
+    background: var(--surface-subtle);
+    color: var(--ink);
   }
 
   .role-card-toggle:hover {
@@ -2766,7 +2717,7 @@ body.has-modal-open {
   .modal,
   .modal::backdrop,
   .role-option,
-  .role-chip-remove,
+  .role-item-remove,
   .nav-active-indicator,
   .topbar nav a.is-current::before {
     transform: none !important;
@@ -2823,31 +2774,6 @@ body.has-modal-open {
   align-items: center;
   gap: 0.75rem;
   flex-wrap: wrap;
-}
-
-.badge-attention-active,
-.badge-attention-clear {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0.22rem 0.62rem;
-  border-radius: 999px;
-  border: 1px solid transparent;
-  font-weight: 640;
-  font-size: 0.75rem;
-  line-height: 1.25;
-}
-
-.badge-attention-active {
-  background: var(--warn-bg);
-  color: var(--warn);
-  border-color: var(--warn-border);
-}
-
-.badge-attention-clear {
-  background: var(--ok-bg);
-  color: var(--ok);
-  border-color: var(--ok-border);
 }
 
 .empty-subtle {
@@ -3358,12 +3284,12 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   font-size: 0.94rem;
   font-weight: 700;
   color: var(--ink);
-  padding: 0.15rem 0.5rem;
-  border-radius: 999px;
+  padding: 0.12rem 0.42rem;
+  border-radius: 0.35rem;
   white-space: nowrap;
 }
 
-.grooming-cal-day-num.is-today-pill {
+.grooming-cal-day-num.is-today-num {
   background: var(--brand);
   color: #ffffff;
 }
@@ -4060,14 +3986,11 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   white-space: nowrap;
 }
 
-.profile-switcher-unit-link .unit-badge {
-  font-size: 0.625rem;
+.profile-switcher-unit-link .unit-current {
+  font-size: 0.7rem;
   font-weight: 600;
-  padding: 0.08rem 0.3rem;
-  border-radius: 999px;
-  background: var(--brand-soft);
   color: var(--brand-text);
-  margin-left: 0.25rem;
+  margin-left: 0.35rem;
 }
 
 .switcher-opt-indicator {
@@ -4085,14 +4008,11 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   white-space: nowrap;
 }
 
-.switcher-opt-badge {
-  font-size: 0.65rem;
+.switcher-current {
+  font-size: 0.7rem;
   font-weight: 600;
-  padding: 0.1rem 0.35rem;
-  border-radius: 999px;
-  background: var(--brand-soft);
   color: var(--brand-text);
-  margin-left: 0.25rem;
+  margin-left: 0.35rem;
 }
 
 /* Scoped Dark Mode Overrides (Only active when data-theme="dark" is set) */
@@ -4173,8 +4093,8 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   color: #f8fafc;
 }
 
-[data-theme="dark"] .segmented-pill:hover:not(.is-active) {
-  background: rgba(255, 255, 255, 0.07);
+[data-theme="dark"] .tab-link:hover:not(.is-active) {
+  color: #f8fafc;
 }
 
 [data-theme="dark"] .modal::backdrop {
@@ -4329,12 +4249,12 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   max-width: 100%;
 }
 
-.services-controls .segmented-bar {
+.services-controls .tabs {
   max-width: 100%;
   overflow-x: auto;
 }
 
-.services-controls .segmented-pill {
+.services-controls .tab-link {
   min-height: 2.25rem;
   white-space: nowrap;
 }
@@ -4512,32 +4432,10 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   flex-shrink: 0;
 }
 
-.staff-unit-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem;
-  justify-content: flex-end;
-}
-
-.staff-unit-pill {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.18rem 0.6rem;
-  border-radius: 999px;
-  font-size: 0.75rem;
-  font-weight: 640;
-  letter-spacing: 0.008em;
-  line-height: 1.25;
-  background: var(--surface-tint);
-  color: var(--brand-text);
-  border: 1px solid var(--brand-border);
-  white-space: nowrap;
-}
-
 .staff-card-identity {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 0.22rem;
 }
 
 .staff-name {
@@ -4552,14 +4450,27 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
 
 .staff-position {
   margin: 0;
-  font-size: 0.94rem;
+  font-size: 0.92rem;
   font-weight: 500;
-  line-height: 1.48;
+  line-height: 1.45;
   color: var(--ink-secondary);
 }
 
-[data-theme="dark"] .staff-profile-avatar,
-[data-theme="dark"] .staff-unit-pill {
+.staff-unit-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.05rem;
+}
+
+.staff-unit-list .staff-unit + .staff-unit::before {
+  content: "·";
+  margin-right: 0.35rem;
+  color: var(--muted);
+}
+
+[data-theme="dark"] .staff-profile-avatar {
   background: rgba(16, 185, 129, 0.14);
   color: #34d399;
   border-color: rgba(52, 211, 153, 0.28);
@@ -4612,7 +4523,7 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   min-width: 0;
 }
 
-.review-author-badge {
+.review-author-avatar {
   width: 2.35rem;
   height: 2.35rem;
   border-radius: 0.65rem;
@@ -4644,20 +4555,6 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
 .review-author-name {
   font-size: 0.95rem;
   color: var(--ink);
-}
-
-.review-sample-tag {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.16rem 0.54rem;
-  border-radius: 999px;
-  font-size: 0.73rem;
-  font-weight: 640;
-  letter-spacing: 0.008em;
-  line-height: 1.25;
-  background: var(--bg-subtle);
-  color: var(--ink-secondary);
-  border: 1px solid var(--line-strong);
 }
 
 .review-date {
@@ -4782,7 +4679,7 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   white-space: nowrap;
 }
 
-[data-theme="dark"] .review-author-badge {
+[data-theme="dark"] .review-author-avatar {
   background: rgba(16, 185, 129, 0.14);
   color: #34d399;
   border-color: rgba(52, 211, 153, 0.28);
@@ -4911,11 +4808,11 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   display: inline-flex;
   align-items: center;
   gap: 0.55rem;
-  padding: 0.32rem 0.78rem 0.32rem 0.42rem;
+  padding: 0;
   margin-bottom: 0.9rem;
-  background: var(--surface-tint);
-  border: 1px solid rgba(13, 110, 87, 0.16);
-  border-radius: 999px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
 }
 
 .home-hero-emblem {
@@ -4927,10 +4824,10 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
 }
 
 .home-hero-brand-label {
-  font-size: 0.82rem;
+  font-size: 0.85rem;
   font-weight: 700;
-  letter-spacing: 0.01em;
-  color: var(--brand);
+  letter-spacing: 0.005em;
+  color: var(--brand-text);
   line-height: 1.2;
 }
 
@@ -5615,7 +5512,7 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
 
 .home-how-walkthrough::-webkit-scrollbar-thumb {
   background: rgba(13, 110, 87, 0.26);
-  border-radius: 999px;
+  border-radius: 3px;
 }
 
 /* Left Column — Deep Brand-Green 5-Step Journey Rail */
@@ -5654,7 +5551,7 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   margin-top: 0.72rem;
   height: 2.5px;
   width: 100%;
-  border-radius: 999px;
+  border-radius: 1px;
   background: rgba(255, 255, 255, 0.16);
   overflow: hidden;
 }
@@ -5740,10 +5637,10 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   box-shadow: none;
 }
 
-.home-how-step-badge {
+.home-how-step-marker {
   width: 1.75rem;
   height: 1.75rem;
-  border-radius: 999px;
+  border-radius: 50%;
   border: 1px solid rgba(255, 255, 255, 0.24);
   background: rgba(255, 255, 255, 0.04);
   color: rgba(255, 255, 255, 0.62);
@@ -5759,14 +5656,14 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
     transform 220ms var(--ease-apple);
 }
 
-.home-how-step.is-active .home-how-step-badge {
+.home-how-step.is-active .home-how-step-marker {
   background: #6ee7b7;
   border-color: #6ee7b7;
   color: #094a3a;
   transform: scale(1.04);
 }
 
-.home-how-step.is-done .home-how-step-badge {
+.home-how-step.is-done .home-how-step-marker {
   background: rgba(110, 231, 183, 0.18);
   border-color: rgba(110, 231, 183, 0.45);
   color: #6ee7b7;
@@ -6007,7 +5904,7 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   margin-bottom: 0.65rem;
 }
 
-.how-auth-pill {
+.how-auth-step {
   flex: 1 1 0;
   text-align: center;
   padding: 0.24rem 0.4rem;
@@ -6018,12 +5915,12 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   font-weight: 650;
 }
 
-.how-auth-pill.is-current {
+.how-auth-step.is-current {
   background: var(--brand-soft);
   color: var(--brand);
 }
 
-.how-auth-pill.is-done {
+.how-auth-step.is-done {
   background: var(--ok-bg);
   color: var(--ok);
 }
@@ -6068,7 +5965,7 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   line-height: 1.35;
 }
 
-.how-account-chips {
+.how-account-links {
   margin-top: 0.35rem;
   display: flex;
   flex-wrap: wrap;
@@ -6076,11 +5973,11 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   gap: 0.35rem;
 }
 
-.how-account-chip {
-  padding: 0.22rem 0.56rem;
-  border-radius: 999px;
-  background: var(--surface-raised);
-  border: 1px solid var(--line);
+.how-account-link {
+  padding: 0.1rem 0.35rem;
+  border-radius: 0;
+  background: transparent;
+  border: 0;
   font-size: 0.69rem;
   font-weight: 620;
   color: var(--ink-secondary);
@@ -6122,13 +6019,13 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
 }
 
 .how-pet-species {
-  font-size: 0.65rem;
-  font-weight: 650;
-  padding: 0.12rem 0.45rem;
-  border-radius: 999px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  color: var(--ink-secondary);
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  border: 0;
+  color: var(--muted);
 }
 
 .how-pet-meta {
@@ -6258,7 +6155,7 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
 .how-done-icon {
   width: 2.4rem;
   height: 2.4rem;
-  border-radius: 999px;
+  border-radius: 50%;
   background: var(--ok-bg);
   color: var(--ok);
   border: 1px solid var(--ok-border);
@@ -6287,20 +6184,20 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   line-height: 1.4;
 }
 
-.how-done-pill {
-  margin-top: 0.2rem;
+.how-done-note {
+  margin-top: 0.15rem;
   display: inline-flex;
   align-items: center;
-  padding: 0.24rem 0.65rem;
-  border-radius: 999px;
-  background: var(--brand-soft);
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
   color: var(--brand);
-  font-size: 0.72rem;
+  font-size: 0.74rem;
   font-weight: 650;
 }
 
-.how-done-pill.is-pending {
-  background: var(--warn-bg);
+.how-done-note.is-pending {
+  background: transparent;
   color: var(--warn);
 }
 
@@ -6335,7 +6232,7 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
 .how-window-dots span {
   width: 0.48rem;
   height: 0.48rem;
-  border-radius: 999px;
+  border-radius: 50%;
   background: var(--line-strong);
 }
 
@@ -6353,12 +6250,12 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   text-overflow: ellipsis;
 }
 
-.how-cart-pill {
+.how-cart {
   display: inline-flex;
   align-items: center;
   gap: 0.32rem;
-  padding: 0.22rem 0.55rem;
-  border-radius: 999px;
+  padding: 0.22rem 0.52rem;
+  border-radius: 0.38rem;
   background: var(--surface);
   border: 1px solid var(--line-strong);
   font-size: 0.72rem;
@@ -6372,13 +6269,13 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
     color var(--dur-fast) var(--ease-out);
 }
 
-.how-cart-pill.is-updated {
+.how-cart.is-updated {
   background: var(--brand-soft);
   border-color: rgba(13, 110, 87, 0.35);
   color: var(--brand);
 }
 
-.how-cart-pill.is-pressed {
+.how-cart.is-pressed {
   transform: scale(0.95);
 }
 
@@ -6386,7 +6283,7 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   min-width: 1.1rem;
   height: 1.1rem;
   padding: 0 0.25rem;
-  border-radius: 999px;
+  border-radius: 0.25rem;
   background: var(--brand);
   color: #ffffff;
   font-size: 0.66rem;
@@ -6458,12 +6355,12 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   color: var(--muted);
 }
 
-.how-stock-tag {
-  font-size: 0.64rem;
+.how-stock {
+  font-size: 0.65rem;
   font-weight: 650;
-  padding: 0.12rem 0.42rem;
-  border-radius: 999px;
-  background: var(--ok-bg);
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
   color: var(--ok);
 }
 
@@ -6509,7 +6406,7 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   gap: 0.4rem;
 }
 
-.how-option-chip {
+.how-option-choice {
   font-size: 0.7rem;
   font-weight: 600;
   padding: 0.24rem 0.55rem;
@@ -6519,7 +6416,7 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   color: var(--ink-secondary);
 }
 
-.how-option-chip.is-picked {
+.how-option-choice.is-picked {
   background: var(--brand-soft);
   border-color: rgba(13, 110, 87, 0.28);
   color: var(--brand);
@@ -6568,7 +6465,7 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
 .how-phone-notch {
   width: 3.1rem;
   height: 0.28rem;
-  border-radius: 999px;
+  border-radius: 2px;
   background: rgba(17, 24, 39, 0.16);
 }
 
@@ -6587,13 +6484,13 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
 }
 
 .how-phone-pet {
-  font-size: 0.7rem;
+  font-size: 0.71rem;
   font-weight: 600;
   color: var(--ink-secondary);
-  background: var(--surface);
-  border: 1px solid var(--line);
-  padding: 0.14rem 0.48rem;
-  border-radius: 999px;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  border-radius: 0;
 }
 
 .how-phone-screen {
@@ -6661,7 +6558,7 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
 .how-radio {
   width: 0.92rem;
   height: 0.92rem;
-  border-radius: 999px;
+  border-radius: 50%;
   border: 1.5px solid var(--line-strong);
   background: var(--surface);
   flex-shrink: 0;
@@ -6682,8 +6579,8 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   margin-bottom: 0.65rem;
 }
 
-.how-date-chip,
-.how-time-chip {
+.how-date-choice,
+.how-time-choice {
   text-align: center;
   padding: 0.45rem 0.3rem;
   border-radius: 0.5rem;
@@ -6699,13 +6596,13 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
     color var(--dur-fast) var(--ease-out);
 }
 
-.how-date-chip.is-pressed,
-.how-time-chip.is-pressed {
+.how-date-choice.is-pressed,
+.how-time-choice.is-pressed {
   transform: scale(0.95);
 }
 
-.how-date-chip.is-selected,
-.how-time-chip.is-selected {
+.how-date-choice.is-selected,
+.how-time-choice.is-selected {
   background: var(--brand);
   border-color: var(--brand);
   color: #ffffff;
@@ -6745,12 +6642,12 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
 
 .how-studio-pet {
   font-size: 0.72rem;
-  font-weight: 620;
+  font-weight: 600;
   color: var(--ink-secondary);
-  background: var(--surface);
-  border: 1px solid var(--line);
-  padding: 0.16rem 0.55rem;
-  border-radius: 999px;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  border-radius: 0;
 }
 
 .how-studio-body {
@@ -6865,7 +6762,7 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   gap: 0.35rem;
 }
 
-.how-slot-chip {
+.how-slot-choice {
   text-align: center;
   padding: 0.34rem 0.45rem;
   border-radius: 0.45rem;
@@ -6881,11 +6778,11 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
     color var(--dur-fast) var(--ease-out);
 }
 
-.how-slot-chip.is-pressed {
+.how-slot-choice.is-pressed {
   transform: scale(0.95);
 }
 
-.how-slot-chip.is-selected {
+.how-slot-choice.is-selected {
   background: var(--brand);
   border-color: var(--brand);
   color: #ffffff;
@@ -6943,7 +6840,7 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   left: -6px;
   width: 22px;
   height: 22px;
-  border-radius: 999px;
+  border-radius: 50%;
   border: 2px solid var(--brand-emerald);
   opacity: 0;
   transform: scale(0.5);
@@ -7026,28 +6923,28 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   color: #34d399;
 }
 
-[data-theme="dark"] .how-stock-tag,
+[data-theme="dark"] .how-stock,
 [data-theme="dark"] .how-done-icon,
-[data-theme="dark"] .how-auth-pill.is-done {
+[data-theme="dark"] .how-auth-step.is-done {
   background: rgba(16, 185, 129, 0.16);
   color: #34d399;
   border-color: rgba(52, 211, 153, 0.3);
 }
 
-[data-theme="dark"] .how-option-chip.is-picked,
-[data-theme="dark"] .how-cart-pill.is-updated,
+[data-theme="dark"] .how-option-choice.is-picked,
+[data-theme="dark"] .how-cart.is-updated,
 [data-theme="dark"] .how-vet-row.is-selected,
 [data-theme="dark"] .how-groom-card.is-selected,
 [data-theme="dark"] .how-pet-card.is-selected,
 [data-theme="dark"] .how-mock-input.is-updated,
-[data-theme="dark"] .how-auth-pill.is-current,
-[data-theme="dark"] .how-done-pill {
+[data-theme="dark"] .how-auth-step.is-current,
+[data-theme="dark"] .how-done-note {
   background: rgba(16, 185, 129, 0.16);
   border-color: rgba(52, 211, 153, 0.35);
   color: #6ee7b7;
 }
 
-[data-theme="dark"] .how-done-pill.is-pending {
+[data-theme="dark"] .how-done-note.is-pending {
   background: rgba(217, 130, 43, 0.18);
   border-color: rgba(243, 215, 141, 0.28);
   color: #fbbf24;
@@ -7171,7 +7068,7 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
     flex-direction: row;
   }
 
-  .how-slot-chip {
+  .how-slot-choice {
     flex: 1 1 0;
   }
 }
@@ -7261,7 +7158,7 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   .home-how-progress-fill,
   .home-how-step,
   .home-how-step::before,
-  .home-how-step-badge,
+  .home-how-step-marker,
   .home-how-step-title,
   .home-how-step-desc,
   .home-how-counter,
@@ -7274,12 +7171,12 @@ body:has(.grooming-weekly-calendar-card) .scenic-rail {
   .home-how-scene .how-mock-field,
   .how-subview,
   .how-mock-btn,
-  .how-cart-pill,
+  .how-cart,
   .how-vet-row,
-  .how-date-chip,
-  .how-time-chip,
+  .how-date-choice,
+  .how-time-choice,
   .how-groom-card,
-  .how-slot-chip,
+  .how-slot-choice,
   .how-pet-card,
   .how-pet-edit-link,
   .how-mock-input,

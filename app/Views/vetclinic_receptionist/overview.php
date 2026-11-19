@@ -26,7 +26,7 @@ $totalSvcPages = $totalServicePages ?? 1;
       </p>
     </div>
     <?php if ($curAppt): ?>
-      <span class="badge <?= e($curAppt['status_badge_class'] ?? 'badge-info') ?>" style="font-size: 0.85rem; padding: 0.35rem 0.75rem;">
+      <span class="status <?= e($curAppt['status_badge_class'] ?? 'info') ?>">
         <?= e($curAppt['display_status'] ?? 'Scheduled') ?>
       </span>
     <?php endif; ?>
@@ -66,7 +66,7 @@ $totalSvcPages = $totalServicePages ?? 1;
           <?php if (!empty($curAppt['customer_id_display'])): ?>
             <span class="caption muted">(#<?= (int)$curAppt['customer_id_display'] ?>)</span>
           <?php else: ?>
-            <span class="badge" style="font-size: 0.65rem; background: #e0f2fe; color: #0369a1;">Guest</span>
+            <span class="meta-label">Guest</span>
           <?php endif; ?>
         </div>
         <?php if (!empty($curAppt['customer_phone'])): ?>
@@ -272,13 +272,13 @@ $totalSvcPages = $totalServicePages ?? 1;
           <?php foreach ($employeesPresent as $emp): ?>
             <?php
             $ws = (string)($emp['work_status'] ?? 'Free');
-            $wsBadge = 'badge-secondary';
+            $wsBadge = 'neutral';
             if ($ws === 'On Duty') {
-                $wsBadge = 'badge-success';
+                $wsBadge = 'ok';
             } elseif ($ws === 'Free') {
-                $wsBadge = 'badge-info';
+                $wsBadge = 'info';
             } elseif ($ws === 'Not Present') {
-                $wsBadge = 'badge-danger';
+                $wsBadge = 'err';
             }
             ?>
             <tr style="border-bottom: 1px solid var(--color-border, #f3f4f6);">
@@ -287,12 +287,12 @@ $totalSvcPages = $totalServicePages ?? 1;
                 <span class="caption muted" style="font-weight: normal; font-size: 0.75rem;">(ID #<?= (int)$emp['employee_id'] ?>)</span>
               </td>
               <td style="padding: 0.75rem 1rem;">
-                <span class="badge" style="background: var(--color-bg-subtle, #f3f4f6); color: var(--color-text, #374151); font-weight: 500;">
+                <span class="meta-label">
                   <?= e($emp['position'] ?: 'Staff') ?>
                 </span>
               </td>
               <td style="padding: 0.75rem 1rem; text-align: center;">
-                <span class="badge <?= $wsBadge ?>" style="font-weight: 600;">
+                <span class="status <?= $wsBadge ?>">
                   <?= e($ws) ?>
                 </span>
               </td>
