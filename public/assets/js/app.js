@@ -1626,7 +1626,7 @@
     function setMobileNavOpen(open) {
       topbarEl.classList.toggle('is-nav-open', open);
       mobileNavToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-      mobileNavToggle.setAttribute('aria-label', open ? 'Close navigation menu' : 'Open navigation menu');
+      mobileNavToggle.setAttribute('aria-label', open ? 'Hide additional pages' : 'Show more pages');
     }
 
     mobileNavToggle.addEventListener('click', function (ev) {

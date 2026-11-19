@@ -219,24 +219,24 @@ $docTitle = ($curPath === '/' || $rawTitle === '' || $rawTitle === 'PawCariño')
         decoding="async"
       >
     </a>
-    <button
-      type="button"
-      class="nav-mobile-toggle"
-      id="mobile-nav-toggle"
-      aria-expanded="false"
-      aria-controls="main-nav"
-      aria-label="Open navigation menu"
-    >
-      <svg class="nav-toggle-icon-menu" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <line x1="4" y1="7" x2="20" y2="7"></line>
-        <line x1="4" y1="12" x2="20" y2="12"></line>
-        <line x1="4" y1="17" x2="20" y2="17"></line>
-      </svg>
-      <svg class="nav-toggle-icon-close" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <line x1="6" y1="6" x2="18" y2="18"></line>
-        <line x1="18" y1="6" x2="6" y2="18"></line>
-      </svg>
-    </button>
+    <div class="topbar-mobile-actions">
+      <?php if (!$inStaffWorkspace && !($isSignedIn && $baseContext === 'employee')): ?>
+        <a href="/login" class="mobile-nav-signin <?= str_starts_with($curPath, '/login') ? 'is-current' : '' ?>">Sign in</a>
+        <a href="/register" class="mobile-nav-signup <?= str_starts_with($curPath, '/register') ? 'is-current' : '' ?>">Sign up</a>
+      <?php endif; ?>
+      <button
+        type="button"
+        class="nav-mobile-toggle"
+        id="mobile-nav-toggle"
+        aria-expanded="false"
+        aria-controls="main-nav"
+        aria-label="Show more pages"
+      >
+        <svg class="nav-toggle-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="6 9 12 15 18 9"></polyline>
+        </svg>
+      </button>
+    </div>
     <nav id="main-nav" aria-label="Main">
 <?php if ($inStaffWorkspace): ?>
   <?php if (str_starts_with($curPath, '/super-admin')): ?>
@@ -343,9 +343,9 @@ $docTitle = ($curPath === '/' || $rawTitle === '' || $rawTitle === 'PawCariño')
   <?php if ($isSignedIn && $baseContext === 'employee'): ?>
     <?php $renderProfileMenu($adminInitials, $authorizedInterfaces, $isTempInv); ?>
   <?php else: ?>
-      <span class="nav-divider" aria-hidden="true"></span>
-      <a href="/login" class="<?= str_starts_with($curPath, '/login') ? 'is-current' : '' ?>">Sign in</a>
-      <a class="nav-cta" href="/register">Create account</a>
+      <span class="nav-divider nav-desktop-auth" aria-hidden="true"></span>
+      <a href="/login" class="nav-desktop-auth <?= str_starts_with($curPath, '/login') ? 'is-current' : '' ?>">Sign in</a>
+      <a class="nav-cta nav-desktop-auth" href="/register">Create account</a>
   <?php endif; ?>
 <?php endif; ?>
     </nav>
