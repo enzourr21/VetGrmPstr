@@ -13,7 +13,6 @@
     </div>
 
     <h1>Sign in to PawCariño</h1>
-    <p class="muted auth-lead">Enter your email address or username and click Continue. Staff and administrators must sign in with their email address to enter their workspace; signing in with a username opens a customer-only session.</p>
 
     <form method="post" action="/login" data-progressive-login novalidate>
       <?= \App\Core\CSRF::field() ?>

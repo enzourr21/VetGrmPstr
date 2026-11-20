@@ -15,6 +15,7 @@ final class MailService
     private const SMTP_TIMEOUT_SECONDS = 15;
     private const SMTP_TIMELIMIT_SECONDS = 15;
     private const OTP_EXPIRY_MINUTES = 5;
+    public const INVITATION_EXPIRY_HOURS = 48;
 
     /**
      * Send a 6-digit registration verification OTP email to a prospective customer.
@@ -46,6 +47,132 @@ final class MailService
     }
 
     /**
+     * Submit an employee invitation email via the configured PHPMailer/SMTP (or null) driver.
+     *
+     * Reports SMTP submission status only and does not claim final inbox delivery.
+     * Never includes SMTP credentials, raw tokens, or invitation URLs in returned errors.
+     *
+     * @return array{submitted: bool, driver: string, error: ?string, status_code: int}
+     */
+    public static function sendEmployeeInvitation(
+        string $recipientEmail,
+        string $recipientName,
+        string $businessUnitName,
+        string $position,
+        string $invitationUrl,
+        int $expiryHours = self::INVITATION_EXPIRY_HOURS
+    ): array {
+        $recipientEmail = strtolower(trim($recipientEmail));
+        if (
+            $recipientEmail === '' ||
+            strlen($recipientEmail) > 255 ||
+            preg_match('/[\r\n]/', $recipientEmail) === 1 ||
+            filter_var($recipientEmail, FILTER_VALIDATE_EMAIL) === false
+        ) {
+            return [
+                'submitted' => false,
+                'driver' => 'unknown',
+                'error' => 'Invalid recipient email address.',
+                'status_code' => 422,
+            ];
+        }
+
+        $cleanUnit = trim(preg_replace('/[\r\n]+/', ' ', $businessUnitName) ?? '');
+        $cleanPosition = trim(preg_replace('/[\r\n]+/', ' ', $position) ?? '');
+        $cleanName = trim(preg_replace('/[\r\n]+/', ' ', $recipientName) ?? '');
+        $invitationUrl = trim($invitationUrl);
+
+        if ($cleanUnit === '' || $cleanPosition === '') {
+            return [
+                'submitted' => false,
+                'driver' => 'unknown',
+                'error' => 'Business unit and position are required for employee invitations.',
+                'status_code' => 422,
+            ];
+        }
+
+        $urlParts = parse_url($invitationUrl);
+        $urlScheme = is_array($urlParts) ? strtolower((string)($urlParts['scheme'] ?? '')) : '';
+        if (
+            $invitationUrl === '' ||
+            preg_match('/[\x00-\x20\x7F]/', $invitationUrl) === 1 ||
+            filter_var($invitationUrl, FILTER_VALIDATE_URL) === false ||
+            !in_array($urlScheme, ['http', 'https'], true)
+        ) {
+            return [
+                'submitted' => false,
+                'driver' => 'unknown',
+                'error' => 'Invalid employee invitation link URL.',
+                'status_code' => 422,
+            ];
+        }
+
+        if ($expiryHours < 1) {
+            return [
+                'submitted' => false,
+                'driver' => 'unknown',
+                'error' => 'Invalid invitation expiry duration.',
+                'status_code' => 422,
+            ];
+        }
+
+        $driver = 'unknown';
+        try {
+            $config = EnvConfig::mailConfig();
+            $driver = $config['driver'];
+
+            $greetingName = $cleanName !== '' ? $cleanName : 'there';
+            $subject = 'Set up your PawCariño employee account';
+            $htmlBody = self::buildEmployeeInvitationHtmlBody(
+                $greetingName,
+                $cleanUnit,
+                $cleanPosition,
+                $invitationUrl,
+                $expiryHours
+            );
+            $textBody = self::buildEmployeeInvitationTextBody(
+                $greetingName,
+                $cleanUnit,
+                $cleanPosition,
+                $invitationUrl,
+                $expiryHours
+            );
+
+            self::deliver(
+                $recipientEmail,
+                $cleanName,
+                $subject,
+                $htmlBody,
+                $textBody,
+                'Unable to submit employee invitation email via SMTP at this time.'
+            );
+
+            return [
+                'submitted' => true,
+                'driver' => $driver,
+                'error' => null,
+                'status_code' => 200,
+            ];
+        } catch (RuntimeException $e) {
+            $code = $e->getCode();
+            $statusCode = in_array($code, [422, 502, 503], true) ? $code : 502;
+            return [
+                'submitted' => false,
+                'driver' => $driver,
+                'error' => mb_substr($e->getMessage(), 0, 255),
+                'status_code' => $statusCode,
+            ];
+        } catch (Throwable $e) {
+            return [
+                'submitted' => false,
+                'driver' => $driver,
+                'error' => 'Unable to submit employee invitation email via SMTP at this time.',
+                'status_code' => 502,
+            ];
+        }
+    }
+
+    /**
      * Dispatch an email message using the configured driver ('smtp' or 'null').
      *
      * @throws RuntimeException If configuration fails (503) or SMTP transport fails (502).
@@ -55,7 +182,8 @@ final class MailService
         string $recipientName,
         string $subject,
         string $htmlBody,
-        string $textBody
+        string $textBody,
+        string $transportFailureMessage = 'Unable to deliver verification email at this time. Please try again later.'
     ): bool {
         // Retrieve and validate configuration via EnvConfig (throws RuntimeException 503 on invalid config)
         $config = EnvConfig::mailConfig();
@@ -118,18 +246,86 @@ final class MailService
             $mail->AltBody = $textBody;
 
             if (!$mail->send()) {
-                throw new RuntimeException('Unable to deliver verification email at this time. Please try again later.', 502);
+                throw new RuntimeException($transportFailureMessage, 502);
             }
 
             return true;
         } catch (PHPMailerException $e) {
-            // Never log or expose SMTP credentials, recipient payloads, or OTP codes
-            throw new RuntimeException('Unable to deliver verification email at this time. Please try again later.', 502);
+            // Never log or expose SMTP credentials, recipient payloads, or OTP codes/tokens
+            throw new RuntimeException($transportFailureMessage, 502);
         } catch (RuntimeException $e) {
             throw $e;
         } catch (Throwable $e) {
-            throw new RuntimeException('Unable to deliver verification email at this time. Please try again later.', 502);
+            throw new RuntimeException($transportFailureMessage, 502);
         }
+    }
+
+    /**
+     * Build the escaped HTML body for an employee account invitation email.
+     */
+    private static function buildEmployeeInvitationHtmlBody(
+        string $greetingName,
+        string $businessUnitName,
+        string $position,
+        string $invitationUrl,
+        int $expiryHours
+    ): string {
+        $safeName = self::escapeHtml($greetingName);
+        $safeUnit = self::escapeHtml($businessUnitName);
+        $safePosition = self::escapeHtml($position);
+        $safeUrl = self::escapeHtml($invitationUrl);
+        $safeHours = (string)$expiryHours;
+
+        return <<<HTML
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Set up your PawCariño employee account</title>
+</head>
+<body style="margin:0;padding:24px;background-color:#f6f7f9;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#111827;line-height:1.55;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;margin:0 auto;background-color:#ffffff;border:1px solid #e5e7eb;border-radius:14px;padding:28px;">
+    <tr>
+      <td>
+        <p style="margin:0 0 8px;font-size:12px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#0d6e57;">PawCariño</p>
+        <h1 style="margin:0 0 16px;font-size:22px;font-weight:700;color:#111827;">Set up your employee account</h1>
+        <p style="margin:0 0 16px;font-size:15px;color:#374151;">Hi {$safeName},</p>
+        <p style="margin:0 0 16px;font-size:15px;color:#374151;">You have been invited to join <strong>{$safeUnit}</strong> on PawCariño as <strong>{$safePosition}</strong>. Use the single-use invitation link below to set your password and activate your account:</p>
+        <p style="margin:0 0 20px;text-align:center;">
+          <a href="{$safeUrl}" style="display:inline-block;padding:12px 22px;background-color:#0d6e57;color:#ffffff;text-decoration:none;font-size:15px;font-weight:600;border-radius:8px;">Set Your Password</a>
+        </p>
+        <p style="margin:0 0 16px;font-size:13px;color:#4b5563;word-break:break-all;">If the button above does not work, copy and paste this link into your browser:<br>{$safeUrl}</p>
+        <p style="margin:0 0 12px;font-size:14px;color:#4b5563;">This invitation link expires in <strong>{$safeHours} hours</strong> and can only be used once. For your security, do not share this link with anyone.</p>
+        <p style="margin:0;font-size:13px;color:#6b7280;">If you were not expecting this invitation, you can safely ignore this email.</p>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+HTML;
+    }
+
+    /**
+     * Build the plain-text body for an employee account invitation email.
+     */
+    private static function buildEmployeeInvitationTextBody(
+        string $greetingName,
+        string $businessUnitName,
+        string $position,
+        string $invitationUrl,
+        int $expiryHours
+    ): string {
+        $cleanName = preg_replace('/[\r\n]+/', ' ', $greetingName) ?? 'there';
+        $cleanUnit = preg_replace('/[\r\n]+/', ' ', $businessUnitName) ?? '';
+        $cleanPosition = preg_replace('/[\r\n]+/', ' ', $position) ?? '';
+
+        return "PawCariño — Set up your employee account\n\n"
+            . "Hi {$cleanName},\n\n"
+            . "You have been invited to join {$cleanUnit} on PawCariño as {$cleanPosition}.\n\n"
+            . "Use the single-use invitation link below to set your password and activate your account:\n"
+            . "{$invitationUrl}\n\n"
+            . "This invitation link expires in {$expiryHours} hours and can only be used once. For your security, do not share this link with anyone.\n\n"
+            . "If you were not expecting this invitation, you can safely ignore this email.\n";
     }
 
     /**

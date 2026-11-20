@@ -311,6 +311,77 @@ final class EnvConfig
     }
 
     /**
+     * Retrieve and validate the configured application base URL (APP_URL).
+     * Invitation and external link builders must use this trusted value rather than the request Host header.
+     * Fails closed (RuntimeException with code 503) if missing, placeholder, or invalid.
+     */
+    public static function appUrl(): string
+    {
+        $raw = trim((string)self::get('APP_URL', ''));
+        if ($raw === '') {
+            throw new RuntimeException('Application URL configuration is unavailable (missing APP_URL).', 503);
+        }
+
+        if (preg_match('/[\x00-\x20\x7F\\\\]/', $raw) === 1) {
+            throw new RuntimeException('Application URL configuration is unavailable (invalid characters in APP_URL).', 503);
+        }
+
+        $lower = strtolower($raw);
+        if (
+            str_contains($lower, 'replace_with') ||
+            str_contains($lower, 'replace-with') ||
+            str_contains($lower, 'changeme') ||
+            str_contains($lower, 'your_app_url') ||
+            str_contains($lower, 'your-domain') ||
+            str_contains($lower, 'your_domain')
+        ) {
+            throw new RuntimeException('Application URL configuration is unavailable (placeholder APP_URL).', 503);
+        }
+
+        if (filter_var($raw, FILTER_VALIDATE_URL) === false) {
+            throw new RuntimeException('Application URL configuration is unavailable (malformed APP_URL).', 503);
+        }
+
+        $parts = parse_url($raw);
+        if (!is_array($parts)) {
+            throw new RuntimeException('Application URL configuration is unavailable (unparseable APP_URL).', 503);
+        }
+
+        $scheme = strtolower((string)($parts['scheme'] ?? ''));
+        if (!in_array($scheme, ['http', 'https'], true)) {
+            throw new RuntimeException('Application URL configuration is unavailable (APP_URL must use http or https).', 503);
+        }
+
+        $host = strtolower((string)($parts['host'] ?? ''));
+        if ($host === '') {
+            throw new RuntimeException('Application URL configuration is unavailable (APP_URL missing host).', 503);
+        }
+
+        if (isset($parts['user']) || isset($parts['pass']) || isset($parts['query']) || isset($parts['fragment'])) {
+            throw new RuntimeException('Application URL configuration is unavailable (APP_URL must not contain credentials, query strings, or fragments).', 503);
+        }
+
+        $portSuffix = '';
+        if (isset($parts['port'])) {
+            $port = (int)$parts['port'];
+            if ($port < 1 || $port > 65535) {
+                throw new RuntimeException('Application URL configuration is unavailable (APP_URL port out of range).', 503);
+            }
+            $portSuffix = ':' . $port;
+        }
+
+        $path = (string)($parts['path'] ?? '');
+        if ($path !== '') {
+            if (preg_match('#(^|/)\.\.(?:/|$)#', $path) === 1) {
+                throw new RuntimeException('Application URL configuration is unavailable (invalid path in APP_URL).', 503);
+            }
+            $path = rtrim($path, '/');
+        }
+
+        return $scheme . '://' . $host . $portSuffix . $path;
+    }
+
+    /**
      * Check whether both OTP HMAC secret and Mail configuration are valid and ready.
      */
     public static function assertOtpRegistrationReady(): void
