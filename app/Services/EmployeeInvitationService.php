@@ -560,6 +560,427 @@ final class EmployeeInvitationService
     }
 
     /**
+     * Validate a raw invitation token for read-only display on GET /invitations/accept.
+     * Uses generic non-enumerating errors so unrelated accounts or emails are never revealed.
+     *
+     * @return array{
+     *   ok: bool,
+     *   status: int,
+     *   error?: string,
+     *   invitation?: array{
+     *     invitation_id: int,
+     *     full_name: string,
+     *     email: string,
+     *     business_unit_name: string,
+     *     position: string,
+     *     roles: string,
+     *     expires_at: string
+     *   }
+     * }
+     */
+    public function validateTokenForAcceptance(string $rawToken): array
+    {
+        $genericError = 'This invitation link is invalid, expired, or has already been used.';
+        $rawToken = trim($rawToken);
+        if (!self::isValidRawTokenFormat($rawToken)) {
+            return ['ok' => false, 'status' => 400, 'error' => $genericError];
+        }
+
+        $tokenHash = self::hashToken($rawToken);
+        $stmt = $this->db->prepare(
+            "SELECT ei.invitation_id, ei.user_account_id, ei.employee_id, ei.business_unit_id,
+                    ei.invited_email, ei.token_hash, ei.status, ei.expires_at,
+                    ei.accepted_at, ei.revoked_at,
+                    e.user_account_id AS emp_user_account_id, e.business_unit_id AS emp_business_unit_id,
+                    e.first_name, e.last_name, e.position, e.employee_status,
+                    ua.email AS account_email, ua.account_status, ua.is_super_admin, ua.email_verified_at,
+                    bu.business_unit_name, bu.business_unit_status,
+                    EXISTS (
+                        SELECT 1
+                        FROM account_role ar_sa
+                        JOIN role r_sa ON r_sa.role_id = ar_sa.role_id
+                        WHERE ar_sa.user_account_id = ua.user_account_id
+                          AND r_sa.role_name = 'SUPER_ADMINISTRATOR'
+                    ) AS has_super_role,
+                    EXISTS (
+                        SELECT 1
+                        FROM employee_invitation ei_acc
+                        WHERE ei_acc.employee_id = e.employee_id
+                          AND ei_acc.status = 'accepted'
+                    ) AS has_accepted_invitation,
+                    (SELECT GROUP_CONCAT(DISTINCT r2.role_name ORDER BY r2.role_name SEPARATOR ', ')
+                     FROM account_role ar2
+                     JOIN role r2 ON r2.role_id = ar2.role_id
+                     WHERE ar2.user_account_id = ua.user_account_id
+                       AND ar2.business_unit_id = ei.business_unit_id) AS unit_roles
+             FROM employee_invitation ei
+             JOIN employee e ON e.employee_id = ei.employee_id
+             JOIN user_account ua ON ua.user_account_id = ei.user_account_id
+             JOIN business_unit bu ON bu.business_unit_id = ei.business_unit_id
+             WHERE ei.token_hash = ?
+             LIMIT 1"
+        );
+        $stmt->execute([$tokenHash]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$row || !hash_equals((string)$row['token_hash'], $tokenHash)) {
+            return ['ok' => false, 'status' => 404, 'error' => $genericError];
+        }
+
+        $nowUtc = gmdate('Y-m-d H:i:s', $this->nowUnix());
+        $invitedEmail = strtolower(trim((string)$row['invited_email']));
+        $accountEmail = strtolower(trim((string)$row['account_email']));
+
+        if (
+            (string)$row['status'] !== 'pending' ||
+            $row['accepted_at'] !== null ||
+            $row['revoked_at'] !== null ||
+            (bool)$row['has_accepted_invitation'] ||
+            (string)$row['expires_at'] <= $nowUtc ||
+            (int)$row['emp_user_account_id'] !== (int)$row['user_account_id'] ||
+            (int)$row['emp_business_unit_id'] !== (int)$row['business_unit_id'] ||
+            $invitedEmail !== $accountEmail ||
+            (bool)$row['is_super_admin'] ||
+            (bool)$row['has_super_role'] ||
+            (string)$row['account_status'] !== 'active' ||
+            (string)$row['employee_status'] !== 'active' ||
+            (string)$row['business_unit_status'] !== 'active' ||
+            $row['email_verified_at'] !== null
+        ) {
+            return ['ok' => false, 'status' => 410, 'error' => $genericError];
+        }
+
+        return [
+            'ok' => true,
+            'status' => 200,
+            'invitation' => [
+                'invitation_id' => (int)$row['invitation_id'],
+                'full_name' => trim((string)$row['first_name'] . ' ' . (string)$row['last_name']),
+                'email' => $invitedEmail,
+                'business_unit_name' => (string)$row['business_unit_name'],
+                'position' => (string)$row['position'],
+                'roles' => (string)($row['unit_roles'] ?? ''),
+                'expires_at' => (string)$row['expires_at'],
+            ],
+        ];
+    }
+
+    /**
+     * Accept a single-use employee invitation, set the employee's chosen password,
+     * verify their email, and mark the invitation accepted atomically under the canonical
+     * row-lock order (user_account -> employee -> employee_invitation).
+     *
+     * Does not accept or mutate email, username, profile details, position, business unit, or roles.
+     * If a pending invitation has expired in UTC, persists status='expired' before rejecting.
+     *
+     * @return array{
+     *   ok: bool,
+     *   status: int,
+     *   error?: string,
+     *   errors?: array<string, string>,
+     *   invitation_id?: int,
+     *   user_account_id?: int,
+     *   employee_id?: int
+     * }
+     */
+    public function acceptInvitation(
+        string $rawToken,
+        string $password,
+        string $passwordConfirm
+    ): array {
+        $genericError = 'This invitation link is invalid, expired, or has already been used.';
+
+        if ($this->db->inTransaction()) {
+            return [
+                'ok' => false,
+                'status' => 500,
+                'error' => 'Accept invitation must not be invoked inside an active transaction.',
+            ];
+        }
+
+        $rawToken = trim($rawToken);
+        if (!self::isValidRawTokenFormat($rawToken)) {
+            return ['ok' => false, 'status' => 400, 'error' => $genericError];
+        }
+
+        // Enforce existing PawCariño password policy before mutating or consuming any invitation
+        $fieldErrors = [];
+        if (strlen($password) < 10) {
+            $fieldErrors['password'] = 'Password must be at least 10 characters long.';
+        } elseif (strlen($password) > 200) {
+            $fieldErrors['password'] = 'Password must be at most 200 characters long.';
+        }
+        if ($passwordConfirm === '' || $password !== $passwordConfirm) {
+            $fieldErrors['password_confirm'] = 'Passwords do not match.';
+        }
+        if ($fieldErrors) {
+            return [
+                'ok' => false,
+                'status' => 422,
+                'error' => 'Please review the password requirements below.',
+                'errors' => $fieldErrors,
+            ];
+        }
+
+        $tokenHash = self::hashToken($rawToken);
+
+        // Non-locking discovery of (invitation_id, user_account_id, employee_id) so the transaction
+        // can lock strictly in canonical order: user_account -> employee -> employee_invitation
+        $lookup = $this->db->prepare(
+            "SELECT invitation_id, user_account_id, employee_id, business_unit_id
+             FROM employee_invitation
+             WHERE token_hash = ?
+             LIMIT 1"
+        );
+        $lookup->execute([$tokenHash]);
+        $stub = $lookup->fetch(PDO::FETCH_ASSOC);
+
+        if (!$stub) {
+            return ['ok' => false, 'status' => 404, 'error' => $genericError];
+        }
+
+        $invitationId = (int)$stub['invitation_id'];
+        $userAccountId = (int)$stub['user_account_id'];
+        $employeeId = (int)$stub['employee_id'];
+        $businessUnitId = (int)$stub['business_unit_id'];
+
+        try {
+            $this->db->beginTransaction();
+
+            // 1. Lock user_account first (canonical order)
+            $uaStmt = $this->db->prepare(
+                "SELECT ua.user_account_id, ua.email, ua.account_status, ua.is_super_admin, ua.email_verified_at,
+                        EXISTS (
+                            SELECT 1
+                            FROM account_role ar_sa
+                            JOIN role r_sa ON r_sa.role_id = ar_sa.role_id
+                            WHERE ar_sa.user_account_id = ua.user_account_id
+                              AND r_sa.role_name = 'SUPER_ADMINISTRATOR'
+                        ) AS has_super_role
+                 FROM user_account ua
+                 WHERE ua.user_account_id = ?
+                 FOR UPDATE"
+            );
+            $uaStmt->execute([$userAccountId]);
+            $ua = $uaStmt->fetch(PDO::FETCH_ASSOC);
+
+            // 2. Lock employee second (canonical order)
+            $empStmt = $this->db->prepare(
+                "SELECT e.employee_id, e.user_account_id, e.business_unit_id, e.first_name, e.last_name,
+                        e.position, e.employee_status
+                 FROM employee e
+                 WHERE e.employee_id = ?
+                 FOR UPDATE"
+            );
+            $empStmt->execute([$employeeId]);
+            $emp = $empStmt->fetch(PDO::FETCH_ASSOC);
+
+            // 3. Lock employee_invitation rows third (canonical order)
+            $invStmt = $this->db->prepare(
+                "SELECT invitation_id, user_account_id, employee_id, business_unit_id,
+                        invited_email, token_hash, status, expires_at, accepted_at, revoked_at
+                 FROM employee_invitation
+                 WHERE employee_id = ?
+                 ORDER BY invitation_id DESC
+                 FOR UPDATE"
+            );
+            $invStmt->execute([$employeeId]);
+            $allInvRows = $invStmt->fetchAll(PDO::FETCH_ASSOC);
+
+            // 4. Read business_unit non-locking
+            $buStmt = $this->db->prepare(
+                "SELECT business_unit_id, business_unit_name, business_unit_status
+                 FROM business_unit
+                 WHERE business_unit_id = ?
+                 LIMIT 1"
+            );
+            $buStmt->execute([$businessUnitId]);
+            $bu = $buStmt->fetch(PDO::FETCH_ASSOC);
+
+            $targetInv = null;
+            $hasAnyAccepted = false;
+            foreach ($allInvRows as $row) {
+                if ((string)$row['status'] === 'accepted') {
+                    $hasAnyAccepted = true;
+                }
+                if ((int)$row['invitation_id'] === $invitationId) {
+                    $targetInv = $row;
+                }
+            }
+
+            if (
+                !$ua ||
+                !$emp ||
+                !$bu ||
+                !$targetInv ||
+                !hash_equals((string)$targetInv['token_hash'], $tokenHash)
+            ) {
+                $this->db->rollBack();
+                return ['ok' => false, 'status' => 404, 'error' => $genericError];
+            }
+
+            // Reject if any invitation for this employee was already accepted or target is not pending
+            if (
+                $hasAnyAccepted ||
+                (string)$targetInv['status'] !== 'pending' ||
+                $targetInv['accepted_at'] !== null ||
+                $targetInv['revoked_at'] !== null
+            ) {
+                $this->db->rollBack();
+                return ['ok' => false, 'status' => 409, 'error' => $genericError];
+            }
+
+            $nowUtc = gmdate('Y-m-d H:i:s', $this->nowUnix());
+
+            // Persist expired lifecycle state when a pending invitation has passed UTC expires_at
+            if ((string)$targetInv['expires_at'] <= $nowUtc) {
+                $expStmt = $this->db->prepare(
+                    "UPDATE employee_invitation
+                     SET status = 'expired',
+                         updated_at = ?
+                     WHERE invitation_id = ? AND status = 'pending'"
+                );
+                $expStmt->execute([$nowUtc, $invitationId]);
+
+                Audit::record(
+                    $this->db,
+                    'invitation.expired',
+                    "Rejected expired employee invitation #{$invitationId} on acceptance attempt.",
+                    $businessUnitId,
+                    null,
+                    $employeeId,
+                    'pending',
+                    'expired',
+                    'employee_invitation',
+                    $invitationId
+                );
+
+                $this->db->commit();
+                return ['ok' => false, 'status' => 410, 'error' => $genericError];
+            }
+
+            // Cross-table ownership, email consistency, Super Admin exclusion, and active status checks
+            $invitedEmail = strtolower(trim((string)$targetInv['invited_email']));
+            $accountEmail = strtolower(trim((string)$ua['email']));
+
+            if (
+                (int)$emp['user_account_id'] !== $userAccountId ||
+                (int)$targetInv['user_account_id'] !== $userAccountId ||
+                (int)$emp['business_unit_id'] !== $businessUnitId ||
+                (int)$targetInv['business_unit_id'] !== $businessUnitId ||
+                (string)$bu['business_unit_status'] !== 'active' ||
+                $invitedEmail !== $accountEmail ||
+                (bool)$ua['is_super_admin'] ||
+                (bool)$ua['has_super_role'] ||
+                (string)$ua['account_status'] !== 'active' ||
+                (string)$emp['employee_status'] !== 'active' ||
+                $ua['email_verified_at'] !== null
+            ) {
+                $this->db->rollBack();
+                return ['ok' => false, 'status' => 409, 'error' => $genericError];
+            }
+
+            // Atomically consume invitation (single-use guard)
+            $consumeStmt = $this->db->prepare(
+                "UPDATE employee_invitation
+                 SET status = 'accepted',
+                     accepted_at = ?,
+                     updated_at = ?
+                 WHERE invitation_id = ?
+                   AND status = 'pending'
+                   AND token_hash = ?"
+            );
+            $consumeStmt->execute([$nowUtc, $nowUtc, $invitationId, $tokenHash]);
+            if ($consumeStmt->rowCount() !== 1) {
+                $this->db->rollBack();
+                return ['ok' => false, 'status' => 409, 'error' => $genericError];
+            }
+
+            // Establish password and email verification ONLY (email, username, unit, position, roles remain immutable)
+            $passwordHash = password_hash($password, PASSWORD_DEFAULT);
+            $updUa = $this->db->prepare(
+                "UPDATE user_account
+                 SET password_hash = ?,
+                     email_verified_at = ?,
+                     account_status = 'active'
+                 WHERE user_account_id = ?"
+            );
+            $updUa->execute([$passwordHash, $nowUtc, $userAccountId]);
+
+            $unitName = (string)$bu['business_unit_name'];
+            Audit::record(
+                $this->db,
+                'invitation.accepted',
+                "Employee {$emp['first_name']} {$emp['last_name']} ({$accountEmail}) accepted invitation #{$invitationId} in {$unitName}.",
+                $businessUnitId,
+                $userAccountId,
+                $employeeId,
+                'pending',
+                'accepted',
+                'employee_invitation',
+                $invitationId
+            );
+
+            $this->db->commit();
+
+            return [
+                'ok' => true,
+                'status' => 200,
+                'invitation_id' => $invitationId,
+                'user_account_id' => $userAccountId,
+                'employee_id' => $employeeId,
+            ];
+        } catch (Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            return [
+                'ok' => false,
+                'status' => 500,
+                'error' => 'Unable to activate your account at this time. Please try again later.',
+            ];
+        }
+    }
+
+    /**
+     * Determine whether a user account must be blocked from authentication/access due to
+     * unresolved, never-accepted employee invitation history.
+     *
+     * Source of truth: employee_invitation (NEVER user_account.email_verified_at IS NULL alone).
+     *  - No invitation history (legacy/direct account, Super Admin, customer-only) => false (allowed).
+     *  - At least one accepted invitation exists => false (allowed).
+     *  - Pending, expired, or revoked invitation history with zero accepted invitations => true (blocked).
+     */
+    public static function isAccountBlockedByUnacceptedInvitation(PDO $db, int $userAccountId): bool
+    {
+        if ($userAccountId <= 0) {
+            return false;
+        }
+
+        $stmt = $db->prepare(
+            "SELECT
+                EXISTS (
+                    SELECT 1
+                    FROM employee_invitation ei_any
+                    WHERE ei_any.user_account_id = ?
+                ) AS has_any_invitation,
+                EXISTS (
+                    SELECT 1
+                    FROM employee_invitation ei_acc
+                    WHERE ei_acc.user_account_id = ?
+                      AND ei_acc.status = 'accepted'
+                ) AS has_accepted_invitation"
+        );
+        $stmt->execute([$userAccountId, $userAccountId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$row) {
+            return false;
+        }
+
+        return !empty($row['has_any_invitation']) && empty($row['has_accepted_invitation']);
+    }
+
+    /**
      * Submit an invitation email strictly OUTSIDE any database transaction.
      *
      * Security & Concurrency Design:

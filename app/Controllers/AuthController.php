@@ -10,6 +10,7 @@ use App\Models\Audit;
 use App\Models\Cart;
 use App\Models\Units;
 use App\Services\CustomerRegistrationPendingService;
+use App\Services\EmployeeInvitationService;
 use App\Services\InterfaceSwitcherService;
 use PDO;
 use PDOException;
@@ -293,7 +294,12 @@ final class AuthController extends Controller
         $dummy ??= password_hash('not-a-real-password', PASSWORD_DEFAULT);
         $ok = password_verify($password, $acct['password_hash'] ?? $dummy);
 
-        if (!$acct || !$ok || $acct['account_status'] !== 'active') {
+        // Block accounts with unresolved, never-accepted employee invitation history (source of truth: employee_invitation).
+        $blockedByInvitation = $acct
+            && !(bool)$acct['is_super_admin']
+            && EmployeeInvitationService::isAccountBlockedByUnacceptedInvitation($this->db, (int)$acct['user_account_id']);
+
+        if (!$acct || !$ok || $acct['account_status'] !== 'active' || $blockedByInvitation) {
             Session::set('fails', (int)Session::get('fails', 0) + 1);
             if ((int)Session::get('fails') >= self::MAX_FAILS) {
                 Session::set('lock_until', time() + self::LOCK_SECONDS);

@@ -9,6 +9,7 @@ use App\Core\Session;
 use App\Models\Audit;
 use App\Models\InventoryAccessKey;
 use App\Models\Units;
+use App\Services\EmployeeInvitationService;
 
 final class StaffController extends Controller
 {
@@ -49,9 +50,14 @@ final class StaffController extends Controller
         $dummy ??= password_hash('not-a-real-password', PASSWORD_DEFAULT);
         $ok = password_verify($password, $a['password_hash'] ?? $dummy);
 
+        // Block accounts with unresolved, never-accepted employee invitation history (source of truth: employee_invitation).
+        $blockedByInvitation = $a
+            && !(bool)$a['is_super_admin']
+            && EmployeeInvitationService::isAccountBlockedByUnacceptedInvitation($this->db, (int)$a['user_account_id']);
+
         // Priority 3.3 & 3.4: If an employee or System Administrator signs in using their username,
         // the resulting session must be customer-only (never exposing employee/admin privileges).
-        if ($a && $ok && $a['account_status'] === 'active' && !$isEmail) {
+        if ($a && $ok && $a['account_status'] === 'active' && !$blockedByInvitation && !$isEmail) {
             $uid = (int)$a['user_account_id'];
             $cid = AuthController::ensureCustomerProfile(
                 $this->db,
@@ -73,7 +79,7 @@ final class StaffController extends Controller
             $this->redirect('/');
         }
 
-        if (!$a || !$ok || $a['account_status'] !== 'active' || ($a['employee_id'] === null && !(bool)$a['is_super_admin'])) {
+        if (!$a || !$ok || $a['account_status'] !== 'active' || $blockedByInvitation || ($a['employee_id'] === null && !(bool)$a['is_super_admin'])) {
             http_response_code(401);
             Session::flash('error', 'Incorrect email or password, or this account has no staff access.');
             $this->render('staff/login', ['title' => 'Staff sign in']);

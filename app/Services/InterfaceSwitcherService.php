@@ -55,6 +55,9 @@ final class InterfaceSwitcherService
 
         $accountActive = !empty($uRow) && (($uRow['account_status'] ?? '') === 'active');
         $isSuperAdmin = $accountActive && self::isSuperAdminAccount($db, $uid);
+        if ($accountActive && !$isSuperAdmin && EmployeeInvitationService::isAccountBlockedByUnacceptedInvitation($db, $uid)) {
+            $accountActive = false;
+        }
         $employeeActive = $accountActive
             && !empty($uRow['employee_id'])
             && (($uRow['employee_status'] ?? '') === 'active');

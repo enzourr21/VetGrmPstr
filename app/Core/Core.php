@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace App\Core;
 
 use App\Models\Units;
+use App\Services\EmployeeInvitationService;
 use PDO;
 
 final class Database
@@ -275,6 +276,10 @@ abstract class Controller
             return [(int)$uid, $eid, (int)$u['business_unit_id'], (string)$u['business_unit_name'], true];
         }
 
+        if (EmployeeInvitationService::isAccountBlockedByUnacceptedInvitation($this->db, (int)$uid)) {
+            $this->forbidden('Your employee account must complete invitation activation before accessing administrative workspaces.');
+        }
+
         $s = $this->db->prepare(
             "SELECT e.employee_id, bu.business_unit_id, bu.business_unit_name
              FROM user_account ua
@@ -340,6 +345,10 @@ abstract class Controller
         if ($this->isSuperAdmin()) {
             $u = $targetUnitId !== null ? (Units::find($targetUnitId) ?: $this->notFound()) : (Units::find(Units::petStoreId()) ?: Units::all()[0]);
             return [(int)$uid, (int)Session::get('employee_id', 0), (int)$u['business_unit_id'], (string)$u['business_unit_name'], true];
+        }
+
+        if (EmployeeInvitationService::isAccountBlockedByUnacceptedInvitation($this->db, (int)$uid)) {
+            $this->forbidden('Your employee account must complete invitation activation before accessing manager workspaces.');
         }
 
         $s = $this->db->prepare(
@@ -420,7 +429,8 @@ abstract class Controller
         $s = $this->db->prepare('SELECT 1 FROM user_account ua JOIN customer c ON c.user_account_id=ua.user_account_id
             WHERE ua.user_account_id=? AND c.customer_id=? AND ua.account_status="active" AND c.customer_status="active"');
         $s->execute([$uid, $cid]);
-        if (!$s->fetchColumn()) {
+        $blockedByInvitation = EmployeeInvitationService::isAccountBlockedByUnacceptedInvitation($this->db, (int)$uid);
+        if (!$s->fetchColumn() || $blockedByInvitation) {
             Session::destroy();
             Session::start();
             $this->redirect('/login');
@@ -449,6 +459,10 @@ abstract class Controller
         // Super Administrator has unrestricted access without requiring additional roles
         if ($this->isSuperAdmin()) {
             return (int)$eid;
+        }
+
+        if (EmployeeInvitationService::isAccountBlockedByUnacceptedInvitation($this->db, (int)$uid)) {
+            $this->forbidden('Your employee account must complete invitation activation before accessing staff workspaces.');
         }
 
         $s = $this->db->prepare('SELECT 1 FROM user_account ua
