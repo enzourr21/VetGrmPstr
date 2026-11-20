@@ -15,14 +15,21 @@ use Throwable;
  * Employee Invitation Lifecycle Service (System Administrator provisioning only).
  *
  * Responsibilities:
- *  - Create, resend (invalidating prior pending tokens), and revoke employee invitations.
+ *  - Create, resend (invalidating prior pending/expired tokens), and revoke employee invitations.
  *  - Enforce strict unit-scoped System Administrator authorization (never Super Administrator).
- *  - Validate cross-table ownership (employee <-> user_account <-> business_unit <-> email)
- *    under transactional row locks (SELECT ... FOR UPDATE).
+ *  - Validate cross-table ownership (user_account <-> employee <-> business_unit <-> email)
+ *    under a canonical row-lock order without locking the shared business_unit table.
  *  - Store only SHA-256 token hashes; never persist or log raw tokens.
  *  - Build acceptance URLs strictly from EnvConfig::appUrl(), never the request Host header.
- *  - Submit invitation emails strictly after DB commit and record email_submission_status
- *    independently of invitation lifecycle status.
+ *  - Validate persisted invitation state before SMTP, serialize concurrent submissions per
+ *    invitation via MySQL GET_LOCK(), and conditionally record email_submission_status
+ *    strictly after DB commit without holding InnoDB locks during SMTP.
+ *
+ * Canonical Row-Lock Order (shared with account status updates and future acceptance):
+ *   1. user_account (WHERE user_account_id = ? FOR UPDATE)
+ *   2. employee (WHERE employee_id = ? FOR UPDATE)
+ *   3. employee_invitation (WHERE employee_id = ? ... FOR UPDATE)
+ *   (business_unit is always read non-locking after locking user_account and employee)
  */
 final class EmployeeInvitationService
 {
@@ -45,13 +52,13 @@ final class EmployeeInvitationService
      */
     private $mailSender;
 
-    /** @var callable(): int */
+    /** @var (callable(): int)|null */
     private $clock;
 
     /**
      * @param PDO|null $db Database connection (defaults to Database::pdo()).
      * @param callable|null $mailSender Optional transport adapter (defaults to MailService::sendEmployeeInvitation).
-     * @param callable|null $clock Optional UTC Unix timestamp provider (defaults to time()).
+     * @param callable|null $clock Optional UTC Unix timestamp provider for deterministic tests (defaults to MySQL UTC_TIMESTAMP()).
      */
     public function __construct(?PDO $db = null, ?callable $mailSender = null, ?callable $clock = null)
     {
@@ -73,7 +80,7 @@ final class EmployeeInvitationService
                 $expiryHours
             );
         };
-        $this->clock = $clock ?? static fn(): int => time();
+        $this->clock = $clock;
     }
 
     /**
@@ -255,9 +262,12 @@ final class EmployeeInvitationService
     }
 
     /**
-     * Resend an employee invitation: atomically invalidates any prior pending invitation(s),
-     * inserts a new pending invitation with a fresh 48-hour expiry, commits, and submits email
-     * strictly after commit.
+     * Resend an employee invitation: requires prior invitation history (pending or latest expired),
+     * atomically invalidates any prior pending invitation(s), inserts a replacement with a fresh
+     * 48-hour expiry, commits, and submits email strictly after commit.
+     *
+     * Legacy accounts with zero invitation records and invitations whose latest state is
+     * revoked or accepted are strictly rejected.
      *
      * @return array{
      *   ok: bool,
@@ -316,8 +326,45 @@ final class EmployeeInvitationService
             $nowUtc = gmdate('Y-m-d H:i:s', $nowTs);
             $expiresAtUtc = gmdate('Y-m-d H:i:s', $nowTs + self::EXPIRY_SECONDS);
 
-            // Lock all existing pending invitations for this employee and invalidate them before issuing replacement
-            $pendingRows = $this->lockPendingInvitations($employeeId);
+            // Lock the full invitation history for this employee to determine resend eligibility
+            $historyRows = $this->lockAllInvitationsForEmployee($employeeId);
+            if (!$historyRows) {
+                $this->db->rollBack();
+                return [
+                    'ok' => false,
+                    'status' => 409,
+                    'error' => 'No invitation history exists for this employee. Resend requires an existing pending or expired invitation.',
+                ];
+            }
+
+            $pendingRows = [];
+            foreach ($historyRows as $row) {
+                if ((string)$row['status'] === 'accepted') {
+                    $this->db->rollBack();
+                    return [
+                        'ok' => false,
+                        'status' => 409,
+                        'error' => 'This employee already has an accepted invitation and cannot be resent one.',
+                    ];
+                }
+                if ((string)$row['status'] === 'pending') {
+                    $pendingRows[] = $row;
+                }
+            }
+
+            if (!$pendingRows) {
+                // History is ordered newest-first (invitation_id DESC)
+                $latestStatus = (string)$historyRows[0]['status'];
+                if ($latestStatus !== 'expired') {
+                    $this->db->rollBack();
+                    return [
+                        'ok' => false,
+                        'status' => 409,
+                        'error' => 'The latest invitation for this employee is ' . $latestStatus . ' and cannot be resent.',
+                    ];
+                }
+            }
+
             $revokedCount = 0;
             $expiredCount = 0;
 
@@ -372,7 +419,7 @@ final class EmployeeInvitationService
                 $businessUnitId,
                 $actorUserId,
                 $employeeId,
-                $revokedCount > 0 ? 'revoked:resent' : ($expiredCount > 0 ? 'expired' : null),
+                $revokedCount > 0 ? 'revoked:resent' : 'expired',
                 'pending',
                 'employee_invitation',
                 $invitationId
@@ -459,7 +506,7 @@ final class EmployeeInvitationService
                 return $authErr;
             }
 
-            // Ownership & unit check (do not require account to be active so pending invites on deactivated accounts can still be revoked)
+            // Ownership & unit check (allow revoking pending invites even if account was deactivated)
             $targetRes = $this->lockAndValidateTargetEmployee($employeeId, null, $businessUnitId, null, false);
             if (!$targetRes['ok']) {
                 $this->db->rollBack();
@@ -513,8 +560,17 @@ final class EmployeeInvitationService
     }
 
     /**
-     * Submit an invitation email strictly OUTSIDE any database transaction and record the
-     * SMTP submission outcome independently of the invitation's lifecycle status.
+     * Submit an invitation email strictly OUTSIDE any database transaction.
+     *
+     * Security & Concurrency Design:
+     *  - Serializes concurrent submissions for the same invitation_id using MySQL GET_LOCK()
+     *    (non-blocking timeout 0, released in finally) without holding InnoDB row locks across SMTP.
+     *  - Re-validates the persisted invitation, token_hash (hash_equals), expiry, recipient email,
+     *    cross-table ownership, and target eligibility immediately before invoking SMTP.
+     *  - Retrieves recipient name, business unit name, and position authoritatively from the
+     *    verified DB record rather than trusting caller-supplied display strings.
+     *  - Records email outcome conditionally (only if the invitation is still pending with the
+     *    same token_hash) so delayed SMTP results cannot overwrite terminal invitation states.
      *
      * @return array{
      *   submitted: bool,
@@ -528,130 +584,274 @@ final class EmployeeInvitationService
         int $invitationId,
         string $rawToken,
         string $recipientEmail,
-        string $recipientName,
-        string $businessUnitName,
-        string $position
+        string $recipientName = '',
+        string $businessUnitName = '',
+        string $position = ''
     ): array {
         if ($this->db->inTransaction()) {
             throw new RuntimeException('SMTP email submission must never run inside an active database transaction.', 500);
         }
 
-        $driver = 'unknown';
-        $submitted = false;
-        $error = null;
-        $statusCode = 502;
-
-        try {
-            $acceptUrl = self::buildAcceptanceUrl($rawToken);
-            $mailRes = ($this->mailSender)(
-                $recipientEmail,
-                $recipientName,
-                $businessUnitName,
-                $position,
-                $acceptUrl,
-                self::EXPIRY_HOURS
-            );
-
-            $driver = is_string($mailRes['driver'] ?? null) ? $mailRes['driver'] : 'unknown';
-            $statusCode = is_int($mailRes['status_code'] ?? null) ? $mailRes['status_code'] : 502;
-            $reportedSubmitted = ($mailRes['submitted'] ?? false) === true;
-
-            // Defense-in-depth: null mail driver must never be treated as successful SMTP submission
-            if ($reportedSubmitted && $driver !== 'null') {
-                $submitted = true;
-                $error = null;
-                $statusCode = 200;
-            } else {
-                $submitted = false;
-                $rawErr = is_string($mailRes['error'] ?? null) && trim($mailRes['error']) !== ''
-                    ? $mailRes['error']
-                    : ($driver === 'null'
-                        ? 'Email submission is disabled (MAIL_DRIVER is set to "null").'
-                        : 'Unable to submit employee invitation email via SMTP at this time.');
-                $error = self::sanitizeEmailError($rawErr, $rawToken);
-                if ($driver === 'null') {
-                    $statusCode = 503;
-                }
-            }
-        } catch (RuntimeException $e) {
-            $submitted = false;
-            $code = $e->getCode();
-            $statusCode = in_array($code, [422, 502, 503], true) ? $code : 502;
-            $error = self::sanitizeEmailError($e->getMessage(), $rawToken);
-        } catch (Throwable $e) {
-            $submitted = false;
-            $statusCode = 502;
-            $error = 'Unable to submit employee invitation email via SMTP at this time.';
+        if ($invitationId <= 0 || !self::isValidRawTokenFormat($rawToken)) {
+            return [
+                'submitted' => false,
+                'driver' => 'unknown',
+                'email_submission_status' => 'failed',
+                'error' => 'Invalid invitation identifier or token format.',
+                'status_code' => 422,
+            ];
         }
 
-        $recorded = $this->recordEmailSubmissionOutcome($invitationId, $submitted, $error);
+        $lockName = 'pc_inv_mail_' . $invitationId;
+        $lockAcquired = false;
 
-        return [
-            'submitted' => $submitted,
-            'driver' => $driver,
-            'email_submission_status' => $recorded['email_submission_status'],
-            'error' => $error,
-            'status_code' => $statusCode,
-        ];
+        try {
+            $lockStmt = $this->db->prepare('SELECT GET_LOCK(?, 0)');
+            $lockStmt->execute([$lockName]);
+            $lockVal = $lockStmt->fetchColumn();
+            if ($lockVal === false || $lockVal === null) {
+                return [
+                    'submitted' => false,
+                    'driver' => 'unknown',
+                    'email_submission_status' => 'pending',
+                    'error' => 'Could not acquire email submission lock.',
+                    'status_code' => 503,
+                ];
+            }
+            if ((int)$lockVal !== 1) {
+                return [
+                    'submitted' => false,
+                    'driver' => 'unknown',
+                    'email_submission_status' => 'pending',
+                    'error' => 'Invitation email submission is already in progress.',
+                    'status_code' => 409,
+                ];
+            }
+            $lockAcquired = true;
+
+            $verified = $this->validateInvitationForEmailSubmission($invitationId, $rawToken, $recipientEmail);
+            if (!$verified['ok']) {
+                return [
+                    'submitted' => false,
+                    'driver' => 'unknown',
+                    'email_submission_status' => (string)($verified['email_submission_status'] ?? 'failed'),
+                    'error' => (string)$verified['error'],
+                    'status_code' => (int)$verified['status'],
+                ];
+            }
+
+            $row = $verified['row'];
+            $expectedTokenHash = (string)$row['token_hash'];
+            $verifiedEmail = strtolower(trim((string)$row['invited_email']));
+            $verifiedName = trim((string)$row['first_name'] . ' ' . (string)$row['last_name']);
+            $verifiedUnitName = (string)$row['business_unit_name'];
+            $verifiedPosition = (string)$row['position'];
+
+            $driver = 'unknown';
+            $submitted = false;
+            $error = null;
+            $statusCode = 502;
+
+            try {
+                $acceptUrl = self::buildAcceptanceUrl($rawToken);
+                $mailRes = ($this->mailSender)(
+                    $verifiedEmail,
+                    $verifiedName,
+                    $verifiedUnitName,
+                    $verifiedPosition,
+                    $acceptUrl,
+                    self::EXPIRY_HOURS
+                );
+
+                $driver = is_string($mailRes['driver'] ?? null) ? $mailRes['driver'] : 'unknown';
+                $statusCode = is_int($mailRes['status_code'] ?? null) ? $mailRes['status_code'] : 502;
+                $reportedSubmitted = ($mailRes['submitted'] ?? false) === true;
+
+                // Defense-in-depth: null mail driver must never be treated as successful SMTP submission
+                if ($reportedSubmitted && $driver !== 'null') {
+                    $submitted = true;
+                    $error = null;
+                    $statusCode = 200;
+                } else {
+                    $submitted = false;
+                    $rawErr = is_string($mailRes['error'] ?? null) && trim($mailRes['error']) !== ''
+                        ? $mailRes['error']
+                        : ($driver === 'null'
+                            ? 'Email submission is disabled (MAIL_DRIVER is set to "null").'
+                            : 'Unable to submit employee invitation email via SMTP at this time.');
+                    $error = self::sanitizeEmailError($rawErr, $rawToken);
+                    if ($driver === 'null') {
+                        $statusCode = 503;
+                    }
+                }
+            } catch (RuntimeException $e) {
+                $submitted = false;
+                $code = $e->getCode();
+                $statusCode = in_array($code, [422, 502, 503], true) ? $code : 502;
+                $error = self::sanitizeEmailError($e->getMessage(), $rawToken);
+            } catch (Throwable $e) {
+                $submitted = false;
+                $statusCode = 502;
+                $error = 'Unable to submit employee invitation email via SMTP at this time.';
+            }
+
+            $recorded = $this->recordEmailSubmissionOutcome($invitationId, $submitted, $error, $expectedTokenHash);
+            if (!$recorded['ok']) {
+                return [
+                    'submitted' => false,
+                    'driver' => $driver,
+                    'email_submission_status' => $recorded['email_submission_status'],
+                    'error' => $recorded['error'] ?? 'Invitation state changed while email submission was in progress.',
+                    'status_code' => 409,
+                ];
+            }
+
+            return [
+                'submitted' => $submitted,
+                'driver' => $driver,
+                'email_submission_status' => $recorded['email_submission_status'],
+                'error' => $error,
+                'status_code' => $statusCode,
+            ];
+        } finally {
+            if ($lockAcquired) {
+                try {
+                    $relStmt = $this->db->prepare('SELECT RELEASE_LOCK(?)');
+                    $relStmt->execute([$lockName]);
+                } catch (Throwable $ignore) {
+                }
+            }
+        }
     }
 
     /**
-     * Persist email-submission status independently of invitation lifecycle status.
-     * Never modifies employee_invitation.status, expires_at, accepted_at, or revoked_at.
+     * Persist email-submission status independently of invitation lifecycle status,
+     * guarding that the invitation remains pending (and optionally matches $expectedTokenHash)
+     * so delayed SMTP outcomes never overwrite terminal states.
+     *
+     * Sets email_submitted_at and clears email_failed_at on success;
+     * sets email_failed_at and clears email_submitted_at on failure.
      *
      * @return array{ok: bool, email_submission_status: string, recorded_at: string, error: ?string}
      */
     public function recordEmailSubmissionOutcome(
         int $invitationId,
         bool $submitted,
-        ?string $errorMessage = null
+        ?string $errorMessage = null,
+        ?string $expectedTokenHash = null
     ): array {
         if ($invitationId <= 0) {
             throw new InvalidArgumentException('Invalid invitation_id.');
         }
 
         $nowUtc = gmdate('Y-m-d H:i:s', $this->nowUnix());
+        $tokenClause = $expectedTokenHash !== null ? ' AND token_hash = ?' : '';
 
         if ($submitted) {
             $stmt = $this->db->prepare(
                 "UPDATE employee_invitation
                  SET email_submission_status = 'submitted',
                      email_submitted_at = ?,
+                     email_failed_at = NULL,
                      email_error = NULL,
                      updated_at = ?
-                 WHERE invitation_id = ?"
+                 WHERE invitation_id = ?
+                   AND status = 'pending'{$tokenClause}"
             );
-            $stmt->execute([$nowUtc, $nowUtc, $invitationId]);
+            $params = [$nowUtc, $nowUtc, $invitationId];
+            if ($expectedTokenHash !== null) {
+                $params[] = $expectedTokenHash;
+            }
+            $stmt->execute($params);
 
+            $targetStatus = 'submitted';
+            $cleanError = null;
+        } else {
+            $cleanError = self::sanitizeEmailError(
+                $errorMessage !== null && trim($errorMessage) !== ''
+                    ? $errorMessage
+                    : 'Unable to submit employee invitation email via SMTP at this time.'
+            );
+
+            $stmt = $this->db->prepare(
+                "UPDATE employee_invitation
+                 SET email_submission_status = 'failed',
+                     email_failed_at = ?,
+                     email_submitted_at = NULL,
+                     email_error = ?,
+                     updated_at = ?
+                 WHERE invitation_id = ?
+                   AND status = 'pending'{$tokenClause}"
+            );
+            $params = [$nowUtc, $cleanError, $nowUtc, $invitationId];
+            if ($expectedTokenHash !== null) {
+                $params[] = $expectedTokenHash;
+            }
+            $stmt->execute($params);
+
+            $targetStatus = 'failed';
+        }
+
+        if ($stmt->rowCount() > 0) {
             return [
                 'ok' => true,
-                'email_submission_status' => 'submitted',
+                'email_submission_status' => $targetStatus,
                 'recorded_at' => $nowUtc,
-                'error' => null,
+                'error' => $cleanError,
             ];
         }
 
-        $cleanError = self::sanitizeEmailError(
-            $errorMessage !== null && trim($errorMessage) !== ''
-                ? $errorMessage
-                : 'Unable to submit employee invitation email via SMTP at this time.'
+        // Distinguish same-second no-op UPDATE from missing/terminal/mismatched invitation
+        $chk = $this->db->prepare(
+            "SELECT status, token_hash, email_submission_status
+             FROM employee_invitation
+             WHERE invitation_id = ?
+             LIMIT 1"
         );
+        $chk->execute([$invitationId]);
+        $row = $chk->fetch(PDO::FETCH_ASSOC);
 
-        $stmt = $this->db->prepare(
-            "UPDATE employee_invitation
-             SET email_submission_status = 'failed',
-                 email_failed_at = ?,
-                 email_error = ?,
-                 updated_at = ?
-             WHERE invitation_id = ?"
-        );
-        $stmt->execute([$nowUtc, $cleanError, $nowUtc, $invitationId]);
+        if (!$row) {
+            return [
+                'ok' => false,
+                'email_submission_status' => 'unknown',
+                'recorded_at' => $nowUtc,
+                'error' => 'Invitation record was not found.',
+            ];
+        }
+
+        if ($expectedTokenHash !== null && !hash_equals((string)$row['token_hash'], $expectedTokenHash)) {
+            return [
+                'ok' => false,
+                'email_submission_status' => (string)$row['email_submission_status'],
+                'recorded_at' => $nowUtc,
+                'error' => 'Invitation token no longer matches; email submission outcome was not recorded.',
+            ];
+        }
+
+        if ((string)$row['status'] !== 'pending') {
+            return [
+                'ok' => false,
+                'email_submission_status' => (string)$row['email_submission_status'],
+                'recorded_at' => $nowUtc,
+                'error' => 'Invitation is no longer pending (' . (string)$row['status'] . '); email submission outcome was not recorded.',
+            ];
+        }
+
+        if ((string)$row['email_submission_status'] === $targetStatus) {
+            return [
+                'ok' => true,
+                'email_submission_status' => $targetStatus,
+                'recorded_at' => $nowUtc,
+                'error' => $cleanError,
+            ];
+        }
 
         return [
-            'ok' => true,
-            'email_submission_status' => 'failed',
+            'ok' => false,
+            'email_submission_status' => (string)$row['email_submission_status'],
             'recorded_at' => $nowUtc,
-            'error' => $cleanError,
+            'error' => 'Invitation email submission outcome could not be recorded.',
         ];
     }
 
@@ -777,6 +977,131 @@ final class EmployeeInvitationService
     }
 
     /**
+     * Non-locking pre-send validation executed immediately before SMTP submission.
+     *
+     * @return array{ok:true,row:array<string,mixed>}|array{ok:false,status:int,error:string,email_submission_status?:string}
+     */
+    private function validateInvitationForEmailSubmission(
+        int $invitationId,
+        string $rawToken,
+        string $recipientEmail
+    ): array {
+        $stmt = $this->db->prepare(
+            "SELECT ei.invitation_id, ei.user_account_id, ei.employee_id, ei.business_unit_id,
+                    ei.invited_email, ei.token_hash, ei.status, ei.expires_at,
+                    ei.accepted_at, ei.revoked_at, ei.email_submission_status,
+                    e.user_account_id AS emp_user_account_id, e.business_unit_id AS emp_business_unit_id,
+                    e.first_name, e.last_name, e.position, e.employee_status,
+                    ua.email AS account_email, ua.account_status, ua.is_super_admin, ua.email_verified_at,
+                    bu.business_unit_name, bu.business_unit_status,
+                    EXISTS (
+                        SELECT 1
+                        FROM account_role ar_sa
+                        JOIN role r_sa ON r_sa.role_id = ar_sa.role_id
+                        WHERE ar_sa.user_account_id = ua.user_account_id
+                          AND r_sa.role_name = 'SUPER_ADMINISTRATOR'
+                    ) AS has_super_role
+             FROM employee_invitation ei
+             JOIN employee e ON e.employee_id = ei.employee_id
+             JOIN user_account ua ON ua.user_account_id = ei.user_account_id
+             JOIN business_unit bu ON bu.business_unit_id = ei.business_unit_id
+             WHERE ei.invitation_id = ?
+             LIMIT 1"
+        );
+        $stmt->execute([$invitationId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$row) {
+            return [
+                'ok' => false,
+                'status' => 404,
+                'email_submission_status' => 'failed',
+                'error' => 'Employee invitation record was not found.',
+            ];
+        }
+
+        $currentEmailStatus = (string)$row['email_submission_status'];
+
+        $computedHash = self::hashToken($rawToken);
+        if (!hash_equals((string)$row['token_hash'], $computedHash)) {
+            return [
+                'ok' => false,
+                'status' => 422,
+                'email_submission_status' => $currentEmailStatus,
+                'error' => 'Invitation token does not match the persisted invitation record.',
+            ];
+        }
+
+        if ((string)$row['status'] !== 'pending' || $row['accepted_at'] !== null || $row['revoked_at'] !== null) {
+            return [
+                'ok' => false,
+                'status' => 409,
+                'email_submission_status' => $currentEmailStatus,
+                'error' => 'Invitation is not pending (' . (string)$row['status'] . ') and cannot be emailed.',
+            ];
+        }
+
+        $nowUtc = gmdate('Y-m-d H:i:s', $this->nowUnix());
+        if ((string)$row['expires_at'] <= $nowUtc) {
+            return [
+                'ok' => false,
+                'status' => 409,
+                'email_submission_status' => $currentEmailStatus,
+                'error' => 'Invitation has expired and cannot be emailed.',
+            ];
+        }
+
+        if (
+            (int)$row['emp_user_account_id'] !== (int)$row['user_account_id'] ||
+            (int)$row['emp_business_unit_id'] !== (int)$row['business_unit_id']
+        ) {
+            return [
+                'ok' => false,
+                'status' => 422,
+                'email_submission_status' => $currentEmailStatus,
+                'error' => 'Invitation ownership does not match the employee account or business unit.',
+            ];
+        }
+
+        $normalizedRecipient = strtolower(trim($recipientEmail));
+        $invitedEmail = strtolower(trim((string)$row['invited_email']));
+        $accountEmail = strtolower(trim((string)$row['account_email']));
+        if ($normalizedRecipient !== $invitedEmail || $invitedEmail !== $accountEmail) {
+            return [
+                'ok' => false,
+                'status' => 422,
+                'email_submission_status' => $currentEmailStatus,
+                'error' => 'Recipient email does not match the invitation and employee account email.',
+            ];
+        }
+
+        if ((bool)$row['is_super_admin'] || (bool)$row['has_super_role']) {
+            return [
+                'ok' => false,
+                'status' => 403,
+                'email_submission_status' => $currentEmailStatus,
+                'error' => 'Invitations cannot be sent for a Super Administrator account.',
+            ];
+        }
+
+        if (
+            (string)$row['account_status'] !== 'active' ||
+            (string)$row['employee_status'] !== 'active' ||
+            (string)$row['business_unit_status'] !== 'active' ||
+            $row['email_verified_at'] !== null
+        ) {
+            return [
+                'ok' => false,
+                'status' => 409,
+                'email_submission_status' => $currentEmailStatus,
+                'error' => 'Employee account or business unit is no longer eligible for invitation email submission.',
+            ];
+        }
+
+        return ['ok' => true, 'row' => $row];
+    }
+
+    /**
      * Verify that $actorUserId is an active System Administrator scoped to $businessUnitId
      * and NOT a Super Administrator (Super Administrators do not have an invitation path).
      *
@@ -825,8 +1150,9 @@ final class EmployeeInvitationService
     }
 
     /**
-     * Lock the target employee + user_account row (FOR UPDATE) and enforce cross-table ownership,
-     * unit scoping, email consistency, and account eligibility invariants.
+     * Lock user_account and employee in canonical parent-before-child order without locking
+     * the shared business_unit table, and enforce cross-table ownership, Super Admin exclusion,
+     * unit scoping, email consistency, and eligibility invariants.
      *
      * @return array{ok:true,target:array<string,mixed>}|array{ok:false,status:int,error:string}
      */
@@ -837,21 +1163,16 @@ final class EmployeeInvitationService
         ?string $expectedNormalizedEmail,
         bool $requirePendingActiveAccount
     ): array {
-        $stmt = $this->db->prepare(
-            "SELECT e.employee_id, e.user_account_id, e.business_unit_id, e.first_name, e.last_name,
-                    e.position, e.employee_status,
-                    ua.email, ua.account_status, ua.is_super_admin, ua.email_verified_at,
-                    bu.business_unit_name, bu.business_unit_status
-             FROM employee e
-             JOIN user_account ua ON ua.user_account_id = e.user_account_id
-             JOIN business_unit bu ON bu.business_unit_id = e.business_unit_id
-             WHERE e.employee_id = ?
-             FOR UPDATE"
+        // Non-locking discovery of employee's user_account_id to maintain user_account -> employee lock order
+        $lookup = $this->db->prepare(
+            "SELECT user_account_id
+             FROM employee
+             WHERE employee_id = ?
+             LIMIT 1"
         );
-        $stmt->execute([$employeeId]);
-        $target = $stmt->fetch(PDO::FETCH_ASSOC);
-
-        if (!$target) {
+        $lookup->execute([$employeeId]);
+        $discoveredUid = $lookup->fetchColumn();
+        if ($discoveredUid === false) {
             return [
                 'ok' => false,
                 'status' => 404,
@@ -859,31 +1180,8 @@ final class EmployeeInvitationService
             ];
         }
 
-        if ((bool)$target['is_super_admin']) {
-            return [
-                'ok' => false,
-                'status' => 403,
-                'error' => 'Invitations cannot be managed for a Super Administrator account.',
-            ];
-        }
-
-        if ((int)$target['business_unit_id'] !== $expectedBusinessUnitId) {
-            return [
-                'ok' => false,
-                'status' => 403,
-                'error' => 'Target employee does not belong to the specified business unit.',
-            ];
-        }
-
-        if ((string)$target['business_unit_status'] !== 'active') {
-            return [
-                'ok' => false,
-                'status' => 422,
-                'error' => 'Target employee business unit is not active.',
-            ];
-        }
-
-        if ($expectedUserAccountId !== null && (int)$target['user_account_id'] !== $expectedUserAccountId) {
+        $lockUid = $expectedUserAccountId ?? (int)$discoveredUid;
+        if ((int)$discoveredUid !== $lockUid) {
             return [
                 'ok' => false,
                 'status' => 422,
@@ -891,7 +1189,93 @@ final class EmployeeInvitationService
             ];
         }
 
-        $accountEmail = strtolower(trim((string)$target['email']));
+        // 1. Lock user_account first (matches SysAdminController::updateEmployeeStatus & SuperAdminController::updateAccountStatus)
+        $uaStmt = $this->db->prepare(
+            "SELECT ua.user_account_id, ua.email, ua.account_status, ua.is_super_admin, ua.email_verified_at,
+                    EXISTS (
+                        SELECT 1
+                        FROM account_role ar_sa
+                        JOIN role r_sa ON r_sa.role_id = ar_sa.role_id
+                        WHERE ar_sa.user_account_id = ua.user_account_id
+                          AND r_sa.role_name = 'SUPER_ADMINISTRATOR'
+                    ) AS has_super_role
+             FROM user_account ua
+             WHERE ua.user_account_id = ?
+             FOR UPDATE"
+        );
+        $uaStmt->execute([$lockUid]);
+        $ua = $uaStmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$ua) {
+            return [
+                'ok' => false,
+                'status' => 404,
+                'error' => 'Target user account was not found.',
+            ];
+        }
+
+        // 2. Lock employee second
+        $empStmt = $this->db->prepare(
+            "SELECT e.employee_id, e.user_account_id, e.business_unit_id, e.first_name, e.last_name,
+                    e.position, e.employee_status
+             FROM employee e
+             WHERE e.employee_id = ?
+             FOR UPDATE"
+        );
+        $empStmt->execute([$employeeId]);
+        $emp = $empStmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$emp) {
+            return [
+                'ok' => false,
+                'status' => 404,
+                'error' => 'Target employee record was not found.',
+            ];
+        }
+
+        if ((int)$emp['user_account_id'] !== (int)$ua['user_account_id']) {
+            return [
+                'ok' => false,
+                'status' => 422,
+                'error' => 'Target employee does not belong to the specified user account.',
+            ];
+        }
+
+        if ((bool)$ua['is_super_admin'] || (bool)$ua['has_super_role']) {
+            return [
+                'ok' => false,
+                'status' => 403,
+                'error' => 'Invitations cannot be managed for a Super Administrator account.',
+            ];
+        }
+
+        if ((int)$emp['business_unit_id'] !== $expectedBusinessUnitId) {
+            return [
+                'ok' => false,
+                'status' => 403,
+                'error' => 'Target employee does not belong to the specified business unit.',
+            ];
+        }
+
+        // 3. Read business_unit non-locking (never take X-lock on shared 3-row business_unit table)
+        $buStmt = $this->db->prepare(
+            "SELECT business_unit_id, business_unit_name, business_unit_status
+             FROM business_unit
+             WHERE business_unit_id = ?
+             LIMIT 1"
+        );
+        $buStmt->execute([(int)$emp['business_unit_id']]);
+        $bu = $buStmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$bu || (string)$bu['business_unit_status'] !== 'active') {
+            return [
+                'ok' => false,
+                'status' => 422,
+                'error' => 'Target employee business unit is not active.',
+            ];
+        }
+
+        $accountEmail = strtolower(trim((string)$ua['email']));
         if ($expectedNormalizedEmail !== null && $accountEmail !== $expectedNormalizedEmail) {
             return [
                 'ok' => false,
@@ -901,7 +1285,7 @@ final class EmployeeInvitationService
         }
 
         if ($requirePendingActiveAccount) {
-            if ((string)$target['account_status'] !== 'active' || (string)$target['employee_status'] !== 'active') {
+            if ((string)$ua['account_status'] !== 'active' || (string)$emp['employee_status'] !== 'active') {
                 return [
                     'ok' => false,
                     'status' => 409,
@@ -909,7 +1293,7 @@ final class EmployeeInvitationService
                 ];
             }
 
-            if ($target['email_verified_at'] !== null) {
+            if ($ua['email_verified_at'] !== null) {
                 return [
                     'ok' => false,
                     'status' => 409,
@@ -918,7 +1302,24 @@ final class EmployeeInvitationService
             }
         }
 
-        return ['ok' => true, 'target' => $target];
+        return [
+            'ok' => true,
+            'target' => [
+                'employee_id' => $emp['employee_id'],
+                'user_account_id' => $emp['user_account_id'],
+                'business_unit_id' => $emp['business_unit_id'],
+                'first_name' => $emp['first_name'],
+                'last_name' => $emp['last_name'],
+                'position' => $emp['position'],
+                'employee_status' => $emp['employee_status'],
+                'email' => $ua['email'],
+                'account_status' => $ua['account_status'],
+                'is_super_admin' => $ua['is_super_admin'],
+                'email_verified_at' => $ua['email_verified_at'],
+                'business_unit_name' => $bu['business_unit_name'],
+                'business_unit_status' => $bu['business_unit_status'],
+            ],
+        ];
     }
 
     /**
@@ -933,6 +1334,24 @@ final class EmployeeInvitationService
              FROM employee_invitation
              WHERE employee_id = ? AND status = 'pending'
              ORDER BY invitation_id ASC
+             FOR UPDATE"
+        );
+        $stmt->execute([$employeeId]);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    /**
+     * Lock the entire invitation history for an employee (newest-first) inside the active transaction.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function lockAllInvitationsForEmployee(int $employeeId): array
+    {
+        $stmt = $this->db->prepare(
+            "SELECT invitation_id, status, expires_at
+             FROM employee_invitation
+             WHERE employee_id = ?
+             ORDER BY invitation_id DESC
              FOR UPDATE"
         );
         $stmt->execute([$employeeId]);
@@ -1043,9 +1462,23 @@ final class EmployeeInvitationService
         );
     }
 
+    /**
+     * Resolve authoritative UTC Unix timestamp.
+     * Uses MySQL UTC_TIMESTAMP() in production (matching config/database.php time_zone='+00:00')
+     * or the injected clock callable in deterministic unit tests.
+     */
     private function nowUnix(): int
     {
-        return (int)($this->clock)();
+        if ($this->clock !== null) {
+            return (int)($this->clock)();
+        }
+
+        $stmt = $this->db->query('SELECT UNIX_TIMESTAMP(UTC_TIMESTAMP())');
+        $ts = $stmt !== false ? $stmt->fetchColumn() : false;
+        if ($ts === false || $ts === null) {
+            return time();
+        }
+        return (int)$ts;
     }
 
     private static function sanitizeReason(string $reason): string
