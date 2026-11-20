@@ -1041,6 +1041,15 @@ final class EmployeeInvitationService
             ];
         }
 
+        if ($currentEmailStatus === 'submitted') {
+            return [
+                'ok' => false,
+                'status' => 409,
+                'email_submission_status' => $currentEmailStatus,
+                'error' => 'Invitation email has already been submitted. Use resendInvitation() to issue a replacement invitation.',
+            ];
+        }
+
         $nowUtc = gmdate('Y-m-d H:i:s', $this->nowUnix());
         if ((string)$row['expires_at'] <= $nowUtc) {
             return [

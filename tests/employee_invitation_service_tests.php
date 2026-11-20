@@ -1106,6 +1106,76 @@ try {
         assertTrue(count($pdo->invitations) === 0 && count($pdo->auditLogs) === 0, 'No partial rows may persist');
         assertTrue(!$mailCalled, 'Mail sender must not be invoked after rollback');
     });
+
+    test('Previously submitted invitation cannot be submitted again and preserves submitted status and timestamp', function () use ($tempEnv) {
+        loadTempEnv($tempEnv, "APP_URL=https://portal.pawcarino.test\n");
+        $pdo = makeFixturePdo();
+        $now = strtotime('2026-11-20 12:00:00 UTC');
+        $mailCalls = 0;
+        $svc = new EmployeeInvitationService(
+            $pdo,
+            function () use (&$mailCalls): array {
+                $mailCalls++;
+                return ['submitted' => true, 'driver' => 'smtp', 'error' => null, 'status_code' => 200];
+            },
+            function () use (&$now): int { return $now; }
+        );
+
+        $pdo->beginTransaction();
+        $txRes = $svc->createInvitationInTransaction(2, 10, 10, 1, 'carla.mendoza@pawcarino.test');
+        $pdo->commit();
+        $invId = (int)$txRes['invitation_id'];
+        $rawTok = (string)$txRes['raw_token'];
+
+        $first = $svc->submitInvitationEmail($invId, $rawTok, 'carla.mendoza@pawcarino.test');
+        assertTrue($first['submitted'] === true && $first['status_code'] === 200 && $mailCalls === 1, 'Initial submission should succeed');
+        $submittedAt = $pdo->invitations[$invId]['email_submitted_at'];
+        $updatedAt = $pdo->invitations[$invId]['updated_at'];
+
+        $now += 120;
+        $second = $svc->submitInvitationEmail($invId, $rawTok, 'carla.mendoza@pawcarino.test');
+        assertTrue($second['submitted'] === false && $second['status_code'] === 409, 'Duplicate submission must be rejected with 409');
+        assertTrue($second['email_submission_status'] === 'submitted', 'Returned email_submission_status must remain submitted');
+        assertTrue($mailCalls === 1, 'Mail sender must NOT be invoked on duplicate submission');
+        assertTrue($pdo->invitations[$invId]['status'] === 'pending', 'Lifecycle status must remain pending');
+        assertTrue($pdo->invitations[$invId]['email_submission_status'] === 'submitted', 'Stored email_submission_status must remain submitted');
+        assertTrue($pdo->invitations[$invId]['email_submitted_at'] === $submittedAt, 'email_submitted_at must remain unchanged');
+        assertTrue($pdo->invitations[$invId]['updated_at'] === $updatedAt, 'updated_at must remain unchanged');
+    });
+
+    test('Failed email submission can still be retried using the same valid invitation', function () use ($tempEnv) {
+        loadTempEnv($tempEnv, "APP_URL=https://portal.pawcarino.test\n");
+        $pdo = makeFixturePdo();
+        $now = strtotime('2026-11-20 12:00:00 UTC');
+        $attempt = 0;
+        $svc = new EmployeeInvitationService(
+            $pdo,
+            function () use (&$attempt): array {
+                $attempt++;
+                if ($attempt === 1) {
+                    return ['submitted' => false, 'driver' => 'smtp', 'error' => 'Temporary SMTP failure', 'status_code' => 502];
+                }
+                return ['submitted' => true, 'driver' => 'smtp', 'error' => null, 'status_code' => 200];
+            },
+            function () use (&$now): int { return $now; }
+        );
+
+        $pdo->beginTransaction();
+        $txRes = $svc->createInvitationInTransaction(2, 10, 10, 1, 'carla.mendoza@pawcarino.test');
+        $pdo->commit();
+        $invId = (int)$txRes['invitation_id'];
+        $rawTok = (string)$txRes['raw_token'];
+
+        $first = $svc->submitInvitationEmail($invId, $rawTok, 'carla.mendoza@pawcarino.test');
+        assertTrue($first['submitted'] === false && $first['email_submission_status'] === 'failed' && $attempt === 1, 'First attempt should fail');
+
+        $now += 60;
+        $retry = $svc->submitInvitationEmail($invId, $rawTok, 'carla.mendoza@pawcarino.test');
+        assertTrue($retry['submitted'] === true && $retry['status_code'] === 200 && $attempt === 2, 'Retry after failed submission should succeed');
+        assertTrue($pdo->invitations[$invId]['email_submission_status'] === 'submitted', 'Retry should transition status to submitted');
+        assertTrue($pdo->invitations[$invId]['email_submitted_at'] === '2026-11-20 12:01:00', 'email_submitted_at should be recorded');
+        assertTrue($pdo->invitations[$invId]['email_failed_at'] === null && $pdo->invitations[$invId]['email_error'] === null, 'email_failed_at and email_error should be cleared');
+    });
 } finally {
     EnvConfig::setEnvPathForTesting(null);
     @unlink($tempEnv);
