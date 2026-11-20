@@ -50,7 +50,16 @@ if (!empty($isPetStore)) {
               <strong><?= e($emp['first_name'] . ' ' . $emp['last_name']) ?></strong>
               <span class="caption">ID #<?= (int)$emp['employee_id'] ?></span>
             </div>
-            <span class="status status-<?= e($emp['account_status']) ?>"><?= e($emp['account_status']) ?></span>
+            <?php
+              $isPendingInvite = !empty($emp['has_pending_invitation'])
+                  && ($emp['account_status'] ?? '') === 'active'
+                  && ($emp['employee_status'] ?? '') === 'active';
+            ?>
+            <?php if ($isPendingInvite): ?>
+              <span class="status warn">Pending Invitation</span>
+            <?php else: ?>
+              <span class="status status-<?= e($emp['account_status']) ?>"><?= e($emp['account_status']) ?></span>
+            <?php endif; ?>
           </header>
           <dl class="roster-meta">
             <div><dt>Email</dt><dd><?= e($emp['email']) ?></dd></div>

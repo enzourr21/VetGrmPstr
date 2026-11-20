@@ -1472,6 +1472,140 @@ final class EmployeeInvitationService
     }
 
     /**
+     * List employees scoped to $unitId (excluding Super Administrators) annotated with whether
+     * each employee currently has a genuinely pending, unexpired invitation in employee_invitation.
+     *
+     * Pending invitees remain visible in the returned list so administrators can manage them.
+     * Legacy accounts with email_verified_at IS NULL and no pending invitation record are NOT
+     * flagged as pending.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public static function listUnitEmployeesWithInvitationState(
+        PDO $db,
+        int $unitId,
+        ?string $nowUtc = null
+    ): array {
+        $expiryExpr = $nowUtc !== null ? '?' : 'UTC_TIMESTAMP()';
+        $sql = "SELECT e.employee_id, e.first_name, e.last_name, e.position, e.phone, e.employee_status, e.created_at,
+                       e.business_unit_id AS home_unit_id,
+                       ua.user_account_id, ua.email, ua.username, ua.account_status, ua.is_super_admin,
+                       (SELECT GROUP_CONCAT(DISTINCT r.role_name ORDER BY r.role_name SEPARATOR ', ')
+                        FROM account_role ar2
+                        JOIN role r ON r.role_id = ar2.role_id
+                        WHERE ar2.user_account_id = ua.user_account_id AND ar2.business_unit_id = ?) AS unit_roles,
+                       EXISTS (
+                           SELECT 1
+                           FROM employee_invitation ei
+                           WHERE ei.employee_id = e.employee_id
+                             AND ei.user_account_id = ua.user_account_id
+                             AND ei.business_unit_id = e.business_unit_id
+                             AND ei.status = 'pending'
+                             AND ei.expires_at > {$expiryExpr}
+                       ) AS has_pending_invitation
+                FROM employee e
+                JOIN user_account ua ON ua.user_account_id = e.user_account_id
+                WHERE ua.is_super_admin = 0
+                  AND (e.business_unit_id = ? OR EXISTS (
+                       SELECT 1 FROM account_role ar WHERE ar.user_account_id = ua.user_account_id AND ar.business_unit_id = ?
+                   ))
+                ORDER BY e.employee_id DESC";
+
+        $params = [$unitId];
+        if ($nowUtc !== null) {
+            $params[] = $nowUtc;
+        }
+        $params[] = $unitId;
+        $params[] = $unitId;
+
+        $stmt = $db->prepare($sql);
+        $stmt->execute($params);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    /**
+     * List genuinely pending, unexpired employee invitations for $unitId using employee_invitation
+     * as the single source of truth (never email_verified_at IS NULL alone).
+     *
+     * @return list<array<string, mixed>>
+     */
+    public static function listPendingInvitationsForUnit(
+        PDO $db,
+        int $unitId,
+        ?string $nowUtc = null
+    ): array {
+        $expiryExpr = $nowUtc !== null ? '?' : 'UTC_TIMESTAMP()';
+        $sql = "SELECT ei.invitation_id, ei.employee_id, ei.user_account_id, ei.business_unit_id,
+                       ei.invited_email, ei.status AS invitation_status, ei.expires_at,
+                       ei.email_submission_status, ei.created_at,
+                       e.first_name, e.last_name, e.position,
+                       ua.email
+                FROM employee_invitation ei
+                JOIN employee e ON e.employee_id = ei.employee_id
+                JOIN user_account ua ON ua.user_account_id = ei.user_account_id
+                WHERE ei.business_unit_id = ?
+                  AND e.business_unit_id = ?
+                  AND e.user_account_id = ei.user_account_id
+                  AND ua.is_super_admin = 0
+                  AND ua.account_status = 'active'
+                  AND e.employee_status = 'active'
+                  AND ei.status = 'pending'
+                  AND ei.expires_at > {$expiryExpr}
+                ORDER BY ei.created_at DESC, ei.invitation_id DESC";
+
+        $params = [$unitId, $unitId];
+        if ($nowUtc !== null) {
+            $params[] = $nowUtc;
+        }
+
+        $stmt = $db->prepare($sql);
+        $stmt->execute($params);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    /**
+     * Summarize unit employee counts, excluding employees with a genuinely pending, unexpired
+     * invitation from active employee and active System Administrator counts while preserving
+     * total_employees visibility and legacy unverified account classification.
+     *
+     * @param list<array<string, mixed>> $employees
+     * @return array{total_employees:int, active_employees:int, active_sysadmin_count:int, pending_invitation_count:int}
+     */
+    public static function summarizeUnitEmployeeCounts(array $employees): array
+    {
+        $total = count($employees);
+        $active = 0;
+        $activeSysAdmins = 0;
+        $pendingInvitations = 0;
+
+        foreach ($employees as $e) {
+            $isAccountActive = (string)($e['account_status'] ?? '') === 'active';
+            $isEmployeeActive = (string)($e['employee_status'] ?? '') === 'active';
+            $hasPendingInvitation = !empty($e['has_pending_invitation']);
+
+            if ($isAccountActive && $isEmployeeActive && $hasPendingInvitation) {
+                $pendingInvitations++;
+                continue;
+            }
+
+            if ($isAccountActive && $isEmployeeActive) {
+                $active++;
+                $unitRoles = array_map('trim', explode(',', (string)($e['unit_roles'] ?? '')));
+                if (in_array('SYSTEM_ADMINISTRATOR', $unitRoles, true)) {
+                    $activeSysAdmins++;
+                }
+            }
+        }
+
+        return [
+            'total_employees' => $total,
+            'active_employees' => $active,
+            'active_sysadmin_count' => $activeSysAdmins,
+            'pending_invitation_count' => $pendingInvitations,
+        ];
+    }
+
+    /**
      * Resolve authoritative UTC Unix timestamp.
      * Uses MySQL UTC_TIMESTAMP() in production (matching config/database.php time_zone='+00:00')
      * or the injected clock callable in deterministic unit tests.

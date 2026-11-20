@@ -9,29 +9,13 @@ use App\Core\Session;
 use App\Models\AdminAccountService;
 use App\Models\Audit;
 use App\Models\Units;
+use App\Services\EmployeeInvitationService;
 
 final class SysAdminController extends Controller
 {
     private function unitEmployees(int $unitId): array
     {
-        $stmt = $this->db->prepare(
-            "SELECT e.employee_id, e.first_name, e.last_name, e.position, e.phone, e.employee_status, e.created_at,
-                    e.business_unit_id AS home_unit_id,
-                    ua.user_account_id, ua.email, ua.username, ua.account_status, ua.is_super_admin,
-                    (SELECT GROUP_CONCAT(DISTINCT r.role_name ORDER BY r.role_name SEPARATOR ', ')
-                     FROM account_role ar2
-                     JOIN role r ON r.role_id = ar2.role_id
-                     WHERE ar2.user_account_id = ua.user_account_id AND ar2.business_unit_id = ?) AS unit_roles
-             FROM employee e
-             JOIN user_account ua ON ua.user_account_id = e.user_account_id
-             WHERE ua.is_super_admin = 0
-               AND (e.business_unit_id = ? OR EXISTS (
-                    SELECT 1 FROM account_role ar WHERE ar.user_account_id = ua.user_account_id AND ar.business_unit_id = ?
-                ))
-             ORDER BY e.employee_id DESC"
-        );
-        $stmt->execute([$unitId, $unitId, $unitId]);
-        return $stmt->fetchAll();
+        return EmployeeInvitationService::listUnitEmployeesWithInvitationState($this->db, $unitId);
     }
 
     /**
@@ -112,32 +96,20 @@ final class SysAdminController extends Controller
         $positions = AdminAccountService::positionsForUnit($unitId, false);
         $assignableRoles = AdminAccountService::assignableRolesForUnit($unitName);
 
-        $activeEmployees = count(array_filter($employees, fn($e) => $e['employee_status'] === 'active' && $e['account_status'] === 'active'));
-        $totalEmployees = count($employees);
+        $counts = EmployeeInvitationService::summarizeUnitEmployeeCounts($employees);
+        $activeEmployees = $counts['active_employees'];
+        $totalEmployees = $counts['total_employees'];
         $totalRoles = count($assignableRoles);
         $activePositionCount = count(array_filter($positions, fn($p) => $p['position_status'] === 'active'));
         $totalPositionCount = count($positions);
-
-        $sysAdminCount = 0;
-        foreach ($employees as $e) {
-            if (str_contains((string)$e['unit_roles'], 'SYSTEM_ADMINISTRATOR') && $e['account_status'] === 'active') {
-                $sysAdminCount++;
-            }
-        }
+        $sysAdminCount = $counts['active_sysadmin_count'];
 
         // Administrative Attention items (scoped strictly to current business unit)
         $attentionItems = [];
 
-        // 1. Pending employee invitations (email_verified_at IS NULL AND active)
-        $pendingInvites = $this->db->prepare(
-            "SELECT e.employee_id, e.first_name, e.last_name, e.position, ua.email, ua.created_at
-             FROM employee e
-             JOIN user_account ua ON ua.user_account_id = e.user_account_id
-             WHERE e.business_unit_id = ? AND ua.email_verified_at IS NULL AND ua.account_status = 'active'
-             ORDER BY ua.created_at DESC"
-        );
-        $pendingInvites->execute([$unitId]);
-        foreach ($pendingInvites->fetchAll() as $inv) {
+        // 1. Genuinely pending, unexpired employee invitations from employee_invitation
+        $pendingInvites = EmployeeInvitationService::listPendingInvitationsForUnit($this->db, $unitId);
+        foreach ($pendingInvites as $inv) {
             $attentionItems[] = [
                 'type' => 'pending_invitation',
                 'badge' => 'Pending Invitation',
