@@ -220,6 +220,10 @@ final class SysAdminController extends Controller
         [$actorUid, , $unitId, $unitName, $isSuper] = $this->requireSystemAdmin($routeUnitId);
         CSRF::check();
 
+        if ($isSuper) {
+            $this->forbidden('Only business-unit System Administrators can create invited employee accounts. Use the Super Administrator Employees page to create accounts directly.');
+        }
+
         $rawRoles = $_POST['roles'] ?? ($_POST['role_ids'] ?? []);
         if (!is_array($rawRoles)) {
             $rawRoles = $rawRoles !== '' ? [$rawRoles] : [];
@@ -247,16 +251,16 @@ final class SysAdminController extends Controller
             'position' => $position,
             'roles' => $rawRoles,
             'phone' => $this->post('phone'),
-            'is_invitation' => $isPetStore,
+            'is_invitation' => true,
         ];
-        if (!$isPetStore && isset($_POST['password'])) {
-            $input['password'] = $_POST['password'];
-        }
 
         $res = AdminAccountService::createEmployeeAccount($input, $unitId, $actorUid);
         if (!$res['ok']) {
+            if (($res['status'] ?? 422) === 403) {
+                $this->forbidden((string)($res['errors']['general'] ?? 'You are not authorized to create employee invitations for this business unit.'));
+            }
             http_response_code(422);
-            Session::flash('error', $isPetStore ? 'Could not send employee invitation. Please check the form errors.' : 'Could not create employee account. Please check the form errors.');
+            Session::flash('error', 'Could not create employee invitation. Please check the form errors.');
             $oldSafe = $input;
             unset($oldSafe['password']);
             $data = $this->employeesData($unitId, $unitName, $isSuper, $res['errors'], $oldSafe);
@@ -280,7 +284,11 @@ final class SysAdminController extends Controller
             return;
         }
 
-        Session::flash('success', $isPetStore ? "Invitation link sent to {$input['email']}." : "Employee account created in $unitName.");
+        if (!empty($res['email_submitted'])) {
+            Session::flash('success', "Pending employee account created and invitation email submitted for {$input['email']}.");
+        } else {
+            Session::flash('error', "Pending employee account and invitation were created for {$input['email']}, but the invitation email could not be submitted right now. You can retry sending it later.");
+        }
         $this->redirect('/sysadmin/employees' . $this->suffix($isSuper, $unitId));
     }
 

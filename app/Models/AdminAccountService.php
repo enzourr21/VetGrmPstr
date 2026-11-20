@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace App\Models;
 
 use App\Core\Database;
+use App\Services\EmployeeInvitationService;
 use PDO;
 use Throwable;
 
@@ -104,7 +105,7 @@ final class AdminAccountService
         };
     }
 
-    public static function initialRolesForPosition(string $position, ?string $unitName = null): array
+    public static function initialRolesForPosition(string $position, ?string $unitName = null, ?PDO $db = null): array
     {
         $roles = self::POSITION_INITIAL_ROLE_MAP[$position] ?? null;
         if ($roles === null) {
@@ -112,16 +113,16 @@ final class AdminAccountService
         }
         $roles = is_array($roles) ? $roles : [$roles];
         if ($unitName !== null) {
-            $allowed = self::assignableRolesForUnit($unitName);
+            $allowed = self::assignableRolesForUnit($unitName, $db);
             $allowedNames = array_column($allowed, 'role_name');
             $roles = array_values(array_filter($roles, fn($r) => in_array($r, $allowedNames, true)));
         }
         return $roles;
     }
 
-    public static function initialRoleForPosition(string $position, ?string $unitName = null): ?string
+    public static function initialRoleForPosition(string $position, ?string $unitName = null, ?PDO $db = null): ?string
     {
-        $roles = self::initialRolesForPosition($position, $unitName);
+        $roles = self::initialRolesForPosition($position, $unitName, $db);
         return $roles[0] ?? null;
     }
 
@@ -142,9 +143,9 @@ final class AdminAccountService
         'TECHNICIAN',
     ];
 
-    public static function assignableRolesForUnit(string $unitName): array
+    public static function assignableRolesForUnit(string $unitName, ?PDO $db = null): array
     {
-        $db = Database::pdo();
+        $db = $db ?? Database::pdo();
         $rows = $db->query(
             "SELECT role_id, role_name, description
              FROM role
@@ -248,14 +249,39 @@ final class AdminAccountService
     /**
      * Validate and create an employee / System Administrator account atomically inside a DB transaction.
      *
-     * @param array $input [full_name, first_name, last_name, email, username, business_unit_id, position, roles (ids or names), password, phone]
+     * Invitation provisioning is strictly restricted to unit-scoped System Administrator flows
+     * ($enforcedUnitId !== null and !empty($input['is_invitation'])). Super Administrator provisioning
+     * ($enforcedUnitId === null) always uses direct password-based creation without invitations.
+     *
+     * @param array $input [full_name, first_name, last_name, email, username, business_unit_id, position, roles (ids or names), password, phone, is_invitation]
      * @param int|null $enforcedUnitId If set (for System Admin), forces and validates business_unit_id === $enforcedUnitId
      * @param int|null $actorUserId User ID performing the creation
-     * @return array{ok:bool, errors:array<string,string>, user_id?:int, employee_id?:int}
+     * @param PDO|null $db Optional PDO connection override (defaults to Database::pdo())
+     * @param EmployeeInvitationService|null $invitationService Optional invitation service override for testing
+     * @return array{
+     *   ok:bool,
+     *   status?:int,
+     *   errors:array<string,string>,
+     *   user_id?:int,
+     *   employee_id?:int,
+     *   is_invitation?:bool,
+     *   invitation_id?:int,
+     *   invitation_status?:string,
+     *   invitation_expires_at?:string,
+     *   email_submission_status?:string,
+     *   email_submitted?:bool,
+     *   email_error?:?string,
+     *   email_status_code?:int
+     * }
      */
-    public static function createEmployeeAccount(array $input, ?int $enforcedUnitId = null, ?int $actorUserId = null): array
-    {
-        $db = Database::pdo();
+    public static function createEmployeeAccount(
+        array $input,
+        ?int $enforcedUnitId = null,
+        ?int $actorUserId = null,
+        ?PDO $db = null,
+        ?EmployeeInvitationService $invitationService = null
+    ): array {
+        $db = $db ?? Database::pdo();
         $errors = [];
 
         // 1. Parse full name or first_name + last_name
@@ -309,7 +335,12 @@ final class AdminAccountService
         if ($enforcedUnitId !== null && $unitId !== $enforcedUnitId) {
             $errors['business_unit_id'] = 'You are only authorized to create accounts within your assigned business unit.';
         }
-        $unit = $unitId > 0 ? Units::find($unitId) : null;
+        $unit = null;
+        if ($unitId > 0) {
+            $buStmt = $db->prepare('SELECT business_unit_id, business_unit_name, business_unit_status FROM business_unit WHERE business_unit_id = ? AND business_unit_status = "active"');
+            $buStmt->execute([$unitId]);
+            $unit = $buStmt->fetch() ?: null;
+        }
         if (!$unit) {
             $errors['business_unit_id'] = 'Select a valid business unit (Pet Store, Veterinary Clinic, or Grooming Services).';
         }
@@ -350,7 +381,7 @@ final class AdminAccountService
 
             // Automatic initial system role assignment during employee creation
             if ($position !== '' && $unit) {
-                $initRoles = self::initialRolesForPosition($position, $unit['business_unit_name']);
+                $initRoles = self::initialRolesForPosition($position, $unit['business_unit_name'], $db);
                 foreach (array_reverse($initRoles) as $initRole) {
                     if (!in_array($initRole, $rawRoles, true)) {
                         array_unshift($rawRoles, $initRole);
@@ -409,8 +440,11 @@ final class AdminAccountService
             $resolvedRoleNames = array_values(array_unique($resolvedRoleNames));
         }
 
-        // 7. Password validation (skipped for invitation flow)
-        $isInvitation = !empty($input['is_invitation']) || ($unit && in_array($unit['business_unit_name'], [Units::PET_STORE, Units::VET_CLINIC], true) && !isset($input['password']));
+        // 7. Password validation (skipped ONLY for unit-scoped System Administrator invitation flow)
+        $isInvitation = ($enforcedUnitId !== null) && !empty($input['is_invitation']);
+        if ($isInvitation && ($actorUserId === null || $actorUserId <= 0)) {
+            $errors['general'] = 'An authorized System Administrator actor is required to create an employee invitation.';
+        }
         $password = is_string($input['password'] ?? null) ? $input['password'] : '';
         if (!$isInvitation) {
             if (strlen($password) < 10) {
@@ -431,19 +465,20 @@ final class AdminAccountService
         }
 
         // 8. Atomic multi-table creation in a transaction
+        $invService = null;
+        $invRes = null;
+
         try {
             $db->beginTransaction();
 
             if ($isInvitation) {
-                // Secure unguessable random password hash; account cannot be accessed until password set via invitation
+                // Secure unguessable random password hash; pending invitee cannot log in until setting password via invitation
                 $randomBytes = bin2hex(random_bytes(32));
                 $hash = password_hash($randomBytes, PASSWORD_DEFAULT);
                 $emailVerified = null;
-                $invitationToken = bin2hex(random_bytes(32));
             } else {
                 $hash = password_hash($password, PASSWORD_DEFAULT);
                 $emailVerified = date('Y-m-d H:i:s');
-                $invitationToken = null;
             }
 
             $insUa = $db->prepare(
@@ -494,32 +529,29 @@ final class AdminAccountService
             ]);
 
             if ($isInvitation) {
-                $invSummary = "Sent invitation link to $email for position '$position' with role(s): $roleListStr.";
-                $db->prepare(
-                    'INSERT INTO audit_log (actor_user_id, business_unit_id, action_code, target_type, target_id, affected_employee_id, summary, new_value, ip_address)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-                )->execute([
-                    $actorUserId,
-                    $unit['business_unit_id'],
-                    'invitation.created',
-                    'employee',
+                $invService = $invitationService ?? new EmployeeInvitationService($db);
+                $invRes = $invService->createInvitationInTransaction(
+                    (int)$actorUserId,
                     $eid,
-                    $eid,
-                    mb_substr($invSummary, 0, 500),
-                    mb_substr("Position: $position; Roles: $roleListStr", 0, 255),
-                    substr((string)($_SERVER['REMOTE_ADDR'] ?? ''), 0, 45) ?: null,
-                ]);
+                    $uid,
+                    (int)$unit['business_unit_id'],
+                    $email
+                );
+                if (!$invRes['ok']) {
+                    if ($db->inTransaction()) {
+                        $db->rollBack();
+                    }
+                    return [
+                        'ok' => false,
+                        'status' => (int)($invRes['status'] ?? 422),
+                        'errors' => [
+                            'general' => (string)($invRes['error'] ?? 'Could not create employee invitation. No partial records were written.'),
+                        ],
+                    ];
+                }
             }
 
             $db->commit();
-            return [
-                'ok' => true,
-                'errors' => [],
-                'user_id' => $uid,
-                'employee_id' => $eid,
-                'is_invitation' => $isInvitation,
-                'invitation_token' => $invitationToken,
-            ];
         } catch (Throwable $e) {
             if ($db->inTransaction()) {
                 $db->rollBack();
@@ -529,6 +561,41 @@ final class AdminAccountService
                 'errors' => ['general' => 'Could not save the account. No partial records were written.'],
             ];
         }
+
+        // 9. Post-commit invitation email submission (never holds DB locks; SMTP failure preserves pending account/invitation)
+        if ($isInvitation && $invService !== null && is_array($invRes)) {
+            $emailOutcome = $invService->submitInvitationEmail(
+                (int)$invRes['invitation_id'],
+                (string)$invRes['raw_token'],
+                (string)$invRes['invited_email'],
+                (string)$invRes['recipient_name'],
+                (string)$invRes['business_unit_name'],
+                (string)$invRes['position']
+            );
+
+            return [
+                'ok' => true,
+                'errors' => [],
+                'user_id' => $uid,
+                'employee_id' => $eid,
+                'is_invitation' => true,
+                'invitation_id' => (int)$invRes['invitation_id'],
+                'invitation_status' => 'pending',
+                'invitation_expires_at' => (string)$invRes['expires_at'],
+                'email_submission_status' => $emailOutcome['email_submission_status'],
+                'email_submitted' => $emailOutcome['submitted'],
+                'email_error' => $emailOutcome['error'],
+                'email_status_code' => $emailOutcome['status_code'],
+            ];
+        }
+
+        return [
+            'ok' => true,
+            'errors' => [],
+            'user_id' => $uid,
+            'employee_id' => $eid,
+            'is_invitation' => false,
+        ];
     }
 }
 
