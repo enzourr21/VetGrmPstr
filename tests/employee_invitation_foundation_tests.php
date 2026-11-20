@@ -5,7 +5,7 @@ declare(strict_types=1);
  * Isolated foundation verification for Employee Invitation Checkpoint 1:
  *  - EnvConfig::appUrl() validation and normalization
  *  - MailService::sendEmployeeInvitation() input validation, fail-closed config handling,
- *    and null-driver SMTP submission reporting (no live SMTP or DB connections)
+ *    and null-driver disabled-submission reporting (no live SMTP or DB connections)
  *  - Static structure & migrate.php parser check for 029_employee_invitations.sql + down script
  */
 
@@ -112,17 +112,35 @@ try {
     });
 
     // --- 2. MailService::sendEmployeeInvitation() ---
-    check('sendEmployeeInvitation returns submitted=true under null driver', function () use ($tempFile) {
+    check('sendEmployeeInvitation reports submitted=false with disabled error under null driver', function () use ($tempFile) {
         loadEnv($tempFile, "MAIL_DRIVER=null\n");
+        $rawToken = 'null_driver_raw_token_must_not_leak_123';
         $res = MailService::sendEmployeeInvitation(
             'carla@example.test',
             'Carla Mendoza',
             'Pet Store',
             'Receptionist',
-            'http://127.0.0.1:8080/invitations/accept?token=abcdef0123456789'
+            "http://127.0.0.1:8080/invitations/accept?token={$rawToken}"
         );
-        if ($res['submitted'] !== true || $res['driver'] !== 'null' || $res['error'] !== null || $res['status_code'] !== 200) {
-            throw new RuntimeException('Unexpected result: ' . json_encode($res));
+        if (
+            $res['submitted'] !== false ||
+            $res['driver'] !== 'null' ||
+            $res['status_code'] !== 503 ||
+            !is_string($res['error']) ||
+            !str_contains(strtolower($res['error']), 'disabled')
+        ) {
+            throw new RuntimeException('Expected disabled-submission failure under null driver, got: ' . json_encode($res));
+        }
+        if (str_contains($res['error'], $rawToken) || str_contains($res['error'], 'http://')) {
+            throw new RuntimeException('Token or invitation URL leaked into null-driver error message.');
+        }
+    });
+
+    check('sendCustomerRegistrationOtp retains existing null-driver behavior', function () use ($tempFile) {
+        loadEnv($tempFile, "MAIL_DRIVER=null\n");
+        $ok = MailService::sendCustomerRegistrationOtp('customer@example.test', '012345', 'Alex');
+        if ($ok !== true) {
+            throw new RuntimeException('Expected customer OTP send to remain true under null driver.');
         }
     });
 

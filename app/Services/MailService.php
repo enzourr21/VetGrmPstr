@@ -47,9 +47,11 @@ final class MailService
     }
 
     /**
-     * Submit an employee invitation email via the configured PHPMailer/SMTP (or null) driver.
+     * Submit an employee invitation email via the configured PHPMailer/SMTP driver.
      *
      * Reports SMTP submission status only and does not claim final inbox delivery.
+     * When MAIL_DRIVER is 'null', returns submitted=false with a clear disabled-submission error
+     * so tests or misconfigured environments cannot mistake a no-op driver for SMTP submission.
      * Never includes SMTP credentials, raw tokens, or invitation URLs in returned errors.
      *
      * @return array{submitted: bool, driver: string, error: ?string, status_code: int}
@@ -120,6 +122,15 @@ final class MailService
         try {
             $config = EnvConfig::mailConfig();
             $driver = $config['driver'];
+
+            if ($driver === 'null') {
+                return [
+                    'submitted' => false,
+                    'driver' => 'null',
+                    'error' => 'Email submission is disabled (MAIL_DRIVER is set to "null").',
+                    'status_code' => 503,
+                ];
+            }
 
             $greetingName = $cleanName !== '' ? $cleanName : 'there';
             $subject = 'Set up your PawCariño employee account';

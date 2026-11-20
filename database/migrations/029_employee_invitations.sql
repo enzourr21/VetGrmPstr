@@ -9,6 +9,19 @@
 --   3. Supports the 48-hour invitation validity period via expires_at (> created_at).
 --   4. Invitation lifecycle status (pending, accepted, revoked, expired) is strictly
 --      independent of SMTP email submission status (pending, submitted, failed).
+--
+-- Cross-Table Ownership & Transaction Validation Requirements (for Invitation Service):
+--   Because single-column foreign keys cannot enforce cross-table equality between
+--   user_account, employee, business_unit, and invited_email, the invitation service MUST
+--   enforce the following invariants inside its transaction/row-locking (SELECT ... FOR UPDATE)
+--   boundary whenever invitations are created, resent, revoked, or accepted:
+--     a) Referenced employee.user_account_id === employee_invitation.user_account_id
+--        (and matches the intended user_account row).
+--     b) Referenced employee.business_unit_id === employee_invitation.business_unit_id
+--        (and matches the System Administrator's authorized business unit on creation/management).
+--     c) Normalized employee_invitation.invited_email === normalized user_account.email
+--        at both creation and acceptance time (changing a pending account's email invalidates
+--        prior pending invitations).
 
 CREATE TABLE IF NOT EXISTS employee_invitation (
     invitation_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
