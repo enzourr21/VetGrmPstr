@@ -194,8 +194,22 @@ abstract class Controller
     }
 
     /**
+     * Enforce that an authenticated account does not have unresolved, never-accepted
+     * employee invitation history. Applies uniformly regardless of is_super_admin or roles.
+     * Accounts with zero invitation records (direct-provisioned, legacy, customer-only) are unaffected.
+     */
+    protected function requireInvitationAcceptedForSession(
+        int $uid,
+        string $message = 'Your employee account must complete invitation activation before accessing workspaces.'
+    ): void {
+        if (EmployeeInvitationService::isAccountBlockedByUnacceptedInvitation($this->db, $uid)) {
+            $this->forbidden($message);
+        }
+    }
+
+    /**
      * Backend verification of Super Administrator status in an active email-authenticated employee session.
-     * Never trusts client parameters or customer/username sessions.
+     * Never trusts client parameters or customer/username sessions, and never bypasses unresolved invitation history.
      */
     protected function isSuperAdmin(): bool
     {
@@ -208,6 +222,9 @@ abstract class Controller
         $activeContext = Session::get('active_context', $baseContext);
         $authMethod = Session::get('auth_method', 'email');
         if ($baseContext !== 'employee' || $activeContext === 'customer' || $authMethod === 'username') {
+            return false;
+        }
+        if (EmployeeInvitationService::isAccountBlockedByUnacceptedInvitation($this->db, (int)$uid)) {
             return false;
         }
         $s = $this->db->prepare(
@@ -232,6 +249,10 @@ abstract class Controller
             Session::set('return_to', $_SERVER['REQUEST_URI'] ?? '/super-admin');
             $this->redirect('/login');
         }
+        $this->requireInvitationAcceptedForSession(
+            (int)$uid,
+            'Your employee account must complete invitation activation before accessing administrative workspaces.'
+        );
         if (!$this->isSuperAdmin()) {
             $this->forbidden('Super Administrator authorization is required to access this area.');
         }
@@ -259,6 +280,11 @@ abstract class Controller
             $this->forbidden('An email-authenticated System Administrator session is required.');
         }
 
+        $this->requireInvitationAcceptedForSession(
+            (int)$uid,
+            'Your employee account must complete invitation activation before accessing administrative workspaces.'
+        );
+
         // Check if query or POST explicitly targets a business unit
         $queryUnitId = isset($_GET['unit_id']) && ctype_digit((string)$_GET['unit_id']) ? (int)$_GET['unit_id'] : null;
         $postUnitId = ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && isset($_POST['business_unit_id']) && ctype_digit((string)$_POST['business_unit_id'])
@@ -274,10 +300,6 @@ abstract class Controller
             }
             $eid = (int)Session::get('employee_id', 0);
             return [(int)$uid, $eid, (int)$u['business_unit_id'], (string)$u['business_unit_name'], true];
-        }
-
-        if (EmployeeInvitationService::isAccountBlockedByUnacceptedInvitation($this->db, (int)$uid)) {
-            $this->forbidden('Your employee account must complete invitation activation before accessing administrative workspaces.');
         }
 
         $s = $this->db->prepare(
@@ -342,13 +364,14 @@ abstract class Controller
         $queryUnitId = isset($_GET['unit_id']) && ctype_digit((string)$_GET['unit_id']) ? (int)$_GET['unit_id'] : null;
         $targetUnitId = $requestedUnitId ?? $queryUnitId;
 
+        $this->requireInvitationAcceptedForSession(
+            (int)$uid,
+            'Your employee account must complete invitation activation before accessing manager workspaces.'
+        );
+
         if ($this->isSuperAdmin()) {
             $u = $targetUnitId !== null ? (Units::find($targetUnitId) ?: $this->notFound()) : (Units::find(Units::petStoreId()) ?: Units::all()[0]);
             return [(int)$uid, (int)Session::get('employee_id', 0), (int)$u['business_unit_id'], (string)$u['business_unit_name'], true];
-        }
-
-        if (EmployeeInvitationService::isAccountBlockedByUnacceptedInvitation($this->db, (int)$uid)) {
-            $this->forbidden('Your employee account must complete invitation activation before accessing manager workspaces.');
         }
 
         $s = $this->db->prepare(
@@ -456,13 +479,14 @@ abstract class Controller
             $this->forbidden('Customer interface context cannot access staff endpoints.');
         }
 
+        $this->requireInvitationAcceptedForSession(
+            (int)$uid,
+            'Your employee account must complete invitation activation before accessing staff workspaces.'
+        );
+
         // Super Administrator has unrestricted access without requiring additional roles
         if ($this->isSuperAdmin()) {
             return (int)$eid;
-        }
-
-        if (EmployeeInvitationService::isAccountBlockedByUnacceptedInvitation($this->db, (int)$uid)) {
-            $this->forbidden('Your employee account must complete invitation activation before accessing staff workspaces.');
         }
 
         $s = $this->db->prepare('SELECT 1 FROM user_account ua

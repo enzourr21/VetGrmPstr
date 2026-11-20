@@ -52,7 +52,6 @@ final class StaffController extends Controller
 
         // Block accounts with unresolved, never-accepted employee invitation history (source of truth: employee_invitation).
         $blockedByInvitation = $a
-            && !(bool)$a['is_super_admin']
             && EmployeeInvitationService::isAccountBlockedByUnacceptedInvitation($this->db, (int)$a['user_account_id']);
 
         // Priority 3.3 & 3.4: If an employee or System Administrator signs in using their username,
@@ -117,6 +116,11 @@ final class StaffController extends Controller
         if ($baseContext !== 'employee' || $activeContext === 'customer' || $authMethod === 'username') {
             $this->forbidden('Customer sessions cannot access the employee workspace.');
         }
+
+        $this->requireInvitationAcceptedForSession(
+            (int)$uid,
+            'Your employee account must complete invitation activation before accessing the employee workspace.'
+        );
 
         $isSuper = $this->isSuperAdmin();
         $empStmt = $this->db->prepare(
@@ -208,6 +212,11 @@ final class StaffController extends Controller
         if ($baseContext !== 'employee' || $activeContext === 'customer' || $authMethod === 'username') {
             $this->forbidden('An email-authenticated employee session is required.');
         }
+
+        $this->requireInvitationAcceptedForSession(
+            (int)$uid,
+            'Your employee account must complete invitation activation before accessing inventory.'
+        );
 
         CSRF::check();
 
@@ -310,6 +319,10 @@ final class StaffController extends Controller
         if (!$uid) {
             $this->redirect('/staff/login');
         }
+        $this->requireInvitationAcceptedForSession(
+            (int)$uid,
+            'Your employee account must complete invitation activation before accessing staff workspaces.'
+        );
         CSRF::check();
         Session::forget('temp_inventory_access');
         Session::flash('info', 'Temporary inventory access ended.');

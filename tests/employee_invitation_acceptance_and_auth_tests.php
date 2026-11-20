@@ -2,8 +2,8 @@
 declare(strict_types=1);
 
 /**
- * Isolated Security & Regression Tests for Checkpoint 4:
- *   Employee Invitation Acceptance & Authentication Guards.
+ * Isolated Security & Regression Tests for Checkpoints 4 & 4.1:
+ *   Employee Invitation Acceptance, Authentication Guards, and Guard Consistency.
  *
  * IMPORTANT VERIFICATION LIMITATION:
  *  - Uses an in-memory FakeAcceptancePdo double (no live MySQL 8.4, no HTTP server, no SMTP).
@@ -12,11 +12,17 @@ declare(strict_types=1);
  */
 
 require_once dirname(__DIR__) . '/app/Core/EnvConfig.php';
+require_once dirname(__DIR__) . '/app/Core/Core.php';
 require_once dirname(__DIR__) . '/app/Models/Audit.php';
+require_once dirname(__DIR__) . '/app/Models/Units.php';
 require_once dirname(__DIR__) . '/app/Services/MailService.php';
 require_once dirname(__DIR__) . '/app/Services/EmployeeInvitationService.php';
+require_once dirname(__DIR__) . '/app/Services/InterfaceSwitcherService.php';
 
+use App\Core\Controller;
+use App\Core\Database;
 use App\Services\EmployeeInvitationService;
+use App\Services\InterfaceSwitcherService;
 
 final class FakeAcceptancePdo extends PDO
 {
@@ -90,6 +96,13 @@ final class FakeAcceptancePdo extends PDO
     public function prepare(string $query, array $options = []): PDOStatement|false
     {
         return new FakeAcceptanceStatement($this, $query);
+    }
+
+    public function query(string $query, ?int $fetchMode = null, mixed ...$fetchModeArgs): PDOStatement|false
+    {
+        $stmt = new FakeAcceptanceStatement($this, $query);
+        $stmt->execute([]);
+        return $stmt;
     }
 
     public function executeSql(string $sql, array $params, int &$rowCount): array
@@ -292,6 +305,153 @@ final class FakeAcceptancePdo extends PDO
             return [];
         }
 
+        // 9. InterfaceSwitcherService::loadContext account/employee lookup
+        if (str_contains($sql, 'FROM user_account ua') && str_contains($sql, 'LEFT JOIN employee e') && str_contains($sql, 'WHERE ua.user_account_id = ?')) {
+            $uid = (int)$params[0];
+            $ua = $this->users[$uid] ?? null;
+            if (!$ua) {
+                return [];
+            }
+            $emp = null;
+            foreach ($this->employees as $e) {
+                if ((int)$e['user_account_id'] === $uid) {
+                    $emp = $e;
+                    break;
+                }
+            }
+            $bu = $emp ? ($this->businessUnits[(int)$emp['business_unit_id']] ?? null) : null;
+            return [[
+                'user_account_id' => $ua['user_account_id'],
+                'account_status' => $ua['account_status'],
+                'is_super_admin' => $ua['is_super_admin'],
+                'employee_id' => $emp['employee_id'] ?? null,
+                'first_name' => $emp['first_name'] ?? null,
+                'last_name' => $emp['last_name'] ?? null,
+                'position' => $emp['position'] ?? null,
+                'employee_status' => $emp['employee_status'] ?? null,
+                'emp_unit_id' => $emp['business_unit_id'] ?? null,
+                'emp_unit_name' => $bu['business_unit_name'] ?? null,
+                'emp_unit_status' => $bu['business_unit_status'] ?? null,
+            ]];
+        }
+
+        // 10. Core::isSuperAdmin() & InterfaceSwitcherService::hasSuperAdminGrant()
+        if (str_contains($sql, 'FROM user_account ua') && str_contains($sql, "ua.is_super_admin = 1 OR r.role_name = 'SUPER_ADMINISTRATOR'")) {
+            $uid = (int)$params[0];
+            $ua = $this->users[$uid] ?? null;
+            if (!$ua || $ua['account_status'] !== 'active') {
+                return [];
+            }
+            if ((int)$ua['is_super_admin'] === 1 || $this->hasSuperRole($uid)) {
+                return [['1' => 1]];
+            }
+            return [];
+        }
+
+        // 11. Active business units list (InterfaceSwitcherService & Units::all)
+        if (str_contains($sql, 'FROM business_unit') && (str_contains($sql, "business_unit_status = 'active'") || str_contains($sql, 'business_unit_status="active"')) && !str_contains($sql, 'business_unit_id=?') && !str_contains($sql, 'business_unit_name=?')) {
+            $rows = [];
+            foreach ($this->businessUnits as $bu) {
+                if ($bu['business_unit_status'] === 'active') {
+                    $rows[] = $bu;
+                }
+            }
+            return $rows;
+        }
+
+        // 12. Units::find() & Units::idByName()
+        if (str_contains($sql, 'FROM business_unit') && str_contains($sql, 'business_unit_id=?')) {
+            $bu = $this->businessUnits[(int)$params[0]] ?? null;
+            return ($bu && $bu['business_unit_status'] === 'active') ? [$bu] : [];
+        }
+        if (str_contains($sql, 'FROM business_unit') && str_contains($sql, 'business_unit_name=?')) {
+            foreach ($this->businessUnits as $bu) {
+                if ($bu['business_unit_name'] === (string)$params[0] && $bu['business_unit_status'] === 'active') {
+                    return [['business_unit_id' => $bu['business_unit_id']]];
+                }
+            }
+            return [];
+        }
+
+        // 13. InterfaceSwitcherService role list
+        if (str_contains($sql, 'SELECT ar.business_unit_id, bu.business_unit_name, r.role_name')) {
+            $uid = (int)$params[0];
+            $rows = [];
+            foreach ($this->accountRoles as $ar) {
+                if ((int)$ar['user_account_id'] !== $uid) {
+                    continue;
+                }
+                $bu = $this->businessUnits[(int)$ar['business_unit_id']] ?? null;
+                if (!$bu || $bu['business_unit_status'] !== 'active') {
+                    continue;
+                }
+                $rows[] = [
+                    'business_unit_id' => (int)$bu['business_unit_id'],
+                    'business_unit_name' => $bu['business_unit_name'],
+                    'role_name' => $this->roles[(int)$ar['role_id']] ?? '',
+                ];
+            }
+            return $rows;
+        }
+
+        // 14. Core::requireSystemAdmin() / Core::requireBusinessManager() role lookup
+        if (str_contains($sql, 'SELECT e.employee_id, bu.business_unit_id, bu.business_unit_name') && str_contains($sql, 'FROM user_account ua')) {
+            $uid = (int)$params[0];
+            $wantedRole = str_contains($sql, "'SYSTEM_ADMINISTRATOR'") ? 'SYSTEM_ADMINISTRATOR' : 'BUSINESS_MANAGER';
+            $ua = $this->users[$uid] ?? null;
+            if (!$ua || $ua['account_status'] !== 'active') {
+                return [];
+            }
+            $emp = null;
+            foreach ($this->employees as $e) {
+                if ((int)$e['user_account_id'] === $uid && $e['employee_status'] === 'active') {
+                    $emp = $e;
+                    break;
+                }
+            }
+            if (!$emp) {
+                return [];
+            }
+            $rows = [];
+            foreach ($this->accountRoles as $ar) {
+                if ((int)$ar['user_account_id'] !== $uid) {
+                    continue;
+                }
+                if (($this->roles[(int)$ar['role_id']] ?? '') !== $wantedRole) {
+                    continue;
+                }
+                $bu = $this->businessUnits[(int)$ar['business_unit_id']] ?? null;
+                if (!$bu || $bu['business_unit_status'] !== 'active') {
+                    continue;
+                }
+                $rows[] = [
+                    'employee_id' => (int)$emp['employee_id'],
+                    'business_unit_id' => (int)$bu['business_unit_id'],
+                    'business_unit_name' => $bu['business_unit_name'],
+                ];
+            }
+            return $rows;
+        }
+
+        // 15. Core::requireStaff() permission lookup
+        if (str_contains($sql, 'JOIN permission p') && str_contains($sql, 'p.permission_code=?')) {
+            [$unitId, $permCode, $uid, $eid] = [(int)$params[0], (string)$params[1], (int)$params[2], (int)$params[3]];
+            $ua = $this->users[$uid] ?? null;
+            $emp = $this->employees[$eid] ?? null;
+            if (!$ua || $ua['account_status'] !== 'active' || !$emp || (int)$emp['user_account_id'] !== $uid || $emp['employee_status'] !== 'active') {
+                return [];
+            }
+            foreach ($this->accountRoles as $ar) {
+                if ((int)$ar['user_account_id'] === $uid && (int)$ar['business_unit_id'] === $unitId) {
+                    $rName = $this->roles[(int)$ar['role_id']] ?? '';
+                    if ($permCode === 'appointment.view' && in_array($rName, ['RECEPTIONIST', 'BUSINESS_MANAGER', 'INVENTORY_MANAGER'], true)) {
+                        return [['1' => 1]];
+                    }
+                }
+            }
+            return [];
+        }
+
         throw new RuntimeException("Unexpected SQL in FakeAcceptancePdo: {$sql}");
     }
 
@@ -334,7 +494,60 @@ final class FakeAcceptanceStatement extends PDOStatement
 
     public function fetchAll(int $mode = PDO::FETCH_DEFAULT, mixed ...$args): array { return $this->rows; }
 
+    public function fetchColumn(int $column = 0): mixed
+    {
+        $row = $this->fetch();
+        if ($row === false) {
+            return false;
+        }
+        $vals = array_values($row);
+        return $vals[$column] ?? false;
+    }
+
     public function rowCount(): int { return $this->affected; }
+}
+
+final class GuardForbiddenException extends RuntimeException {}
+final class GuardRedirectException extends RuntimeException {}
+
+final class GuardHarnessController extends Controller
+{
+    public function __construct(PDO $db)
+    {
+        $this->db = $db;
+    }
+
+    protected function forbidden(string $message = 'You do not have access to this page.'): never
+    {
+        throw new GuardForbiddenException($message, 403);
+    }
+
+    protected function redirect(string $url): never
+    {
+        throw new GuardRedirectException($url, 302);
+    }
+
+    public function callIsSuperAdmin(): bool { return $this->isSuperAdmin(); }
+    public function callRequireSuperAdmin(): int { return $this->requireSuperAdmin(); }
+    public function callRequireSystemAdmin(?int $unitId = null): array { return $this->requireSystemAdmin($unitId); }
+    public function callRequireBusinessManager(?int $unitId = null): array { return $this->requireBusinessManager($unitId); }
+    public function callRequireStaff(string $perm, int $unitId): int { return $this->requireStaff($perm, $unitId); }
+}
+
+function setDatabasePdoForTest(?PDO $pdo): void
+{
+    $ref = new ReflectionProperty(Database::class, 'pdo');
+    $ref->setValue(null, $pdo);
+}
+
+function assertForbidden(callable $fn, string $msg): void
+{
+    try {
+        $fn();
+    } catch (GuardForbiddenException $e) {
+        return;
+    }
+    throw new RuntimeException($msg);
 }
 
 /**
@@ -619,6 +832,187 @@ test('Static wiring check: routes, InvitationController immutability, and server
     assertTrue(str_contains($core, 'isAccountBlockedByUnacceptedInvitation'), 'Core.php protected route guards must enforce invitation guard');
     assertTrue(str_contains($switcher, 'isAccountBlockedByUnacceptedInvitation'), 'InterfaceSwitcherService must enforce invitation guard');
     assertTrue(!str_contains($superCtrl, 'EmployeeInvitationService') && !str_contains($superCtrl, 'is_invitation'), 'SuperAdminController must remain unchanged');
+});
+
+test('Checkpoint 4.1: InterfaceSwitcherService blocks unresolved invitation history regardless of is_super_admin or SUPER_ADMINISTRATOR role', function () {
+    ['pdo' => $pdo] = makeAcceptanceFixture();
+
+    // Case A: Pending invitee #10 mutated to have is_super_admin = 1 -> STILL blocked
+    $pdo->users[10]['is_super_admin'] = 1;
+    $ctxFlag = InterfaceSwitcherService::loadContext($pdo, 10);
+    assertTrue($ctxFlag['account_active'] === false, 'Unresolved invitee with is_super_admin=1 must have account_active=false');
+    assertTrue($ctxFlag['is_super_admin'] === false, 'Unresolved invitee with is_super_admin=1 must have is_super_admin=false');
+    assertTrue($ctxFlag['employee_active'] === false, 'Unresolved invitee with is_super_admin=1 must have employee_active=false');
+    assertTrue(InterfaceSwitcherService::isSuperAdminAccount($pdo, 10) === false, 'isSuperAdminAccount must return false for unresolved invitee with is_super_admin=1');
+    $pdo->users[10]['is_super_admin'] = 0;
+
+    // Case B: Expired invitee #11 granted SUPER_ADMINISTRATOR role -> STILL blocked
+    $pdo->accountRoles[] = ['user_account_id' => 11, 'role_id' => 1, 'business_unit_id' => 1];
+    $ctxRole = InterfaceSwitcherService::loadContext($pdo, 11);
+    assertTrue($ctxRole['account_active'] === false && $ctxRole['is_super_admin'] === false && $ctxRole['employee_active'] === false, 'Unresolved invitee with SUPER_ADMINISTRATOR role must remain blocked');
+    assertTrue(InterfaceSwitcherService::isSuperAdminAccount($pdo, 11) === false, 'isSuperAdminAccount must return false for unresolved invitee with SUPER_ADMINISTRATOR role');
+    array_pop($pdo->accountRoles);
+
+    // Case C: Revoked invitee #12 -> blocked
+    $ctxRevoked = InterfaceSwitcherService::loadContext($pdo, 12);
+    assertTrue($ctxRevoked['account_active'] === false && $ctxRevoked['employee_active'] === false, 'Revoked never-accepted invitee must remain blocked');
+
+    // Case D: Accepted invitee #13 -> active
+    $ctxAccepted = InterfaceSwitcherService::loadContext($pdo, 13);
+    assertTrue($ctxAccepted['account_active'] === true && $ctxAccepted['employee_active'] === true && $ctxAccepted['is_super_admin'] === false, 'Accepted invitee must be active in InterfaceSwitcherService');
+
+    // Case E: Direct-provisioned Super Administrator #1 (zero invitation history) -> unaffected
+    $ctxSuper = InterfaceSwitcherService::loadContext($pdo, 1);
+    assertTrue($ctxSuper['account_active'] === true && $ctxSuper['is_super_admin'] === true && $ctxSuper['employee_active'] === true, 'Direct-provisioned Super Administrator must remain unaffected');
+
+    // Case F: Legacy unverified employee #14 (email_verified_at=NULL, zero invitation history) -> unaffected
+    $ctxLegacy = InterfaceSwitcherService::loadContext($pdo, 14);
+    assertTrue($ctxLegacy['account_active'] === true && $ctxLegacy['employee_active'] === true, 'Legacy unverified employee without invitation records must remain unaffected');
+});
+
+test('Checkpoint 4.1: Existing sessions with unresolved invitation history cannot bypass Core guards via is_super_admin or SUPER_ADMINISTRATOR role', function () {
+    ['pdo' => $pdo] = makeAcceptanceFixture();
+    $pdo->roles[5] = 'BUSINESS_MANAGER';
+    setDatabasePdoForTest($pdo);
+    $ctrl = new GuardHarnessController($pdo);
+
+    try {
+        // Pending invitee #10 given is_super_admin=1 AND SYSTEM_ADMINISTRATOR / BUSINESS_MANAGER roles in an existing session
+        $pdo->users[10]['is_super_admin'] = 1;
+        $pdo->accountRoles[] = ['user_account_id' => 10, 'role_id' => 2, 'business_unit_id' => 1];
+        $pdo->accountRoles[] = ['user_account_id' => 10, 'role_id' => 5, 'business_unit_id' => 1];
+
+        $_SESSION = [
+            'user_id' => 10,
+            'employee_id' => 10,
+            'base_context' => 'employee',
+            'active_context' => 'employee',
+            'auth_method' => 'email',
+            'is_super_admin' => true,
+        ];
+        assertTrue($ctrl->callIsSuperAdmin() === false, 'isSuperAdmin() must return false when unresolved invitation exists even if is_super_admin=1');
+        assertForbidden(fn() => $ctrl->callRequireSuperAdmin(), 'requireSuperAdmin() must deny unresolved invitee with is_super_admin=1');
+        assertForbidden(fn() => $ctrl->callRequireSystemAdmin(1), 'requireSystemAdmin() must deny unresolved invitee with is_super_admin=1');
+        assertForbidden(fn() => $ctrl->callRequireBusinessManager(1), 'requireBusinessManager() must deny unresolved invitee with is_super_admin=1');
+        assertForbidden(fn() => $ctrl->callRequireStaff('appointment.view', 1), 'requireStaff() must deny unresolved invitee with is_super_admin=1');
+
+        // Expired invitee #11 given SUPER_ADMINISTRATOR role (without is_super_admin flag)
+        $pdo->accountRoles[] = ['user_account_id' => 11, 'role_id' => 1, 'business_unit_id' => 1];
+        $_SESSION = [
+            'user_id' => 11,
+            'employee_id' => 11,
+            'base_context' => 'employee',
+            'active_context' => 'employee',
+            'auth_method' => 'email',
+            'is_super_admin' => true,
+        ];
+        assertTrue($ctrl->callIsSuperAdmin() === false, 'isSuperAdmin() must return false for unresolved invitee with SUPER_ADMINISTRATOR role');
+        assertForbidden(fn() => $ctrl->callRequireSuperAdmin(), 'requireSuperAdmin() must deny unresolved invitee with SUPER_ADMINISTRATOR role');
+        assertForbidden(fn() => $ctrl->callRequireSystemAdmin(1), 'requireSystemAdmin() must deny unresolved invitee with SUPER_ADMINISTRATOR role');
+        assertForbidden(fn() => $ctrl->callRequireBusinessManager(1), 'requireBusinessManager() must deny unresolved invitee with SUPER_ADMINISTRATOR role');
+        assertForbidden(fn() => $ctrl->callRequireStaff('appointment.view', 1), 'requireStaff() must deny unresolved invitee with SUPER_ADMINISTRATOR role');
+
+        // Revoked invitee #12
+        $_SESSION = [
+            'user_id' => 12,
+            'employee_id' => 12,
+            'base_context' => 'employee',
+            'active_context' => 'employee',
+            'auth_method' => 'email',
+            'is_super_admin' => false,
+        ];
+        assertForbidden(fn() => $ctrl->callRequireStaff('appointment.view', 1), 'requireStaff() must deny revoked invitee');
+    } finally {
+        $_SESSION = [];
+        setDatabasePdoForTest(null);
+    }
+});
+
+test('Checkpoint 4.1: Core guards permit accepted invitees, direct-provisioned Super Administrators, and legacy accounts without invitation history', function () {
+    ['pdo' => $pdo] = makeAcceptanceFixture();
+    $pdo->roles[5] = 'BUSINESS_MANAGER';
+    // Grant accepted invitee #13 SYSTEM_ADMINISTRATOR and BUSINESS_MANAGER in unit 1 for full guard coverage
+    $pdo->accountRoles[] = ['user_account_id' => 13, 'role_id' => 2, 'business_unit_id' => 1];
+    $pdo->accountRoles[] = ['user_account_id' => 13, 'role_id' => 5, 'business_unit_id' => 1];
+    setDatabasePdoForTest($pdo);
+    $ctrl = new GuardHarnessController($pdo);
+
+    try {
+        // 1. Accepted invitee #13 (has older revoked invitation + accepted invitation)
+        $_SESSION = [
+            'user_id' => 13,
+            'employee_id' => 13,
+            'base_context' => 'employee',
+            'active_context' => 'employee',
+            'auth_method' => 'email',
+            'is_super_admin' => false,
+        ];
+        $sysRes = $ctrl->callRequireSystemAdmin(1);
+        $bmRes = $ctrl->callRequireBusinessManager(1);
+        $staffEmpId = $ctrl->callRequireStaff('appointment.view', 1);
+        assertTrue($sysRes[0] === 13 && $sysRes[2] === 1 && $sysRes[4] === false, 'Accepted invitee must access authorized System Admin workspace');
+        assertTrue($bmRes[0] === 13 && $bmRes[2] === 1 && $bmRes[4] === false, 'Accepted invitee must access authorized Business Manager workspace');
+        assertTrue($staffEmpId === 13, 'Accepted invitee must access authorized staff workspace');
+
+        // 2. Direct-provisioned Super Administrator #1 (zero invitation history)
+        $_SESSION = [
+            'user_id' => 1,
+            'employee_id' => 1,
+            'base_context' => 'employee',
+            'active_context' => 'employee',
+            'auth_method' => 'email',
+            'is_super_admin' => true,
+        ];
+        assertTrue($ctrl->callIsSuperAdmin() === true, 'Direct-provisioned Super Admin must pass isSuperAdmin()');
+        assertTrue($ctrl->callRequireSuperAdmin() === 1, 'Direct-provisioned Super Admin must pass requireSuperAdmin()');
+        assertTrue($ctrl->callRequireSystemAdmin(1)[4] === true, 'Direct-provisioned Super Admin must pass requireSystemAdmin()');
+        assertTrue($ctrl->callRequireBusinessManager(1)[4] === true, 'Direct-provisioned Super Admin must pass requireBusinessManager()');
+        assertTrue($ctrl->callRequireStaff('appointment.view', 1) === 1, 'Direct-provisioned Super Admin must pass requireStaff()');
+
+        // 3. Legacy unverified employee #14 (email_verified_at=NULL, zero invitation history)
+        $_SESSION = [
+            'user_id' => 14,
+            'employee_id' => 14,
+            'base_context' => 'employee',
+            'active_context' => 'employee',
+            'auth_method' => 'email',
+            'is_super_admin' => false,
+        ];
+        assertTrue($ctrl->callRequireStaff('appointment.view', 1) === 14, 'Legacy unverified employee without invitation history must remain unaffected');
+    } finally {
+        $_SESSION = [];
+        setDatabasePdoForTest(null);
+    }
+});
+
+test('Checkpoint 4.1: Static guard-consistency verification across Core, InterfaceSwitcherService, AuthController, StaffController, and custom employee guards', function () {
+    $root = dirname(__DIR__);
+    $authCtrl = (string)file_get_contents($root . '/app/Controllers/AuthController.php');
+    $staffCtrl = (string)file_get_contents($root . '/app/Controllers/StaffController.php');
+    $switcher = (string)file_get_contents($root . '/app/Services/InterfaceSwitcherService.php');
+    $core = (string)file_get_contents($root . '/app/Core/Core.php');
+    $delivery = (string)file_get_contents($root . '/app/Controllers/DeliveryController.php');
+    $petRec = (string)file_get_contents($root . '/app/Controllers/PetStoreReceptionistController.php');
+    $groomRec = (string)file_get_contents($root . '/app/Controllers/GroomingReceptionistController.php');
+    $vetRec = (string)file_get_contents($root . '/app/Controllers/VetClinicReceptionistController.php');
+    $manager = (string)file_get_contents($root . '/app/Controllers/ManagerController.php');
+
+    // No Super Admin exemption on invitation blocking anywhere
+    assertTrue(!preg_match('/\$blockedByInvitation\s*=\s*[^;]*is_super_admin/', $authCtrl), 'AuthController must not exempt is_super_admin from invitation blocking');
+    assertTrue(!preg_match('/\$blockedByInvitation\s*=\s*[^;]*is_super_admin/', $staffCtrl), 'StaffController must not exempt is_super_admin from invitation blocking');
+    assertTrue(!str_contains($switcher, '!$isSuperAdmin && EmployeeInvitationService::isAccountBlockedByUnacceptedInvitation'), 'InterfaceSwitcherService must not exempt $isSuperAdmin from invitation blocking');
+
+    // Core enforces invitation check inside isSuperAdmin() and before isSuperAdmin() in all require* guards
+    assertTrue(substr_count($core, 'requireInvitationAcceptedForSession(') >= 5, 'Core must enforce requireInvitationAcceptedForSession across SuperAdmin/SystemAdmin/BusinessManager/Staff guards');
+
+    // Directly implemented employee-session paths enforce invitation guard
+    assertTrue(str_contains($authCtrl, 'requireInvitationAcceptedForSession('), 'AuthController::returnToWorkspace must enforce invitation guard');
+    assertTrue(substr_count($staffCtrl, 'requireInvitationAcceptedForSession(') >= 3, 'StaffController::workspace, redeemInventoryKey, and exitInventoryAccess must enforce invitation guard');
+    assertTrue(str_contains($delivery, 'requireInvitationAcceptedForSession('), 'DeliveryController::requireDeliveryViewer must enforce invitation guard');
+    assertTrue(substr_count($petRec, 'requireInvitationAcceptedForSession(') >= 2, 'PetStoreReceptionistController guards must enforce invitation guard');
+    assertTrue(str_contains($groomRec, 'requireInvitationAcceptedForSession(') && !str_contains($groomRec, "(bool)Session::get('is_super_admin')"), 'GroomingReceptionistController must enforce invitation guard and DB-backed isSuperAdmin()');
+    assertTrue(str_contains($vetRec, 'requireInvitationAcceptedForSession(') && !str_contains($vetRec, "(bool)Session::get('is_super_admin')"), 'VetClinicReceptionistController must enforce invitation guard and DB-backed isSuperAdmin()');
+    assertTrue(substr_count($manager, 'requireInvitationAcceptedForSession(') >= 3, 'ManagerController direct guards must enforce invitation guard');
 });
 
 echo "\nResults: {$passed} passed, {$failed} failed.\n";

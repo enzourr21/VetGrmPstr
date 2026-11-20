@@ -55,6 +55,11 @@ final class DeliveryController extends Controller
             $this->forbidden('An email-authenticated employee session is required.');
         }
 
+        $this->requireInvitationAcceptedForSession(
+            (int)$uid,
+            'Your employee account must complete invitation activation before accessing the delivery workspace.'
+        );
+
         $isSuper = $this->isSuperAdmin();
 
         $stmt = $this->db->prepare(

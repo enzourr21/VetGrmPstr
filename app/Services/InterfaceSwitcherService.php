@@ -54,10 +54,10 @@ final class InterfaceSwitcherService
         $uRow = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
 
         $accountActive = !empty($uRow) && (($uRow['account_status'] ?? '') === 'active');
-        $isSuperAdmin = $accountActive && self::isSuperAdminAccount($db, $uid);
-        if ($accountActive && !$isSuperAdmin && EmployeeInvitationService::isAccountBlockedByUnacceptedInvitation($db, $uid)) {
+        if ($accountActive && EmployeeInvitationService::isAccountBlockedByUnacceptedInvitation($db, $uid)) {
             $accountActive = false;
         }
+        $isSuperAdmin = $accountActive && self::hasSuperAdminGrant($db, $uid);
         $employeeActive = $accountActive
             && !empty($uRow['employee_id'])
             && (($uRow['employee_status'] ?? '') === 'active');
@@ -131,6 +131,14 @@ final class InterfaceSwitcherService
     }
 
     public static function isSuperAdminAccount(PDO $db, int $uid): bool
+    {
+        if (EmployeeInvitationService::isAccountBlockedByUnacceptedInvitation($db, $uid)) {
+            return false;
+        }
+        return self::hasSuperAdminGrant($db, $uid);
+    }
+
+    private static function hasSuperAdminGrant(PDO $db, int $uid): bool
     {
         $stmt = $db->prepare(
             "SELECT 1

@@ -59,6 +59,11 @@ final class ManagerController extends Controller
             $this->forbidden('An email-authenticated session is required.');
         }
 
+        $this->requireInvitationAcceptedForSession(
+            (int)$uid,
+            'Your employee account must complete invitation activation before accessing manager workspaces.'
+        );
+
         $queryUnitId = isset($_GET['unit_id']) && ctype_digit((string)$_GET['unit_id']) ? (int)$_GET['unit_id'] : null;
         $postUnitId = ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && isset($_POST['business_unit_id']) && ctype_digit((string)$_POST['business_unit_id'])
             ? (int)$_POST['business_unit_id']
@@ -196,6 +201,10 @@ final class ManagerController extends Controller
     {
         $uid = Session::get('user_id');
         if ($uid) {
+            $this->requireInvitationAcceptedForSession(
+                (int)$uid,
+                'Your employee account must complete invitation activation before accessing manager workspaces.'
+            );
             $isInvMode = (bool)Session::get('inventory_manager_mode', false);
             if ($isInvMode) {
                 $targetUnit = $routeUnitId ?? (isset($_GET['unit_id']) && ctype_digit((string)$_GET['unit_id']) ? (int)$_GET['unit_id'] : null);
@@ -5282,6 +5291,11 @@ final class ManagerController extends Controller
         if ($baseContext !== 'employee' || $activeContext === 'customer' || $authMethod === 'username') {
             $this->forbidden('An email-authenticated Business Manager session is required.');
         }
+
+        $this->requireInvitationAcceptedForSession(
+            (int)$uid,
+            'Your employee account must complete invitation activation before accessing manager workspaces.'
+        );
 
         $queryUnitId = isset($_GET['unit_id']) && ctype_digit((string)$_GET['unit_id']) ? (int)$_GET['unit_id'] : null;
         $requestedUnitId = $routeUnitId ?? $queryUnitId;

@@ -63,6 +63,11 @@ final class PetStoreReceptionistController extends Controller
             $this->forbidden('An email-authenticated Pet Store Receptionist session is required.');
         }
 
+        $this->requireInvitationAcceptedForSession(
+            (int)$uid,
+            'Your employee account must complete invitation activation before accessing receptionist workspaces.'
+        );
+
         $unitId = self::PET_STORE_UNIT_ID;
         $unitName = Units::PET_STORE;
 
@@ -1041,6 +1046,11 @@ final class PetStoreReceptionistController extends Controller
         if ($baseContext !== 'employee' || $activeContext === 'customer' || $authMethod === 'username') {
             $this->forbidden('An email-authenticated Pet Store Receptionist session is required.');
         }
+
+        $this->requireInvitationAcceptedForSession(
+            (int)$uid,
+            'Your employee account must complete invitation activation before accessing receptionist workspaces.'
+        );
 
         if ($this->isSuperAdmin()) {
             $accStmt = $this->db->prepare(

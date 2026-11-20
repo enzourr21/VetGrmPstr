@@ -296,7 +296,6 @@ final class AuthController extends Controller
 
         // Block accounts with unresolved, never-accepted employee invitation history (source of truth: employee_invitation).
         $blockedByInvitation = $acct
-            && !(bool)$acct['is_super_admin']
             && EmployeeInvitationService::isAccountBlockedByUnacceptedInvitation($this->db, (int)$acct['user_account_id']);
 
         if (!$acct || !$ok || $acct['account_status'] !== 'active' || $blockedByInvitation) {
@@ -427,6 +426,11 @@ final class AuthController extends Controller
         if (!$uid) {
             $this->redirect('/login');
         }
+        if (EmployeeInvitationService::isAccountBlockedByUnacceptedInvitation($this->db, (int)$uid)) {
+            Session::destroy();
+            Session::start();
+            $this->redirect('/login');
+        }
         $cid = self::ensureCustomerProfile(
             $this->db,
             (int)$uid,
@@ -453,6 +457,10 @@ final class AuthController extends Controller
         if (Session::get('base_context') !== 'employee' || Session::get('auth_method') !== 'email') {
             $this->forbidden('Customer-only sessions cannot enter employee or administrative workspaces.');
         }
+        $this->requireInvitationAcceptedForSession(
+            (int)$uid,
+            'Your employee account must complete invitation activation before accessing employee workspaces.'
+        );
         Session::set('active_context', 'employee');
         Session::forget('active_workspace_interface');
         $isSuper = $this->isSuperAdmin();

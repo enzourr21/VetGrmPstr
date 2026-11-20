@@ -65,7 +65,11 @@ final class VetClinicReceptionistController extends Controller
         }
 
         $uid = (int)$userId;
-        $isSuper = (bool)Session::get('is_super_admin');
+        $this->requireInvitationAcceptedForSession(
+            $uid,
+            'Your employee account must complete invitation activation before accessing receptionist workspaces.'
+        );
+        $isSuper = $this->isSuperAdmin();
 
         $empStmt = $this->db->prepare(
             "SELECT employee_id, first_name, last_name, position, business_unit_id, employee_status
