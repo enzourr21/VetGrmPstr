@@ -373,6 +373,46 @@ final class AuthController extends Controller
     }
 
     /**
+     * Resolve and validate the local-demo Super Administrator account before establishing a session.
+     * Refuses any account with unresolved, never-accepted employee invitation history.
+     *
+     * @return array{ok:bool, account?:array<string,mixed>, reason?:string, error?:string}
+     */
+    public static function resolveDemoSuperAdminAccount(PDO $db): array
+    {
+        $acct = $db->query(
+            "SELECT ua.user_account_id, ua.email, ua.username, ua.is_super_admin,
+                    (SELECT customer_id FROM customer c WHERE c.user_account_id = ua.user_account_id AND c.customer_status='active') AS customer_id,
+                    (SELECT employee_id FROM employee e WHERE e.user_account_id = ua.user_account_id AND e.employee_status='active') AS employee_id
+             FROM user_account ua
+             WHERE ua.is_super_admin = 1 AND ua.account_status = 'active'
+             ORDER BY ua.user_account_id LIMIT 1"
+        )->fetch();
+
+        if (!$acct) {
+            return [
+                'ok' => false,
+                'reason' => 'not_provisioned',
+                'error' => 'Super Administrator account has not been provisioned yet. Run php database/seed.php first.',
+            ];
+        }
+
+        $uid = (int)$acct['user_account_id'];
+        if (EmployeeInvitationService::isAccountBlockedByUnacceptedInvitation($db, $uid)) {
+            return [
+                'ok' => false,
+                'reason' => 'invitation_blocked',
+                'error' => 'Super Administrator demonstration sign-in is currently unavailable.',
+            ];
+        }
+
+        return [
+            'ok' => true,
+            'account' => $acct,
+        ];
+    }
+
+    /**
      * Controlled Demo Navigation Shortcut (Priority 1.6):
      * Routes directly to the Super Administrator entry point in local development/demo environments.
      */
@@ -383,20 +423,13 @@ final class AuthController extends Controller
             $this->forbidden('Demo shortcut is restricted to local development/demo environments.');
         }
 
-        $acct = $this->db->query(
-            "SELECT ua.user_account_id, ua.email, ua.username, ua.is_super_admin,
-                    (SELECT customer_id FROM customer c WHERE c.user_account_id = ua.user_account_id AND c.customer_status='active') AS customer_id,
-                    (SELECT employee_id FROM employee e WHERE e.user_account_id = ua.user_account_id AND e.employee_status='active') AS employee_id
-             FROM user_account ua
-             WHERE ua.is_super_admin = 1 AND ua.account_status = 'active'
-             ORDER BY ua.user_account_id LIMIT 1"
-        )->fetch();
-
-        if (!$acct) {
-            Session::flash('error', 'Super Administrator account has not been provisioned yet. Run php database/seed.php first.');
+        $resolved = self::resolveDemoSuperAdminAccount($this->db);
+        if (!$resolved['ok']) {
+            Session::flash('error', (string)$resolved['error']);
             $this->redirect('/login');
         }
 
+        $acct = $resolved['account'];
         $uid = (int)$acct['user_account_id'];
         Session::login([
             'user_id' => $uid,

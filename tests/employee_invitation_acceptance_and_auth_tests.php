@@ -18,7 +18,9 @@ require_once dirname(__DIR__) . '/app/Models/Units.php';
 require_once dirname(__DIR__) . '/app/Services/MailService.php';
 require_once dirname(__DIR__) . '/app/Services/EmployeeInvitationService.php';
 require_once dirname(__DIR__) . '/app/Services/InterfaceSwitcherService.php';
+require_once dirname(__DIR__) . '/app/Controllers/AuthController.php';
 
+use App\Controllers\AuthController;
 use App\Core\Controller;
 use App\Core\Database;
 use App\Services\EmployeeInvitationService;
@@ -450,6 +452,37 @@ final class FakeAcceptancePdo extends PDO
                 }
             }
             return [];
+        }
+
+        // 16. AuthController::resolveDemoSuperAdminAccount() query
+        if (str_contains($sql, 'WHERE ua.is_super_admin = 1 AND ua.account_status = \'active\'') && str_contains($sql, 'ORDER BY ua.user_account_id LIMIT 1')) {
+            $candidates = [];
+            foreach ($this->users as $ua) {
+                if ((int)$ua['is_super_admin'] === 1 && $ua['account_status'] === 'active') {
+                    $candidates[] = $ua;
+                }
+            }
+            usort($candidates, fn($a, $b) => (int)$a['user_account_id'] <=> (int)$b['user_account_id']);
+            if (!$candidates) {
+                return [];
+            }
+            $u = $candidates[0];
+            $uid = (int)$u['user_account_id'];
+            $empId = null;
+            foreach ($this->employees as $e) {
+                if ((int)$e['user_account_id'] === $uid && $e['employee_status'] === 'active') {
+                    $empId = (int)$e['employee_id'];
+                    break;
+                }
+            }
+            return [[
+                'user_account_id' => $uid,
+                'email' => $u['email'],
+                'username' => $u['username'],
+                'is_super_admin' => $u['is_super_admin'],
+                'customer_id' => null,
+                'employee_id' => $empId,
+            ]];
         }
 
         throw new RuntimeException("Unexpected SQL in FakeAcceptancePdo: {$sql}");
@@ -1013,6 +1046,52 @@ test('Checkpoint 4.1: Static guard-consistency verification across Core, Interfa
     assertTrue(str_contains($groomRec, 'requireInvitationAcceptedForSession(') && !str_contains($groomRec, "(bool)Session::get('is_super_admin')"), 'GroomingReceptionistController must enforce invitation guard and DB-backed isSuperAdmin()');
     assertTrue(str_contains($vetRec, 'requireInvitationAcceptedForSession(') && !str_contains($vetRec, "(bool)Session::get('is_super_admin')"), 'VetClinicReceptionistController must enforce invitation guard and DB-backed isSuperAdmin()');
     assertTrue(substr_count($manager, 'requireInvitationAcceptedForSession(') >= 3, 'ManagerController direct guards must enforce invitation guard');
+});
+
+test('Checkpoint 4.2: AuthController::demoSuperAdmin blocks Super Admin with unresolved invitation history while allowing directly provisioned Super Admin', function () {
+    ['pdo' => $pdo] = makeAcceptanceFixture();
+
+    // 1. Directly provisioned Super Administrator #1 (zero invitation history) succeeds
+    $allowed = AuthController::resolveDemoSuperAdminAccount($pdo);
+    assertTrue($allowed['ok'] === true, 'Direct-provisioned Super Admin without invitation history must be allowed to use demo shortcut');
+    assertTrue((int)$allowed['account']['user_account_id'] === 1, 'Expected Super Admin #1 to be selected');
+
+    // 2. Super Administrator #1 with unresolved invitation history (pending, expired, revoked) is blocked before Session::login()
+    foreach (['pending', 'expired', 'revoked'] as $status) {
+        ['pdo' => $blockedPdo] = makeAcceptanceFixture();
+        $blockedPdo->invitations[901] = [
+            'invitation_id' => 901,
+            'user_account_id' => 1,
+            'employee_id' => 1,
+            'business_unit_id' => 1,
+            'invited_email' => 'super@pawcarino.test',
+            'token_hash' => EmployeeInvitationService::hashToken(EmployeeInvitationService::generateToken()),
+            'status' => $status,
+            'expires_at' => '2026-11-22 12:00:00',
+            'accepted_at' => null,
+            'revoked_at' => $status === 'revoked' ? '2026-11-20 12:05:00' : null,
+            'created_at' => '2026-11-20 12:00:00',
+            'updated_at' => '2026-11-20 12:00:00',
+        ];
+        $blocked = AuthController::resolveDemoSuperAdminAccount($blockedPdo);
+        assertTrue($blocked['ok'] === false && ($blocked['reason'] ?? '') === 'invitation_blocked', "Super Admin with unresolved {$status} invitation must be blocked from demo access");
+        assertTrue(!str_contains((string)($blocked['error'] ?? ''), '@'), 'Demo block error must remain generic and non-enumerating');
+    }
+
+    // 3. Verify demoSuperAdmin() wiring preserves CSRF check, local-demo environment restriction, and checks resolveDemoSuperAdminAccount() before Session::login()
+    $authCtrl = (string)file_get_contents(dirname(__DIR__) . '/app/Controllers/AuthController.php');
+    $posMethod = strpos($authCtrl, 'public function demoSuperAdmin()');
+    assertTrue($posMethod !== false, 'demoSuperAdmin() must exist in AuthController');
+    $demoBody = substr($authCtrl, $posMethod, 1500);
+    $posCsrf = strpos($demoBody, 'CSRF::check()');
+    $posEnv = strpos($demoBody, 'self::isDemoEnvironmentAllowed()');
+    $posResolve = strpos($demoBody, 'self::resolveDemoSuperAdminAccount($this->db)');
+    $posLogin = strpos($demoBody, 'Session::login(');
+    assertTrue(
+        $posCsrf !== false && $posEnv !== false && $posResolve !== false && $posLogin !== false
+        && $posCsrf < $posEnv && $posEnv < $posResolve && $posResolve < $posLogin,
+        'demoSuperAdmin() must run CSRF::check -> isDemoEnvironmentAllowed -> resolveDemoSuperAdminAccount strictly before Session::login()'
+    );
 });
 
 echo "\nResults: {$passed} passed, {$failed} failed.\n";
