@@ -51,12 +51,18 @@ if (!empty($isPetStore)) {
               <span class="caption">ID #<?= (int)$emp['employee_id'] ?></span>
             </div>
             <?php
-              $isPendingInvite = !empty($emp['has_pending_invitation'])
-                  && ($emp['account_status'] ?? '') === 'active'
+              $isAccountAndEmpActive = ($emp['account_status'] ?? '') === 'active'
                   && ($emp['employee_status'] ?? '') === 'active';
+              $invState = isset($emp['invitation_state']) && is_string($emp['invitation_state'])
+                  ? $emp['invitation_state']
+                  : \App\Services\EmployeeInvitationService::classifyEmployeeInvitationState($emp);
             ?>
-            <?php if ($isPendingInvite): ?>
+            <?php if ($isAccountAndEmpActive && $invState === 'pending'): ?>
               <span class="status warn">Pending Invitation</span>
+            <?php elseif ($isAccountAndEmpActive && $invState === 'expired'): ?>
+              <span class="status neutral">Invitation Expired</span>
+            <?php elseif ($isAccountAndEmpActive && $invState === 'revoked'): ?>
+              <span class="status err">Invitation Revoked</span>
             <?php else: ?>
               <span class="status status-<?= e($emp['account_status']) ?>"><?= e($emp['account_status']) ?></span>
             <?php endif; ?>

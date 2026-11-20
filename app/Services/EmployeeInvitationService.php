@@ -1472,12 +1472,53 @@ final class EmployeeInvitationService
     }
 
     /**
-     * List employees scoped to $unitId (excluding Super Administrators) annotated with whether
-     * each employee currently has a genuinely pending, unexpired invitation in employee_invitation.
+     * Classify an employee's effective invitation state using their complete relevant
+     * invitation history (never email_verified_at IS NULL alone).
      *
-     * Pending invitees remain visible in the returned list so administrators can manage them.
-     * Legacy accounts with email_verified_at IS NULL and no pending invitation record are NOT
-     * flagged as pending.
+     * Returns one of:
+     *  - 'none': No invitation history (legacy or direct-provisioned account)
+     *  - 'accepted': At least one accepted invitation exists (even if older rows are expired/revoked)
+     *  - 'pending': Never accepted and at least one pending, unexpired invitation exists
+     *  - 'revoked': Invitation history exists, never accepted, no active pending invite, latest is revoked
+     *  - 'expired': Invitation history exists, never accepted, no active pending invite, latest is expired
+     *
+     * @param array<string, mixed> $employee
+     */
+    public static function classifyEmployeeInvitationState(array $employee): string
+    {
+        $hasAccepted = !empty($employee['has_accepted_invitation']);
+        if ($hasAccepted) {
+            return 'accepted';
+        }
+
+        $hasPending = !empty($employee['has_pending_invitation']);
+        if ($hasPending) {
+            return 'pending';
+        }
+
+        $hasAny = !empty($employee['has_any_invitation'])
+            || (isset($employee['latest_invitation_status']) && $employee['latest_invitation_status'] !== null && $employee['latest_invitation_status'] !== '');
+        if (!$hasAny) {
+            return 'none';
+        }
+
+        $latest = strtolower(trim((string)($employee['latest_invitation_status'] ?? '')));
+        if ($latest === 'accepted') {
+            return 'accepted';
+        }
+        if ($latest === 'revoked') {
+            return 'revoked';
+        }
+        return 'expired';
+    }
+
+    /**
+     * List employees scoped to $unitId (excluding Super Administrators) annotated with their
+     * complete invitation-history state from employee_invitation.
+     *
+     * Pending, expired, and revoked invitees remain visible in the returned list so
+     * administrators can manage them. Legacy accounts with no invitation history receive
+     * invitation_state = 'none' and preserve their existing classification.
      *
      * @return list<array<string, mixed>>
      */
@@ -1496,13 +1537,38 @@ final class EmployeeInvitationService
                         WHERE ar2.user_account_id = ua.user_account_id AND ar2.business_unit_id = ?) AS unit_roles,
                        EXISTS (
                            SELECT 1
-                           FROM employee_invitation ei
-                           WHERE ei.employee_id = e.employee_id
-                             AND ei.user_account_id = ua.user_account_id
-                             AND ei.business_unit_id = e.business_unit_id
-                             AND ei.status = 'pending'
-                             AND ei.expires_at > {$expiryExpr}
-                       ) AS has_pending_invitation
+                           FROM employee_invitation ei_any
+                           WHERE ei_any.employee_id = e.employee_id
+                             AND ei_any.user_account_id = ua.user_account_id
+                             AND ei_any.business_unit_id = e.business_unit_id
+                       ) AS has_any_invitation,
+                       EXISTS (
+                           SELECT 1
+                           FROM employee_invitation ei_acc
+                           WHERE ei_acc.employee_id = e.employee_id
+                             AND ei_acc.user_account_id = ua.user_account_id
+                             AND ei_acc.business_unit_id = e.business_unit_id
+                             AND ei_acc.status = 'accepted'
+                       ) AS has_accepted_invitation,
+                       EXISTS (
+                           SELECT 1
+                           FROM employee_invitation ei_pend
+                           WHERE ei_pend.employee_id = e.employee_id
+                             AND ei_pend.user_account_id = ua.user_account_id
+                             AND ei_pend.business_unit_id = e.business_unit_id
+                             AND ei_pend.status = 'pending'
+                             AND ei_pend.expires_at > {$expiryExpr}
+                       ) AS has_pending_invitation,
+                       (SELECT CASE
+                            WHEN ei_last.status = 'pending' AND ei_last.expires_at <= {$expiryExpr} THEN 'expired'
+                            ELSE ei_last.status
+                        END
+                        FROM employee_invitation ei_last
+                        WHERE ei_last.employee_id = e.employee_id
+                          AND ei_last.user_account_id = ua.user_account_id
+                          AND ei_last.business_unit_id = e.business_unit_id
+                        ORDER BY ei_last.invitation_id DESC
+                        LIMIT 1) AS latest_invitation_status
                 FROM employee e
                 JOIN user_account ua ON ua.user_account_id = e.user_account_id
                 WHERE ua.is_super_admin = 0
@@ -1514,18 +1580,29 @@ final class EmployeeInvitationService
         $params = [$unitId];
         if ($nowUtc !== null) {
             $params[] = $nowUtc;
+            $params[] = $nowUtc;
         }
         $params[] = $unitId;
         $params[] = $unitId;
 
         $stmt = $db->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        foreach ($rows as &$row) {
+            $state = self::classifyEmployeeInvitationState($row);
+            $row['invitation_state'] = $state;
+            $row['has_pending_invitation'] = $state === 'pending' ? 1 : 0;
+        }
+        unset($row);
+
+        return $rows;
     }
 
     /**
      * List genuinely pending, unexpired employee invitations for $unitId using employee_invitation
-     * as the single source of truth (never email_verified_at IS NULL alone).
+     * as the single source of truth. Excludes expired, revoked, accepted, and already-accepted
+     * employee histories.
      *
      * @return list<array<string, mixed>>
      */
@@ -1551,6 +1628,14 @@ final class EmployeeInvitationService
                   AND e.employee_status = 'active'
                   AND ei.status = 'pending'
                   AND ei.expires_at > {$expiryExpr}
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM employee_invitation ei_acc
+                      WHERE ei_acc.employee_id = e.employee_id
+                        AND ei_acc.user_account_id = ua.user_account_id
+                        AND ei_acc.business_unit_id = e.business_unit_id
+                        AND ei_acc.status = 'accepted'
+                  )
                 ORDER BY ei.created_at DESC, ei.invitation_id DESC";
 
         $params = [$unitId, $unitId];
@@ -1564,12 +1649,18 @@ final class EmployeeInvitationService
     }
 
     /**
-     * Summarize unit employee counts, excluding employees with a genuinely pending, unexpired
-     * invitation from active employee and active System Administrator counts while preserving
-     * total_employees visibility and legacy unverified account classification.
+     * Summarize unit employee counts, excluding employees with unresolved never-accepted
+     * invitation history (pending, expired, or revoked) from active employee and active
+     * System Administrator counts while preserving accepted and legacy account classifications.
      *
      * @param list<array<string, mixed>> $employees
-     * @return array{total_employees:int, active_employees:int, active_sysadmin_count:int, pending_invitation_count:int}
+     * @return array{
+     *   total_employees:int,
+     *   active_employees:int,
+     *   active_sysadmin_count:int,
+     *   pending_invitation_count:int,
+     *   unaccepted_invitation_count:int
+     * }
      */
     public static function summarizeUnitEmployeeCounts(array $employees): array
     {
@@ -1577,14 +1668,22 @@ final class EmployeeInvitationService
         $active = 0;
         $activeSysAdmins = 0;
         $pendingInvitations = 0;
+        $unacceptedInvitations = 0;
 
         foreach ($employees as $e) {
             $isAccountActive = (string)($e['account_status'] ?? '') === 'active';
             $isEmployeeActive = (string)($e['employee_status'] ?? '') === 'active';
-            $hasPendingInvitation = !empty($e['has_pending_invitation']);
+            $invState = isset($e['invitation_state']) && is_string($e['invitation_state'])
+                ? $e['invitation_state']
+                : self::classifyEmployeeInvitationState($e);
 
-            if ($isAccountActive && $isEmployeeActive && $hasPendingInvitation) {
-                $pendingInvitations++;
+            if (in_array($invState, ['pending', 'expired', 'revoked'], true)) {
+                if ($isAccountActive && $isEmployeeActive) {
+                    $unacceptedInvitations++;
+                    if ($invState === 'pending') {
+                        $pendingInvitations++;
+                    }
+                }
                 continue;
             }
 
@@ -1602,6 +1701,7 @@ final class EmployeeInvitationService
             'active_employees' => $active,
             'active_sysadmin_count' => $activeSysAdmins,
             'pending_invitation_count' => $pendingInvitations,
+            'unaccepted_invitation_count' => $unacceptedInvitations,
         ];
     }
 
