@@ -40,6 +40,7 @@ $r->post('/register/otp/verify', 'AuthController', 'registerVerifyOtp');
 $r->post('/logout', 'AuthController', 'logout');
 $r->get('/invitations/accept', 'InvitationController', 'showAcceptForm');
 $r->post('/invitations/accept', 'InvitationController', 'accept');
+$r->post('/invitations/switch-account', 'InvitationController', 'switchAccount');
 $r->post('/demo/super-admin', 'AuthController', 'demoSuperAdmin');
 $r->get('/customer-interface', 'AuthController', 'enterCustomerInterface');
 $r->get('/workspace', 'AuthController', 'returnToWorkspace');
@@ -250,8 +251,8 @@ $r->post('/sysadmin/units/{id}/employees', 'SysAdminController', 'storeEmployee'
 $r->post('/sysadmin/employees/{id}/roles', 'SysAdminController', 'updateEmployeeRoles');
 $r->post('/sysadmin/employees/{id}/status', 'SysAdminController', 'updateEmployeeStatus');
 $r->post('/sysadmin/employees/{id}/position', 'SysAdminController', 'updateEmployeePosition');
-$r->post('/sysadmin/employees/{id}/invitation/resend', 'SysAdminController', 'resendEmployeeInvitation');
-$r->post('/sysadmin/employees/{id}/invitation/revoke', 'SysAdminController', 'revokeEmployeeInvitation');
+$r->post('/sysadmin/invitations/{id}/resend', 'SysAdminController', 'resendEmployeeInvitation');
+$r->post('/sysadmin/invitations/{id}/revoke', 'SysAdminController', 'revokeEmployeeInvitation');
 $r->get('/sysadmin/activity', 'SysAdminController', 'activity');
 $r->get('/sysadmin/units/{id}/activity', 'SysAdminController', 'activity');
 $r->get('/sysadmin/positions', 'SysAdminController', 'positions');

@@ -262,6 +262,72 @@ try {
             throw new RuntimeException('Down migration does not drop employee_invitation.');
         }
     });
+
+    // --- 4. Static Migration 030 Structure, Delimiter & Fail-Closed Rollback Guard Check ---
+    check('Migration 030 parses cleanly with migrate.php statement splitter and includes fail-closed rollback guard', function () {
+        $upPath = dirname(__DIR__) . '/database/migrations/030_decouple_employee_invitations.sql';
+        $downPath = dirname(__DIR__) . '/database/migrations/down/030_decouple_employee_invitations.down.sql';
+        if (!is_file($upPath) || !is_file($downPath)) {
+            throw new RuntimeException('Migration 030 or down migration file missing.');
+        }
+
+        $upRaw = file_get_contents($upPath);
+        $downRaw = file_get_contents($downPath);
+        if ($upRaw === false || $downRaw === false) {
+            throw new RuntimeException('Could not read Migration 030 files.');
+        }
+
+        $stripAndSplit = static function (string $sql): array {
+            $sql = preg_replace('/^\s*--.*$/m', '', $sql) ?? '';
+            return array_values(array_filter(array_map('trim', explode(";\n", str_replace("\r\n", "\n", $sql) . "\n"))));
+        };
+
+        $upStmts = $stripAndSplit($upRaw);
+        $downStmts = $stripAndSplit($downRaw);
+
+        if (count($upStmts) < 8) {
+            throw new RuntimeException('Expected multiple discrete statements in Migration 030.');
+        }
+        if (count($downStmts) < 5) {
+            throw new RuntimeException('Expected multiple discrete statements in Migration 030 down.');
+        }
+
+        // Verify no multi-statement BEGIN...END routine splits illegally at ";\n" inside migrate.php splitter
+        $combinedUp = implode("\n;\n", $upStmts);
+        foreach ([
+            'CREATE PROCEDURE _p_mig_030_preflight()',
+            'CREATE TABLE IF NOT EXISTS employee_invitation_role',
+            'MODIFY COLUMN user_account_id INT UNSIGNED NULL DEFAULT NULL',
+            'MODIFY COLUMN employee_id INT UNSIGNED NULL DEFAULT NULL',
+            'ADD COLUMN first_name VARCHAR(100)',
+            'ADD COLUMN active_pending_email VARCHAR(255) GENERATED ALWAYS AS',
+            'ADD COLUMN active_pending_username VARCHAR(80) GENERATED ALWAYS AS',
+            'ADD UNIQUE KEY uk_emp_inv_active_pending_email (active_pending_email)',
+            'ADD UNIQUE KEY uk_emp_inv_active_pending_username (active_pending_username)',
+            'ADD CONSTRAINT chk_emp_inv_identity_pair CHECK',
+            'ADD CONSTRAINT chk_emp_inv_status_links CHECK',
+        ] as $needle) {
+            if (!str_contains($upRaw, $needle)) {
+                throw new RuntimeException("Missing expected Migration 030 DDL fragment: {$needle}");
+            }
+        }
+
+        foreach ($upStmts as $idx => $stmt) {
+            if (preg_match('/^\s*CREATE\s+PROCEDURE\b/i', $stmt) === 1 && !str_contains($stmt, 'SIGNAL SQLSTATE')) {
+                throw new RuntimeException("Preflight procedure statement #{$idx} appears truncated by migrate.php splitter.");
+            }
+        }
+
+        foreach ([
+            'CREATE PROCEDURE _p_mig_030_down_guard()',
+            'CALL _p_mig_030_down_guard()',
+            'DROP TABLE IF EXISTS employee_invitation_role',
+        ] as $needle) {
+            if (!str_contains($downRaw, $needle)) {
+                throw new RuntimeException("Missing expected Migration 030 down DDL fragment: {$needle}");
+            }
+        }
+    });
 } finally {
     EnvConfig::setEnvPathForTesting(null);
     @unlink($tempFile);

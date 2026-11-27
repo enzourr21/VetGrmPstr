@@ -494,9 +494,20 @@ final class AuthController extends Controller
             (int)$uid,
             'Your employee account must complete invitation activation before accessing employee workspaces.'
         );
+        $ctx = InterfaceSwitcherService::loadContext($this->db, (int)$uid);
+        $isSuper = !empty($ctx['is_super_admin']);
+        if (empty($ctx['account_active']) || (!$isSuper && empty($ctx['employee_active']))) {
+            Session::set('base_context', 'customer');
+            Session::set('active_context', 'customer');
+            Session::set('employee_id', null);
+            Session::set('is_super_admin', false);
+            Session::forget('inventory_manager_mode');
+            Session::forget('active_workspace_interface');
+            Session::flash('info', 'Your employee assignment is currently inactive. Continuing in Customer interface.');
+            $this->redirect('/');
+        }
         Session::set('active_context', 'employee');
         Session::forget('active_workspace_interface');
-        $isSuper = $this->isSuperAdmin();
         $landing = self::resolveEmployeeLandingFor($this->db, (int)$uid, $isSuper);
         $this->redirect($landing);
     }

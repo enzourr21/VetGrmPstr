@@ -87,10 +87,17 @@ function scalar(PDO $pdo, string $sql, array $args = []): mixed
 function cleanup(PDO $pdo, int $maxLogId): void
 {
     $uids = $pdo->query("SELECT user_account_id FROM user_account WHERE email LIKE 'ps.test.%@vetgrpet.local'")->fetchAll(PDO::FETCH_COLUMN);
+    $invIds = $pdo->query("SELECT invitation_id FROM employee_invitation WHERE invited_email LIKE 'ps.test.%@vetgrpet.local'")->fetchAll(PDO::FETCH_COLUMN);
     $pdo->exec('DELETE FROM audit_log WHERE log_id > ' . $maxLogId);
+    if ($invIds) {
+        $invIn = implode(',', array_map('intval', $invIds));
+        $pdo->exec("DELETE FROM employee_invitation_role WHERE invitation_id IN ($invIn)");
+        $pdo->exec("DELETE FROM employee_invitation WHERE invitation_id IN ($invIn)");
+    }
     if ($uids) {
         $in = implode(',', array_map('intval', $uids));
         $pdo->exec("DELETE FROM audit_log WHERE actor_user_id IN ($in)");
+        $pdo->exec("DELETE FROM employee_invitation WHERE user_account_id IN ($in)");
         $pdo->exec("DELETE FROM account_role WHERE user_account_id IN ($in)");
         $pdo->exec("DELETE FROM employee WHERE user_account_id IN ($in)");
         $pdo->exec("DELETE FROM customer WHERE user_account_id IN ($in)");
@@ -163,7 +170,7 @@ check('Pet Store clinical roles are not offered', !str_contains($emp['body'], 'd
 check('/sysadmin/positions redirects to employees for Pet Store', ($pet->get('/sysadmin/positions')['location'] ?? '') === '/sysadmin/employees');
 
 // ------------------------------------------------------------------ creation
-echo "\nSuite C: employee creation + activity records\n";
+echo "\nSuite C: employee invitation creation + activity records\n";
 $before = auditCount($pdo);
 $form = $pet->get('/sysadmin/employees');
 $res = $pet->post('/sysadmin/employees', [
@@ -175,23 +182,18 @@ $res = $pet->post('/sysadmin/employees', [
     'position' => 'Inventory Manager',
     'roles' => ['INVENTORY_MANAGER', 'DELIVERY_PERSONNEL'],
 ]);
-check('Creation with two roles succeeds (302)', $res['status'] === 302);
-$row = $pdo->query("SELECT ua.user_account_id, ua.password_hash, ua.email_verified_at, e.employee_id, e.position, e.business_unit_id FROM user_account ua JOIN employee e ON e.user_account_id=ua.user_account_id WHERE ua.email='ps.test.pat@vetgrpet.local'")->fetch();
-check('Employee saved in Pet Store with chosen position', (bool)$row && (int)$row['business_unit_id'] === $petUnit && $row['position'] === 'Inventory Manager');
-check('Invitation flow: user account created with secure unguessable hash (password not directly set)', (bool)$row && strlen((string)$row['password_hash']) > 50 && $row['email_verified_at'] === null);
-$roleRows = $pdo->prepare('SELECT r.role_name FROM account_role ar JOIN role r ON r.role_id=ar.role_id WHERE ar.user_account_id=? AND ar.business_unit_id=? ORDER BY 1');
-$roleRows->execute([$row['user_account_id'], $petUnit]);
-check('Both roles assigned', $roleRows->fetchAll(PDO::FETCH_COLUMN) === ['DELIVERY_PERSONNEL', 'INVENTORY_MANAGER']);
+check('Invitation creation with two roles succeeds (302)', $res['status'] === 302);
+$invRow = $pdo->query("SELECT * FROM employee_invitation WHERE invited_email='ps.test.pat@vetgrpet.local' ORDER BY invitation_id DESC LIMIT 1")->fetch();
+$prematureUa = (int)$pdo->query("SELECT COUNT(*) FROM user_account WHERE email='ps.test.pat@vetgrpet.local'")->fetchColumn();
+check('Invitation saved in Pet Store with chosen position and no premature user_account/employee', (bool)$invRow && (int)$invRow['business_unit_id'] === $petUnit && $invRow['position_name'] === 'Inventory Manager' && $invRow['user_account_id'] === null && $invRow['employee_id'] === null && $prematureUa === 0);
+$roleRows = $pdo->prepare('SELECT r.role_name FROM employee_invitation_role eir JOIN role r ON r.role_id=eir.role_id WHERE eir.invitation_id=? ORDER BY 1');
+$roleRows->execute([$invRow['invitation_id']]);
+check('Both intended roles stored on employee_invitation_role', $roleRows->fetchAll(PDO::FETCH_COLUMN) === ['DELIVERY_PERSONNEL', 'INVENTORY_MANAGER']);
 $sysUid = (int)scalar($pdo, "SELECT user_account_id FROM user_account WHERE email='sysadmin.petstore@vetgrpet.local'");
-$log = $pdo->prepare("SELECT * FROM audit_log WHERE action_code='employee.created' AND affected_employee_id=? ORDER BY log_id DESC LIMIT 1");
-$log->execute([$row['employee_id']]);
-$L = $log->fetch();
-check('Creation recorded with actor, affected employee and unit', (bool)$L && (int)$L['actor_user_id'] === $sysUid && (int)$L['business_unit_id'] === $petUnit);
-check('Creation record has details (position + roles) and no secrets', (bool)$L && str_contains((string)$L['new_value'], 'Inventory Manager') && !str_contains($L['summary'] . $L['new_value'], 'PatTester') && !str_contains($L['summary'] . $L['new_value'], '$2y$'));
-$invLog = $pdo->prepare("SELECT * FROM audit_log WHERE action_code='invitation.created' AND affected_employee_id=? ORDER BY log_id DESC LIMIT 1");
-$invLog->execute([$row['employee_id']]);
+$invLog = $pdo->prepare("SELECT * FROM audit_log WHERE action_code='invitation.created' AND target_type='employee_invitation' AND target_id=? ORDER BY log_id DESC LIMIT 1");
+$invLog->execute([$invRow['invitation_id']]);
 $iL = $invLog->fetch();
-check('Invitation recorded in audit_log with invitation.created action code', (bool)$iL && (int)$iL['actor_user_id'] === $sysUid && (int)$iL['business_unit_id'] === $petUnit);
+check('Invitation recorded in audit_log with actor, unit, target, and no secrets', (bool)$iL && (int)$iL['actor_user_id'] === $sysUid && (int)$iL['business_unit_id'] === $petUnit && !str_contains($iL['summary'] . (string)$iL['new_value'], '$2y$'));
 
 $before = auditCount($pdo);
 $form = $pet->get('/sysadmin/employees');
@@ -199,7 +201,7 @@ $dup = $pet->post('/sysadmin/employees', [
     'csrf_token' => $pet->csrf($form['body']), 'business_unit_id' => $petUnit, 'full_name' => 'Dup Person',
     'email' => 'ps.test.pat@vetgrpet.local', 'position' => 'Receptionist', 'roles' => ['RECEPTIONIST'],
 ]);
-check('Failed creation (duplicate email) returns 422 and records nothing', $dup['status'] === 422 && auditCount($pdo) === $before);
+check('Failed creation (duplicate pending invitation email) returns 422 and records nothing', $dup['status'] === 422 && auditCount($pdo) === $before);
 check('Failed creation keeps chosen roles as chips after error', str_contains($dup['body'], 'data-role-chip="RECEPTIONIST"'));
 $bad = $pet->post('/sysadmin/employees', [
     'csrf_token' => $pet->csrf($dup['body']), 'business_unit_id' => $petUnit, 'full_name' => 'Bad Role',
@@ -207,8 +209,9 @@ $bad = $pet->post('/sysadmin/employees', [
 ]);
 check('Clinical role cannot be assigned in Pet Store (422, no audit)', $bad['status'] === 422 && auditCount($pdo) === $before);
 
-// Test automatic initial system role assignment (without passing roles)
+// Test automatic initial system role assignment on invitation (without passing roles)
 $autoEmail = 'ps.test.autorole@vetgrpet.local';
+$pdo->exec("DELETE FROM employee_invitation WHERE invited_email='$autoEmail'");
 $pdo->exec("DELETE FROM user_account WHERE email='$autoEmail'");
 $autoForm = $pet->get('/sysadmin/employees');
 $autoRes = $pet->post('/sysadmin/employees', [
@@ -219,9 +222,26 @@ $autoRes = $pet->post('/sysadmin/employees', [
     'position' => 'Inventory Manager',
 ]);
 check('Creation without specifying roles automatically assigns designated initial role (302)', $autoRes['status'] === 302);
-$autoRow = $pdo->query("SELECT ua.user_account_id, e.employee_id, e.position FROM user_account ua JOIN employee e ON e.user_account_id=ua.user_account_id WHERE ua.email='$autoEmail'")->fetch();
-$autoRoles = $pdo->query("SELECT r.role_name FROM account_role ar JOIN role r ON r.role_id=ar.role_id WHERE ar.user_account_id={$autoRow['user_account_id']}")->fetchAll(PDO::FETCH_COLUMN);
-check('Designated initial role INVENTORY_MANAGER assigned automatically', $autoRoles === ['INVENTORY_MANAGER']);
+$autoInv = $pdo->query("SELECT invitation_id FROM employee_invitation WHERE invited_email='$autoEmail' ORDER BY invitation_id DESC LIMIT 1")->fetch();
+$autoRoles = $pdo->query("SELECT r.role_name FROM employee_invitation_role eir JOIN role r ON r.role_id=eir.role_id WHERE eir.invitation_id=" . (int)$autoInv['invitation_id'])->fetchAll(PDO::FETCH_COLUMN);
+check('Designated initial role INVENTORY_MANAGER assigned automatically on invitation', $autoRoles === ['INVENTORY_MANAGER']);
+
+// Provision direct employee fixture for Suite D (account/employee status, roles, positions, roster)
+$acceptedEmpRes = \App\Models\AdminAccountService::createEmployeeAccount([
+    'full_name' => 'Pat Tester',
+    'email' => 'ps.test.accepted@vetgrpet.local',
+    'username' => 'ps_test_accepted',
+    'password' => 'AcceptedPass!2026',
+    'password_confirm' => 'AcceptedPass!2026',
+    'business_unit_id' => $petUnit,
+    'position' => 'Inventory Manager',
+    'roles' => ['INVENTORY_MANAGER', 'DELIVERY_PERSONNEL'],
+], null, $sysUid, $pdo);
+check('Direct employee fixture provisioned for roster/status tests', $acceptedEmpRes['ok'] === true);
+$row = [
+    'user_account_id' => (int)$acceptedEmpRes['user_id'],
+    'employee_id' => (int)$acceptedEmpRes['employee_id'],
+];
 
 // ------------------------------------------------------------------ status
 echo "\nSuite D: account status, roles, positions\n";
@@ -230,7 +250,7 @@ $pg = $pet->get('/sysadmin/employees');
 $tok = $pet->csrf($pg['body']);
 $b = auditCount($pdo);
 $pet->post("/sysadmin/employees/$eid/status", ['csrf_token' => $tok, 'business_unit_id' => $petUnit, 'account_status' => 'inactive']);
-check('Deactivation updates account and employee status', scalar($pdo, 'SELECT account_status FROM user_account WHERE user_account_id=?', [$row['user_account_id']]) === 'inactive' && scalar($pdo, 'SELECT employee_status FROM employee WHERE employee_id=?', [$eid]) === 'inactive');
+check('Deactivation updates employee_status while preserving user_account customer login', scalar($pdo, 'SELECT account_status FROM user_account WHERE user_account_id=?', [$row['user_account_id']]) === 'active' && scalar($pdo, 'SELECT employee_status FROM employee WHERE employee_id=?', [$eid]) === 'inactive');
 $L = $pdo->query("SELECT * FROM audit_log WHERE action_code='employee.deactivated' AND affected_employee_id=$eid")->fetch();
 check('Deactivation logged with previous/new value and actor', (bool)$L && $L['old_value'] === 'active' && $L['new_value'] === 'inactive' && (int)$L['actor_user_id'] === $sysUid);
 $pet->post("/sysadmin/employees/$eid/status", ['csrf_token' => $tok, 'business_unit_id' => $petUnit, 'account_status' => 'active']);
@@ -290,7 +310,7 @@ check('Roster displays up to 6 employees per page', substr_count($pg['body'], 'c
 check('Centered pagination container present', str_contains($pg['body'], 'class="pagination-centered"'));
 check('Pagination format matches Previous · Page 1 of N · Next', (bool)preg_match('/Page 1 of \d+/', $pg['body']));
 check('Previous button disabled on page 1', (bool)preg_match('/<button[^>]*class="[^"]*pagination-prev[^"]*"[^>]*disabled/i', $pg['body']));
-check('Roster items keep email, username, position, roles, status and actions', str_contains($pg['body'], 'ps.test.pat@vetgrpet.local') && str_contains($pg['body'], 'Default position') && str_contains($pg['body'], 'Roles in unit') && str_contains($pg['body'], 'Change position') && str_contains($pg['body'], 'Deactivate'));
+check('Roster items keep email, username, position, roles, status and actions', str_contains($pg['body'], 'ps.test.accepted@vetgrpet.local') && str_contains($pg['body'], 'Default position') && str_contains($pg['body'], 'Roles in unit') && str_contains($pg['body'], 'Change position') && str_contains($pg['body'], 'Deactivate'));
 
 // ------------------------------------------------------------------ activity page
 echo "\nSuite F: Administrative Activity Log page\n";

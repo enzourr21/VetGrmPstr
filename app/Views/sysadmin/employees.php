@@ -13,17 +13,96 @@ if (!empty($isPetStore)) {
         }
         return '/sysadmin/employees?' . http_build_query($params);
     };
-    ?>
+$unitInvitations = $unitInvitations ?? [];
+?>
 <div class="page-head page-header" style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;">
   <div>
     <p class="eyebrow"><?= e($unitName) ?> · Employee Directory</p>
     <h1><?= e($unitName) ?> Employees</h1>
-    <p class="muted">Manage employee accounts, default positions, and system roles within <strong><?= e($unitName) ?></strong>.</p>
+    <p class="muted">Manage actual employee accounts, default positions, system roles, and pending invitations within <strong><?= e($unitName) ?></strong>.</p>
   </div>
   <div class="page-head-actions" style="margin-top: 0.25rem;">
     <button type="button" class="btn" data-modal-open="add-employee-modal">+ Add Employee</button>
   </div>
 </div>
+
+<section class="card roster-card" style="margin-bottom: 1.5rem;">
+  <div class="row" style="justify-content: space-between; margin-bottom: 1.25rem; flex-wrap: wrap; gap: 0.75rem;">
+    <div>
+      <h2 style="margin: 0 0 0.25rem;">Pending &amp; Expired Invitations (<?= count($unitInvitations) ?>)</h2>
+      <p class="caption" style="margin: 0;">Invitations do not create employee accounts until accepted by the recipient.</p>
+    </div>
+  </div>
+
+  <?php if (!$unitInvitations): ?>
+    <div class="empty">No pending or expired invitations for <?= e($unitName) ?>.</div>
+  <?php else: ?>
+    <div class="roster-list">
+      <?php foreach ($unitInvitations as $inv):
+        $invId = (int)$inv['invitation_id'];
+        $invFullName = trim((string)$inv['first_name'] . ' ' . (string)$inv['last_name']);
+        $invActionState = (string)($inv['action_state'] ?? (((string)($inv['invitation_state'] ?? '') === 'pending') ? 'pending_invitation' : 'expired_invitation'));
+        $emailSubStatus = (string)($inv['email_submission_status'] ?? 'pending');
+        $isExistingCust = !empty($inv['is_existing_customer_email']);
+      ?>
+        <article class="roster-item">
+          <header class="roster-item-head">
+            <div>
+              <strong><?= e($invFullName) ?></strong>
+              <span class="caption">Invitation #<?= $invId ?></span>
+              <?php if ($isExistingCust): ?>
+                <span class="status neutral">Existing Customer</span>
+              <?php endif; ?>
+            </div>
+            <?php if ($invActionState === 'pending_invitation'): ?>
+              <span class="status warn">Pending Invitation</span>
+            <?php else: ?>
+              <span class="status neutral">Invitation Expired</span>
+            <?php endif; ?>
+          </header>
+          <dl class="roster-meta">
+            <div><dt>Email</dt><dd><?= e($inv['invited_email']) ?></dd></div>
+            <div><dt>Username</dt><dd><code><?= e($inv['username'] ?: '—') ?></code></dd></div>
+            <div><dt>Intended position</dt><dd><?= e($inv['position_name']) ?></dd></div>
+            <div><dt>Intended roles</dt><dd><?= e($inv['unit_roles'] ?: '—') ?></dd></div>
+            <div>
+              <dt>Invitation email</dt>
+              <dd>
+                <?php if ($emailSubStatus === 'submitted'): ?>
+                  <span class="status ok">Email sent</span>
+                <?php elseif ($emailSubStatus === 'failed'): ?>
+                  <span class="status err">Delivery failed</span>
+                <?php else: ?>
+                  <span class="status neutral">Pending delivery</span>
+                <?php endif; ?>
+              </dd>
+            </div>
+          </dl>
+          <div class="roster-actions">
+            <?php if ($invActionState === 'pending_invitation'): ?>
+              <form method="post" action="/sysadmin/invitations/<?= $invId ?>/resend<?= $unitQuery ?>" data-confirm-action="Resend invitation to <?= e($invFullName) ?>? This will invalidate the previous invitation link." data-prevent-double-submit="Sending...">
+                <?= \App\Core\CSRF::field() ?>
+                <input type="hidden" name="business_unit_id" value="<?= (int)$unitId ?>">
+                <button type="submit" class="btn secondary btn-sm">Resend Invitation</button>
+              </form>
+              <form method="post" action="/sysadmin/invitations/<?= $invId ?>/revoke<?= $unitQuery ?>" data-confirm-action="Revoke the pending invitation for <?= e($invFullName) ?>? The existing invitation link will no longer work." data-prevent-double-submit="Revoking...">
+                <?= \App\Core\CSRF::field() ?>
+                <input type="hidden" name="business_unit_id" value="<?= (int)$unitId ?>">
+                <button type="submit" class="btn ghost btn-sm">Revoke Invitation</button>
+              </form>
+            <?php else: ?>
+              <form method="post" action="/sysadmin/invitations/<?= $invId ?>/resend<?= $unitQuery ?>" data-confirm-action="Resend invitation to <?= e($invFullName) ?>? This will issue a new invitation link for the expired invitation." data-prevent-double-submit="Sending...">
+                <?= \App\Core\CSRF::field() ?>
+                <input type="hidden" name="business_unit_id" value="<?= (int)$unitId ?>">
+                <button type="submit" class="btn secondary btn-sm">Resend Invitation</button>
+              </form>
+            <?php endif; ?>
+          </div>
+        </article>
+      <?php endforeach; ?>
+    </div>
+  <?php endif; ?>
+</section>
 
 <section class="card roster-card">
   <div class="row" style="justify-content: space-between; margin-bottom: 1.25rem; flex-wrap: wrap; gap: 0.75rem;">
@@ -51,39 +130,21 @@ if (!empty($isPetStore)) {
               <span class="caption">ID #<?= (int)$emp['employee_id'] ?></span>
             </div>
             <?php
-              $invState = isset($emp['invitation_state']) && is_string($emp['invitation_state'])
-                  ? $emp['invitation_state']
-                  : \App\Services\EmployeeInvitationService::classifyEmployeeInvitationState($emp);
-              if (method_exists(\App\Services\EmployeeInvitationService::class, 'classifyEmployeeRosterActionState')) {
-                  $actionState = \App\Services\EmployeeInvitationService::classifyEmployeeRosterActionState($emp);
-              } else {
-                  $isAccountAndEmpActive = ($emp['account_status'] ?? '') === 'active'
-                      && ($emp['employee_status'] ?? '') === 'active';
-                  if ($isAccountAndEmpActive && $invState === 'pending') {
-                      $actionState = 'pending_invitation';
-                  } elseif ($isAccountAndEmpActive && $invState === 'expired') {
-                      $actionState = 'expired_invitation';
-                  } elseif ($isAccountAndEmpActive && $invState === 'revoked') {
-                      $actionState = 'revoked_invitation';
-                  } elseif ($isAccountAndEmpActive) {
-                      $actionState = 'active';
-                  } else {
-                      $actionState = 'inactive';
-                  }
-              }
-              $isUnresolvedInvitation = in_array($actionState, ['pending_invitation', 'expired_invitation', 'revoked_invitation'], true);
+              $actionState = \App\Services\EmployeeInvitationService::classifyEmployeeRosterActionState($emp);
               $empFullName = $emp['first_name'] . ' ' . $emp['last_name'];
             ?>
-            <?php if ($actionState === 'pending_invitation'): ?>
+            <?php if ($actionState === 'suspended'): ?>
+              <span class="status err">suspended</span>
+            <?php elseif ($actionState === 'inactive'): ?>
+              <span class="status status-inactive">inactive</span>
+            <?php elseif ($actionState === 'pending_invitation'): ?>
               <span class="status warn">Pending Invitation</span>
             <?php elseif ($actionState === 'expired_invitation'): ?>
               <span class="status neutral">Invitation Expired</span>
             <?php elseif ($actionState === 'revoked_invitation'): ?>
               <span class="status err">Invitation Revoked</span>
-            <?php elseif ($actionState === 'inactive' && ($emp['account_status'] ?? '') !== 'suspended'): ?>
-              <span class="status status-inactive">inactive</span>
             <?php else: ?>
-              <span class="status status-<?= e($emp['account_status']) ?>"><?= e($emp['account_status']) ?></span>
+              <span class="status status-active">active</span>
             <?php endif; ?>
           </header>
           <dl class="roster-meta">
@@ -91,50 +152,9 @@ if (!empty($isPetStore)) {
             <div><dt>Username</dt><dd><code><?= e($emp['username'] ?? '—') ?></code></dd></div>
             <div><dt>Default position</dt><dd><?= e($emp['position']) ?></dd></div>
             <div><dt>Roles in unit</dt><dd><?= e($emp['unit_roles'] ?: '—') ?></dd></div>
-            <?php if ($isUnresolvedInvitation):
-              $emailSubStatus = (string)($emp['latest_email_submission_status'] ?? 'pending');
-            ?>
-              <div>
-                <dt>Invitation email</dt>
-                <dd>
-                  <?php if ($emailSubStatus === 'submitted'): ?>
-                    <span class="status ok">Email sent</span>
-                  <?php elseif ($emailSubStatus === 'failed'): ?>
-                    <span class="status err">Delivery failed</span>
-                  <?php else: ?>
-                    <span class="status neutral">Pending delivery</span>
-                  <?php endif; ?>
-                </dd>
-              </div>
-            <?php endif; ?>
           </dl>
           <?php if ($isHome): ?>
-            <?php if ($actionState === 'pending_invitation'): ?>
-              <div class="roster-actions">
-                <form method="post" action="/sysadmin/employees/<?= (int)$emp['employee_id'] ?>/invitation/resend<?= $unitQuery ?>" data-confirm-action="Resend invitation to <?= e($empFullName) ?>? This will invalidate the previous invitation link." data-prevent-double-submit="Sending...">
-                  <?= \App\Core\CSRF::field() ?>
-                  <input type="hidden" name="business_unit_id" value="<?= (int)$unitId ?>">
-                  <button type="submit" class="btn secondary btn-sm">Resend Invitation</button>
-                </form>
-                <form method="post" action="/sysadmin/employees/<?= (int)$emp['employee_id'] ?>/invitation/revoke<?= $unitQuery ?>" data-confirm-action="Revoke the pending invitation for <?= e($empFullName) ?>? The existing invitation link will no longer work." data-prevent-double-submit="Revoking...">
-                  <?= \App\Core\CSRF::field() ?>
-                  <input type="hidden" name="business_unit_id" value="<?= (int)$unitId ?>">
-                  <button type="submit" class="btn ghost btn-sm">Revoke Invitation</button>
-                </form>
-              </div>
-            <?php elseif ($actionState === 'expired_invitation'): ?>
-              <div class="roster-actions">
-                <form method="post" action="/sysadmin/employees/<?= (int)$emp['employee_id'] ?>/invitation/resend<?= $unitQuery ?>" data-confirm-action="Resend invitation to <?= e($empFullName) ?>? This will issue a new invitation link for the expired invitation." data-prevent-double-submit="Sending...">
-                  <?= \App\Core\CSRF::field() ?>
-                  <input type="hidden" name="business_unit_id" value="<?= (int)$unitId ?>">
-                  <button type="submit" class="btn secondary btn-sm">Resend Invitation</button>
-                </form>
-              </div>
-            <?php elseif ($actionState === 'revoked_invitation'): ?>
-              <div class="roster-actions">
-                <span class="caption muted">Invitation revoked — no active invitation actions available.</span>
-              </div>
-            <?php elseif ($actionState === 'active'): ?>
+            <?php if ($actionState === 'active'): ?>
               <div class="roster-actions">
                 <form method="post" action="/sysadmin/employees/<?= (int)$emp['employee_id'] ?>/position<?= $unitQuery ?>" class="roster-position-form">
                   <?= \App\Core\CSRF::field() ?>
@@ -155,7 +175,7 @@ if (!empty($isPetStore)) {
                   <button type="submit" class="btn ghost btn-sm">Change position</button>
                 </form>
                 <?php if (!$isSelf): ?>
-                  <form method="post" action="/sysadmin/employees/<?= (int)$emp['employee_id'] ?>/status<?= $unitQuery ?>" data-confirm-action="Deactivate the account of <?= e($empFullName) ?>?">
+                  <form method="post" action="/sysadmin/employees/<?= (int)$emp['employee_id'] ?>/status<?= $unitQuery ?>" data-confirm-action="Deactivate the employee profile of <?= e($empFullName) ?>? Their customer account access will remain intact.">
                     <?= \App\Core\CSRF::field() ?>
                     <input type="hidden" name="business_unit_id" value="<?= (int)$unitId ?>">
                     <input type="hidden" name="account_status" value="inactive">
@@ -163,14 +183,22 @@ if (!empty($isPetStore)) {
                   </form>
                 <?php endif; ?>
               </div>
-            <?php elseif ($actionState === 'inactive' && !$isSelf && ($emp['account_status'] ?? '') !== 'suspended' && (($emp['account_status'] ?? '') === 'inactive' || ($emp['employee_status'] ?? '') === 'inactive') && !in_array($invState, ['pending', 'expired', 'revoked'], true)): ?>
+            <?php elseif ($actionState === 'inactive' && !$isSelf): ?>
               <div class="roster-actions">
-                <form method="post" action="/sysadmin/employees/<?= (int)$emp['employee_id'] ?>/status<?= $unitQuery ?>" data-confirm-action="Reactivate the account of <?= e($empFullName) ?>?">
+                <form method="post" action="/sysadmin/employees/<?= (int)$emp['employee_id'] ?>/status<?= $unitQuery ?>" data-confirm-action="Reactivate the employee profile of <?= e($empFullName) ?>?">
                   <?= \App\Core\CSRF::field() ?>
                   <input type="hidden" name="business_unit_id" value="<?= (int)$unitId ?>">
                   <input type="hidden" name="account_status" value="active">
                   <button type="submit" class="btn secondary btn-sm">Reactivate</button>
                 </form>
+              </div>
+            <?php elseif ($actionState === 'suspended'): ?>
+              <div class="roster-actions">
+                <span class="caption muted">Account globally suspended by Super Administrator.</span>
+              </div>
+            <?php elseif (in_array($actionState, ['pending_invitation', 'expired_invitation', 'revoked_invitation'], true)): ?>
+              <div class="roster-actions">
+                <span class="caption muted">Legacy unaccepted invitation quarantined — use Pending Invitations or administrator cleanup.</span>
               </div>
             <?php endif; ?>
           <?php endif; ?>

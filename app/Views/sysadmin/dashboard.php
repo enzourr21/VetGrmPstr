@@ -197,7 +197,8 @@ foreach ($positions as $pos) {
                 </td>
                 <td><?= e($emp['position']) ?></td>
                 <td><span class="caption"><?= e($emp['unit_roles'] ?: '—') ?></span></td>
-                <td><span class="status status-<?= e($emp['account_status']) ?>"><?= e($emp['account_status']) ?></span></td>
+                <?php $empBadgeStatus = ($emp['account_status'] ?? '') === 'suspended' ? 'suspended' : (string)($emp['employee_status'] ?? $emp['account_status']); ?>
+                <td><span class="status status-<?= e($empBadgeStatus) ?>"><?= e($empBadgeStatus) ?></span></td>
               </tr>
             <?php endforeach; ?>
           </tbody>

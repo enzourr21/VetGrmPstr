@@ -70,6 +70,7 @@ final class Audit
         'role' => ['Role assigned / removed', ['role.assigned', 'role.removed', 'sysadmin.roles_updated']],
         'position_changed' => ['Employee default position changed', ['employee.position_changed']],
         'position_status' => ['Position created / activated / deactivated', ['sysadmin.position_created', 'sysadmin.position_toggled']],
+        'invitation' => ['Employee invitations', ['invitation.created', 'invitation.resent', 'invitation.accepted', 'invitation.expired', 'invitation.revoked']],
     ];
 
     /**

@@ -247,41 +247,35 @@ final class AdminAccountService
     }
 
     /**
-     * Validate and create an employee / System Administrator account atomically inside a DB transaction.
+     * Validate normalized employee / invitation provisioning input without mutating database state.
+     * Does not check user_account email/username uniqueness so invitation flows can distinguish
+     * unregistered recipients from eligible existing customer accounts.
      *
-     * Invitation provisioning is used by unit-scoped System Administrator interface flows
-     * ($enforcedUnitId !== null and !empty($input['is_invitation'])), authorized for both
-     * business-unit System Administrators and Super Administrators via EmployeeInvitationService.
-     * Direct Super Administrator provisioning ($enforcedUnitId === null) always uses direct
-     * password-based creation without invitations.
-     *
-     * @param array $input [full_name, first_name, last_name, email, username, business_unit_id, position, roles (ids or names), password, phone, is_invitation]
-     * @param int|null $enforcedUnitId If set (for System Admin), forces and validates business_unit_id === $enforcedUnitId
-     * @param int|null $actorUserId User ID performing the creation
-     * @param PDO|null $db Optional PDO connection override (defaults to Database::pdo())
-     * @param EmployeeInvitationService|null $invitationService Optional invitation service override for testing
      * @return array{
-     *   ok:bool,
-     *   status?:int,
-     *   errors:array<string,string>,
-     *   user_id?:int,
-     *   employee_id?:int,
-     *   is_invitation?:bool,
-     *   invitation_id?:int,
-     *   invitation_status?:string,
-     *   invitation_expires_at?:string,
-     *   email_submission_status?:string,
-     *   email_submitted?:bool,
-     *   email_error?:?string,
-     *   email_status_code?:int
+     *   ok: bool,
+     *   errors: array<string, string>,
+     *   clean?: array{
+     *     first_name: string,
+     *     last_name: string,
+     *     full_name: string,
+     *     email: string,
+     *     username: ?string,
+     *     phone: ?string,
+     *     business_unit_id: int,
+     *     business_unit_name: string,
+     *     position_id: ?int,
+     *     position_name: string,
+     *     role_ids: list<int>,
+     *     role_names: list<string>,
+     *     password: string
+     *   }
      * }
      */
-    public static function createEmployeeAccount(
+    public static function validateEmployeeProvisioningInput(
         array $input,
         ?int $enforcedUnitId = null,
-        ?int $actorUserId = null,
         ?PDO $db = null,
-        ?EmployeeInvitationService $invitationService = null
+        bool $requirePassword = true
     ): array {
         $db = $db ?? Database::pdo();
         $errors = [];
@@ -305,31 +299,17 @@ final class AdminAccountService
             $errors['full_name'] = 'First and last name must each be at most 100 characters.';
         }
 
-        // 2. Email validation & uniqueness
+        // 2. Email format & normalization
         $email = strtolower(trim((string)($input['email'] ?? '')));
         if (!self::isValidEmail($email)) {
             $errors['email'] = 'Enter a valid email address (for example, name@vetgrpet.local).';
-        } else {
-            $chk = $db->prepare('SELECT user_account_id FROM user_account WHERE email = ?');
-            $chk->execute([$email]);
-            if ($chk->fetchColumn()) {
-                $errors['email'] = 'An account with this email address already exists.';
-            }
         }
 
-        // 3. Optional username validation & uniqueness
+        // 3. Optional username format & normalization
         $usernameRaw = trim((string)($input['username'] ?? ''));
         $username = $usernameRaw !== '' ? strtolower($usernameRaw) : null;
-        if ($username !== null) {
-            if (!preg_match('/^[a-z0-9_.]{3,60}$/', $username)) {
-                $errors['username'] = 'Username must be 3–60 characters using only letters, numbers, underscores, or dots.';
-            } else {
-                $uChk = $db->prepare('SELECT user_account_id FROM user_account WHERE username = ?');
-                $uChk->execute([$username]);
-                if ($uChk->fetchColumn()) {
-                    $errors['username'] = 'This username is already taken.';
-                }
-            }
+        if ($username !== null && !preg_match('/^[a-z0-9_.]{3,60}$/', $username)) {
+            $errors['username'] = 'Username must be 3–60 characters using only letters, numbers, underscores, or dots.';
         }
 
         // 4. Business unit validation
@@ -349,6 +329,7 @@ final class AdminAccountService
 
         // 5. Default position validation against the assigned business unit
         $isSysAdminProvisioning = !empty($input['is_system_admin_provisioning']);
+        $positionId = null;
         if ($isSysAdminProvisioning) {
             // Authoritatively derive position from the validated business unit (never trust client-submitted position)
             $position = $unit ? self::systemAdminPositionForUnit((string)$unit['business_unit_name']) : '';
@@ -358,21 +339,21 @@ final class AdminAccountService
                 $errors['position'] = 'Select a valid default position for the assigned business unit.';
             } elseif ($unit) {
                 $posChk = $db->prepare(
-                    'SELECT position_name FROM business_position WHERE business_unit_id = ? AND position_name = ? AND position_status = "active"'
+                    'SELECT position_id, position_name FROM business_position WHERE business_unit_id = ? AND position_name = ? AND position_status = "active"'
                 );
                 $posChk->execute([$unit['business_unit_id'], $position]);
-                $matchedPos = $posChk->fetchColumn();
-                if (!$matchedPos) {
+                $matchedRow = $posChk->fetch();
+                if (!$matchedRow) {
                     $errors['position'] = "The position '$position' is not an active position in {$unit['business_unit_name']}.";
                 } else {
-                    $position = (string)$matchedPos;
+                    $positionId = isset($matchedRow['position_id']) ? (int)$matchedRow['position_id'] : null;
+                    $position = (string)$matchedRow['position_name'];
                 }
             }
         }
 
         // 6. System roles validation against business unit & non-Super-Admin rule
         if ($isSysAdminProvisioning) {
-            // System Administrator provisioning always assigns SYSTEM_ADMINISTRATOR scoped to the selected business unit
             $rawRoles = ['SYSTEM_ADMINISTRATOR'];
         } else {
             $rawRoles = $input['roles'] ?? ($input['role_ids'] ?? []);
@@ -381,7 +362,6 @@ final class AdminAccountService
             }
             $rawRoles = array_values(array_unique(array_filter(array_map(fn($v) => trim((string)$v), $rawRoles), fn($v) => $v !== '')));
 
-            // Automatic initial system role assignment during employee creation
             if ($position !== '' && $unit) {
                 $initRoles = self::initialRolesForPosition($position, $unit['business_unit_name'], $db);
                 foreach (array_reverse($initRoles) as $initRole) {
@@ -411,28 +391,9 @@ final class AdminAccountService
                     $errors['roles'] = 'One or more selected roles do not exist.';
                     break;
                 }
-                if ($rObj['role_name'] === 'SUPER_ADMINISTRATOR') {
-                    $errors['roles'] = 'Cannot assign the Super Administrator role through employee account creation.';
-                    break;
-                }
-                if ($unit && $unit['business_unit_name'] !== Units::VET_CLINIC && in_array($rObj['role_name'], self::CLINICAL_ROLES, true)) {
-                    $errors['roles'] = "The clinical role {$rObj['role_name']} can only be assigned in the Veterinary Clinic business unit.";
-                    break;
-                }
-                if ($unit && $unit['business_unit_name'] !== Units::PET_STORE && in_array($rObj['role_name'], self::PET_STORE_ROLES, true)) {
-                    $errors['roles'] = "The role {$rObj['role_name']} can only be assigned in the Pet Store business unit.";
-                    break;
-                }
-                if ($unit && $unit['business_unit_name'] !== Units::GROOMING && in_array($rObj['role_name'], self::GROOMING_WORKSPACE_ROLES, true)) {
-                    $errors['roles'] = "The role {$rObj['role_name']} can only be assigned in the Grooming Services business unit.";
-                    break;
-                }
-                if ($unit && $unit['business_unit_name'] === Units::VET_CLINIC && $rObj['role_name'] === 'DELIVERY_PERSONNEL') {
-                    $errors['roles'] = "The DELIVERY_PERSONNEL role cannot be assigned in the Veterinary Clinic business unit.";
-                    break;
-                }
-                if ($unit && $unit['business_unit_name'] === Units::GROOMING && $rObj['role_name'] === 'DELIVERY_PERSONNEL') {
-                    $errors['roles'] = "The DELIVERY_PERSONNEL role cannot be assigned in the Grooming Services business unit.";
+                $compatErr = self::validateRoleCompatibility((string)$rObj['role_name'], $unit['business_unit_name'] ?? null);
+                if ($compatErr !== null) {
+                    $errors['roles'] = $compatErr;
                     break;
                 }
                 $resolvedRoleIds[] = (int)$rObj['role_id'];
@@ -442,13 +403,9 @@ final class AdminAccountService
             $resolvedRoleNames = array_values(array_unique($resolvedRoleNames));
         }
 
-        // 7. Password validation (skipped ONLY for unit-scoped invitation flow)
-        $isInvitation = ($enforcedUnitId !== null) && !empty($input['is_invitation']);
-        if ($isInvitation && ($actorUserId === null || $actorUserId <= 0)) {
-            $errors['general'] = 'An authorized Super Administrator or System Administrator actor is required to create an employee invitation.';
-        }
+        // 7. Password validation (direct provisioning only)
         $password = is_string($input['password'] ?? null) ? $input['password'] : '';
-        if (!$isInvitation) {
+        if ($requirePassword) {
             if (strlen($password) < 10) {
                 $errors['password'] = 'Password must be at least 10 characters long.';
             } elseif (strlen($password) > 200) {
@@ -456,9 +413,9 @@ final class AdminAccountService
             }
         }
 
-        // Optional phone validation
-        $phone = trim((string)($input['phone'] ?? ''));
-        if ($phone !== '' && !preg_match('/^[0-9+()\-\s]{6,30}$/', $phone)) {
+        // 8. Optional phone validation
+        $phoneRaw = trim((string)($input['phone'] ?? ''));
+        if ($phoneRaw !== '' && !preg_match('/^[0-9+()\-\s]{6,30}$/', $phoneRaw)) {
             $errors['phone'] = 'Enter a valid phone number.';
         }
 
@@ -466,22 +423,145 @@ final class AdminAccountService
             return ['ok' => false, 'errors' => $errors];
         }
 
-        // 8. Atomic multi-table creation in a transaction
-        $invService = null;
-        $invRes = null;
+        return [
+            'ok' => true,
+            'errors' => [],
+            'clean' => [
+                'first_name' => $firstName,
+                'last_name' => $lastName,
+                'full_name' => trim($firstName . ' ' . $lastName),
+                'email' => $email,
+                'username' => $username,
+                'phone' => $phoneRaw !== '' ? $phoneRaw : null,
+                'business_unit_id' => (int)$unit['business_unit_id'],
+                'business_unit_name' => (string)$unit['business_unit_name'],
+                'position_id' => $positionId,
+                'position_name' => $position,
+                'role_ids' => $resolvedRoleIds,
+                'role_names' => $resolvedRoleNames,
+                'password' => $password,
+            ],
+        ];
+    }
+
+    /**
+     * Validate a single role name against Super Administrator exclusion and unit compatibility rules.
+     */
+    public static function validateRoleCompatibility(string $roleName, ?string $unitName): ?string
+    {
+        if ($roleName === 'SUPER_ADMINISTRATOR') {
+            return 'Cannot assign the Super Administrator role through employee account creation.';
+        }
+        if ($unitName === null || $unitName === '') {
+            return null;
+        }
+        if ($unitName !== Units::VET_CLINIC && in_array($roleName, self::CLINICAL_ROLES, true)) {
+            return "The clinical role {$roleName} can only be assigned in the Veterinary Clinic business unit.";
+        }
+        if ($unitName !== Units::PET_STORE && in_array($roleName, self::PET_STORE_ROLES, true)) {
+            return "The role {$roleName} can only be assigned in the Pet Store business unit.";
+        }
+        if ($unitName !== Units::GROOMING && in_array($roleName, self::GROOMING_WORKSPACE_ROLES, true)) {
+            return "The role {$roleName} can only be assigned in the Grooming Services business unit.";
+        }
+        if ($unitName === Units::VET_CLINIC && $roleName === 'DELIVERY_PERSONNEL') {
+            return 'The DELIVERY_PERSONNEL role cannot be assigned in the Veterinary Clinic business unit.';
+        }
+        if ($unitName === Units::GROOMING && $roleName === 'DELIVERY_PERSONNEL') {
+            return 'The DELIVERY_PERSONNEL role cannot be assigned in the Grooming Services business unit.';
+        }
+        return null;
+    }
+
+    /**
+     * Validate and provision a direct password-based employee / System Administrator account,
+     * OR delegate unit-scoped invitation creation strictly without creating permanent account
+     * or employee rows prior to acceptance.
+     *
+     * Direct Super Administrator provisioning ($enforcedUnitId === null) always requires a password
+     * and creates the account directly without invitations.
+     *
+     * @param array $input [full_name, first_name, last_name, email, username, business_unit_id, position, roles (ids or names), password, phone, is_invitation]
+     * @param int|null $enforcedUnitId If set (for System Admin), forces and validates business_unit_id === $enforcedUnitId
+     * @param int|null $actorUserId User ID performing the creation
+     * @param PDO|null $db Optional PDO connection override (defaults to Database::pdo())
+     * @param EmployeeInvitationService|null $invitationService Optional invitation service override for testing
+     * @return array<string, mixed>
+     */
+    public static function createEmployeeAccount(
+        array $input,
+        ?int $enforcedUnitId = null,
+        ?int $actorUserId = null,
+        ?PDO $db = null,
+        ?EmployeeInvitationService $invitationService = null
+    ): array {
+        $db = $db ?? Database::pdo();
+        $isInvitation = ($enforcedUnitId !== null) && !empty($input['is_invitation']);
+
+        if ($isInvitation) {
+            if ($actorUserId === null || $actorUserId <= 0) {
+                return [
+                    'ok' => false,
+                    'status' => 422,
+                    'errors' => [
+                        'general' => 'An authorized Super Administrator or System Administrator actor is required to create an employee invitation.',
+                    ],
+                ];
+            }
+            $invService = $invitationService ?? new EmployeeInvitationService($db);
+            return $invService->createInvitationForUnit((int)$actorUserId, $enforcedUnitId, $input);
+        }
+
+        $validation = self::validateEmployeeProvisioningInput($input, $enforcedUnitId, $db, true);
+        $errors = $validation['errors'];
+        $clean = $validation['clean'] ?? null;
+
+        if ($clean !== null) {
+            $chk = $db->prepare('SELECT user_account_id FROM user_account WHERE email = ?');
+            $chk->execute([$clean['email']]);
+            if ($chk->fetchColumn()) {
+                $errors['email'] = 'An account with this email address already exists.';
+            }
+
+            if ($clean['username'] !== null) {
+                $uChk = $db->prepare('SELECT user_account_id FROM user_account WHERE username = ?');
+                $uChk->execute([$clean['username']]);
+                if ($uChk->fetchColumn()) {
+                    $errors['username'] = 'This username is already taken.';
+                }
+            }
+        } elseif (!empty($input['email'])) {
+            $email = strtolower(trim((string)$input['email']));
+            if (self::isValidEmail($email)) {
+                $chk = $db->prepare('SELECT user_account_id FROM user_account WHERE email = ?');
+                $chk->execute([$email]);
+                if ($chk->fetchColumn()) {
+                    $errors['email'] = 'An account with this email address already exists.';
+                }
+            }
+        }
+
+        if ($errors || $clean === null) {
+            return ['ok' => false, 'status' => 422, 'errors' => $errors];
+        }
+
+        $firstName = $clean['first_name'];
+        $lastName = $clean['last_name'];
+        $email = $clean['email'];
+        $username = $clean['username'];
+        $phone = $clean['phone'];
+        $unitId = $clean['business_unit_id'];
+        $unitName = $clean['business_unit_name'];
+        $position = $clean['position_name'];
+        $resolvedRoleIds = $clean['role_ids'];
+        $resolvedRoleNames = $clean['role_names'];
+        $password = $clean['password'];
 
         try {
             $db->beginTransaction();
 
-            if ($isInvitation) {
-                // Secure unguessable random password hash; pending invitee cannot log in until setting password via invitation
-                $randomBytes = bin2hex(random_bytes(32));
-                $hash = password_hash($randomBytes, PASSWORD_DEFAULT);
-                $emailVerified = null;
-            } else {
-                $hash = password_hash($password, PASSWORD_DEFAULT);
-                $emailVerified = date('Y-m-d H:i:s');
-            }
+            $hash = password_hash($password, PASSWORD_DEFAULT);
+            $emailVerified = gmdate('Y-m-d H:i:s');
 
             $insUa = $db->prepare(
                 "INSERT INTO user_account (email, username, password_hash, account_status, is_super_admin, email_verified_at)
@@ -494,33 +574,33 @@ final class AdminAccountService
                 "INSERT INTO employee (user_account_id, business_unit_id, first_name, last_name, position, phone, employee_status)
                  VALUES (?, ?, ?, ?, ?, ?, 'active')"
             );
-            $insEmp->execute([$uid, $unit['business_unit_id'], $firstName, $lastName, $position, $phone !== '' ? $phone : null]);
+            $insEmp->execute([$uid, $unitId, $firstName, $lastName, $position, $phone]);
             $eid = (int)$db->lastInsertId();
 
-            // Also create linked customer record so username login / customer interface context works seamlessly
+            // Linked customer profile so username login / customer interface context works seamlessly
             $insCust = $db->prepare(
                 "INSERT INTO customer (user_account_id, first_name, last_name, phone, customer_status)
                  VALUES (?, ?, ?, ?, 'active')"
             );
-            $insCust->execute([$uid, $firstName, $lastName, $phone !== '' ? $phone : null]);
+            $insCust->execute([$uid, $firstName, $lastName, $phone]);
 
             $insRole = $db->prepare(
                 'INSERT INTO account_role (user_account_id, role_id, business_unit_id) VALUES (?, ?, ?)'
             );
             foreach ($resolvedRoleIds as $rid) {
-                $insRole->execute([$uid, $rid, $unit['business_unit_id']]);
+                $insRole->execute([$uid, $rid, $unitId]);
             }
 
             $roleListStr = implode(', ', $resolvedRoleNames);
             $actionCode = in_array('SYSTEM_ADMINISTRATOR', $resolvedRoleNames, true) ? 'sysadmin.created' : 'employee.created';
-            $summary = "Created employee account $firstName $lastName ($email) in {$unit['business_unit_name']} as '$position' with role(s): $roleListStr.";
+            $summary = "Created employee account $firstName $lastName ($email) in $unitName as '$position' with role(s): $roleListStr.";
 
             $db->prepare(
                 'INSERT INTO audit_log (actor_user_id, business_unit_id, action_code, target_type, target_id, affected_employee_id, summary, new_value, ip_address)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
             )->execute([
                 $actorUserId,
-                $unit['business_unit_id'],
+                $unitId,
                 $actionCode,
                 'employee',
                 $eid,
@@ -530,29 +610,6 @@ final class AdminAccountService
                 substr((string)($_SERVER['REMOTE_ADDR'] ?? ''), 0, 45) ?: null,
             ]);
 
-            if ($isInvitation) {
-                $invService = $invitationService ?? new EmployeeInvitationService($db);
-                $invRes = $invService->createInvitationInTransaction(
-                    (int)$actorUserId,
-                    $eid,
-                    $uid,
-                    (int)$unit['business_unit_id'],
-                    $email
-                );
-                if (!$invRes['ok']) {
-                    if ($db->inTransaction()) {
-                        $db->rollBack();
-                    }
-                    return [
-                        'ok' => false,
-                        'status' => (int)($invRes['status'] ?? 422),
-                        'errors' => [
-                            'general' => (string)($invRes['error'] ?? 'Could not create employee invitation. No partial records were written.'),
-                        ],
-                    ];
-                }
-            }
-
             $db->commit();
         } catch (Throwable $e) {
             if ($db->inTransaction()) {
@@ -561,33 +618,6 @@ final class AdminAccountService
             return [
                 'ok' => false,
                 'errors' => ['general' => 'Could not save the account. No partial records were written.'],
-            ];
-        }
-
-        // 9. Post-commit invitation email submission (never holds DB locks; SMTP failure preserves pending account/invitation)
-        if ($isInvitation && $invService !== null && is_array($invRes)) {
-            $emailOutcome = $invService->submitInvitationEmail(
-                (int)$invRes['invitation_id'],
-                (string)$invRes['raw_token'],
-                (string)$invRes['invited_email'],
-                (string)$invRes['recipient_name'],
-                (string)$invRes['business_unit_name'],
-                (string)$invRes['position']
-            );
-
-            return [
-                'ok' => true,
-                'errors' => [],
-                'user_id' => $uid,
-                'employee_id' => $eid,
-                'is_invitation' => true,
-                'invitation_id' => (int)$invRes['invitation_id'],
-                'invitation_status' => 'pending',
-                'invitation_expires_at' => (string)$invRes['expires_at'],
-                'email_submission_status' => $emailOutcome['email_submission_status'],
-                'email_submitted' => $emailOutcome['submitted'],
-                'email_error' => $emailOutcome['error'],
-                'email_status_code' => $emailOutcome['status_code'],
             ];
         }
 

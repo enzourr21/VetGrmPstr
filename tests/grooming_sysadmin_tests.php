@@ -270,29 +270,31 @@ $createRes = $http->post('/sysadmin/employees', [
 ]);
 check('Creating employee with Master Stylist returns 302 redirect', $createRes['status'] === 302);
 
-// Verify created account
-$createdEmp = $pdo->query(
-    "SELECT e.employee_id, e.position, ua.email_verified_at,
-            (SELECT GROUP_CONCAT(r.role_name ORDER BY r.role_name) FROM account_role ar JOIN role r ON r.role_id = ar.role_id WHERE ar.user_account_id = e.user_account_id) as roles
-     FROM employee e
-     JOIN user_account ua ON ua.user_account_id = e.user_account_id
-     WHERE ua.email = '$testEmail'"
+// Verify created invitation (decoupled: zero user_account/employee rows prior to acceptance)
+$createdInv = $pdo->query(
+    "SELECT ei.invitation_id, ei.user_account_id, ei.employee_id, ei.position_name, ei.status,
+            (SELECT GROUP_CONCAT(r.role_name ORDER BY r.role_name)
+             FROM employee_invitation_role eir
+             JOIN role r ON r.role_id = eir.role_id
+             WHERE eir.invitation_id = ei.invitation_id) as roles
+     FROM employee_invitation ei
+     WHERE ei.invited_email = '$testEmail'
+     ORDER BY ei.invitation_id DESC LIMIT 1"
 )->fetch();
-check('Created employee position saved as Master Stylist', ($createdEmp['position'] ?? '') === 'Master Stylist');
-check('Invitation user account has unverified email (invitation flow)', $createdEmp && $createdEmp['email_verified_at'] === null);
-$createdRoles = explode(',', (string)($createdEmp['roles'] ?? ''));
-check('Master Stylist automatically assigned both STYLIST_WORKSPACE and BATHER_WORKSPACE',
+$prematureUa = (int)$pdo->query("SELECT COUNT(*) FROM user_account WHERE email = '$testEmail'")->fetchColumn();
+check('Created invitation position_name saved as Master Stylist', ($createdInv['position_name'] ?? '') === 'Master Stylist');
+check('Decoupled invitation stores no user_account or employee prior to acceptance', $createdInv && $createdInv['user_account_id'] === null && $createdInv['employee_id'] === null && $createdInv['status'] === 'pending' && $prematureUa === 0);
+$createdRoles = explode(',', (string)($createdInv['roles'] ?? ''));
+check('Master Stylist automatically assigned both STYLIST_WORKSPACE and BATHER_WORKSPACE on invitation',
     in_array('STYLIST_WORKSPACE', $createdRoles, true) && in_array('BATHER_WORKSPACE', $createdRoles, true)
 );
 
-// Cleanup test user
-$cleanUid = (int)$pdo->query("SELECT user_account_id FROM user_account WHERE email = '$testEmail'")->fetchColumn();
-if ($cleanUid) {
-    $pdo->exec("DELETE FROM account_role WHERE user_account_id = $cleanUid");
-    $pdo->exec("DELETE FROM audit_log WHERE target_type = 'employee' AND target_id = {$createdEmp['employee_id']}");
-    $pdo->exec("DELETE FROM employee WHERE user_account_id = $cleanUid");
-    $pdo->exec("DELETE FROM customer WHERE user_account_id = $cleanUid");
-    $pdo->exec("DELETE FROM user_account WHERE user_account_id = $cleanUid");
+// Cleanup test invitation & audit record
+if ($createdInv) {
+    $iid = (int)$createdInv['invitation_id'];
+    $pdo->exec("DELETE FROM audit_log WHERE target_type = 'employee_invitation' AND target_id = $iid");
+    $pdo->exec("DELETE FROM employee_invitation_role WHERE invitation_id = $iid");
+    $pdo->exec("DELETE FROM employee_invitation WHERE invitation_id = $iid");
 }
 
 echo "\n" . ($failed === 0 ? "ALL $total ASSERTIONS PASSED!" : "FAILED: $failed of $total assertions failed.") . "\n";

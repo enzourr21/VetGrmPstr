@@ -112,6 +112,8 @@ $vet = new VetTestHttp($base);
 $login = $vet->staffLogin('sysadmin.vetclinic@vetgrpet.local', 'SysAdminVet!2026');
 
 // Clean up any test records
+$pdo->exec("DELETE FROM employee_invitation_role WHERE invitation_id IN (SELECT invitation_id FROM employee_invitation WHERE invited_email LIKE 'vc.test.%@vetgrpet.local')");
+$pdo->exec("DELETE FROM employee_invitation WHERE invited_email LIKE 'vc.test.%@vetgrpet.local'");
 $pdo->exec("DELETE FROM account_role WHERE user_account_id IN (SELECT user_account_id FROM user_account WHERE email LIKE 'vc.test.%@vetgrpet.local')");
 $pdo->exec("DELETE FROM audit_log WHERE affected_employee_id IN (SELECT employee_id FROM employee WHERE user_account_id IN (SELECT user_account_id FROM user_account WHERE email LIKE 'vc.test.%@vetgrpet.local'))");
 $pdo->exec("DELETE FROM customer WHERE user_account_id IN (SELECT user_account_id FROM user_account WHERE email LIKE 'vc.test.%@vetgrpet.local')");
@@ -280,20 +282,35 @@ $createSuccess = $vet->post('/sysadmin/employees', [
 check('Creating employee via invitation returns 302 redirect', $createSuccess['status'] === 302);
 check('Redirects back to /sysadmin/employees', $createSuccess['location'] === '/sysadmin/employees');
 
-$newEmp = $pdo->query("SELECT ua.user_account_id, ua.password_hash, ua.email_verified_at, e.employee_id, e.position, e.business_unit_id
-    FROM user_account ua
-    JOIN employee e ON e.user_account_id = ua.user_account_id
-    WHERE ua.email = 'vc.test.maria@vetgrpet.local'")->fetch(PDO::FETCH_ASSOC);
-check('Employee record created in DB', (bool)$newEmp);
-check('Employee belongs to business_unit_id = 2', (int)$newEmp['business_unit_id'] === 2);
-check('Employee position saved as "Veterinary Receptionist"', $newEmp['position'] === 'Veterinary Receptionist');
-check('Invitation user account has unverified email (email_verified_at IS NULL)', $newEmp['email_verified_at'] === null);
-check('User account has hashed password, not empty or plain text', strlen($newEmp['password_hash']) > 30);
+$newInv = $pdo->query("SELECT * FROM employee_invitation WHERE invited_email = 'vc.test.maria@vetgrpet.local' ORDER BY invitation_id DESC LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+$prematureUa = (int)$pdo->query("SELECT COUNT(*) FROM user_account WHERE email = 'vc.test.maria@vetgrpet.local'")->fetchColumn();
+check('Decoupled invitation record created in DB', (bool)$newInv && $newInv['user_account_id'] === null && $newInv['employee_id'] === null && $prematureUa === 0);
+check('Invitation belongs to business_unit_id = 2', (int)$newInv['business_unit_id'] === 2);
+check('Invitation position_name saved as "Veterinary Receptionist"', $newInv['position_name'] === 'Veterinary Receptionist');
 
 // Audit log record
-$invAudit = $pdo->query("SELECT * FROM audit_log WHERE affected_employee_id = {$newEmp['employee_id']} AND action_code = 'invitation.created'")->fetch(PDO::FETCH_ASSOC);
+$invAudit = $pdo->query("SELECT * FROM audit_log WHERE target_type = 'employee_invitation' AND target_id = {$newInv['invitation_id']} AND action_code = 'invitation.created'")->fetch(PDO::FETCH_ASSOC);
 check('Invitation recorded in audit_log as invitation.created', (bool)$invAudit);
-check('Audit log contains NO sensitive tokens or passwords', !str_contains($invAudit['summary'] . $invAudit['new_value'], 'password'));
+check('Audit log contains NO sensitive tokens or passwords', !str_contains($invAudit['summary'] . (string)$invAudit['new_value'], 'password'));
+
+// Provision direct active employee fixture for role/position/isolation tests
+$vetSysUid = (int)$pdo->query("SELECT user_account_id FROM user_account WHERE email = 'sysadmin.vetclinic@vetgrpet.local'")->fetchColumn();
+$createdVetEmp = AdminAccountService::createEmployeeAccount([
+    'full_name' => 'Maria Santos',
+    'email' => 'vc.test.maria.accepted@vetgrpet.local',
+    'username' => 'mariasantos_acc',
+    'password' => 'VetAccepted!2026',
+    'password_confirm' => 'VetAccepted!2026',
+    'business_unit_id' => 2,
+    'position' => 'Veterinary Receptionist',
+    'roles' => ['RECEPTIONIST'],
+    'phone' => '0917-888-9999',
+], null, $vetSysUid, $pdo);
+check('Direct Vet employee fixture provisioned for role/position updates', $createdVetEmp['ok'] === true);
+$newEmp = [
+    'user_account_id' => (int)$createdVetEmp['user_id'],
+    'employee_id' => (int)$createdVetEmp['employee_id'],
+];
 
 // Assigning INVENTORY_MANAGER to Maria Santos succeeds
 $rtok = $vet->csrf($rolesPage['body']);

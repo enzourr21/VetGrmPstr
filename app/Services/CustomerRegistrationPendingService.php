@@ -874,20 +874,82 @@ final class CustomerRegistrationPendingService
 
         $tokenHash = self::hashSessionToken($sessionToken);
         $row = null;
+        $locksAcquired = [];
+        $maxLockAttempts = 3;
 
         try {
-            $this->db->beginTransaction();
+            $lockedEmail = '';
+            $lockedUsername = '';
 
-            $stmt = $this->db->prepare('SELECT * FROM customer_registration_pending WHERE session_token_hash = ? FOR UPDATE');
-            $stmt->execute([$tokenHash]);
-            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            for ($attempt = 0; $attempt < $maxLockAttempts; $attempt++) {
+                // Pre-fetch email and optional username before acquiring shared identity advisory locks
+                $pre = $this->db->prepare('SELECT email, username FROM customer_registration_pending WHERE session_token_hash = ?');
+                $pre->execute([$tokenHash]);
+                $preRow = $pre->fetch(PDO::FETCH_ASSOC);
+                if (!$preRow) {
+                    return [
+                        'ok' => false,
+                        'error' => 'No pending registration found. Please start registration again.',
+                        'status' => 404,
+                    ];
+                }
 
-            if (!$row) {
+                $preEmail = strtolower(trim((string)$preRow['email']));
+                $preUsername = strtolower(trim((string)($preRow['username'] ?? '')));
+
+                // Canonical advisory lock order: email (pc_em_) -> username (pc_un_)
+                $emailLock = 'pc_em_' . md5($preEmail);
+                $stmtLock1 = $this->db->prepare('SELECT GET_LOCK(?, 10)');
+                $stmtLock1->execute([$emailLock]);
+                if ((int)$stmtLock1->fetchColumn() !== 1) {
+                    return ['ok' => false, 'error' => 'Account verification is busy. Please try again.', 'status' => 429];
+                }
+                $locksAcquired[] = $emailLock;
+
+                if ($preUsername !== '') {
+                    $userLock = 'pc_un_' . md5($preUsername);
+                    $stmtLock2 = $this->db->prepare('SELECT GET_LOCK(?, 10)');
+                    $stmtLock2->execute([$userLock]);
+                    if ((int)$stmtLock2->fetchColumn() !== 1) {
+                        return ['ok' => false, 'error' => 'Account verification is busy. Please try again.', 'status' => 429];
+                    }
+                    $locksAcquired[] = $userLock;
+                }
+
+                $this->db->beginTransaction();
+
+                $stmt = $this->db->prepare('SELECT * FROM customer_registration_pending WHERE session_token_hash = ? FOR UPDATE');
+                $stmt->execute([$tokenHash]);
+                $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                if (!$row) {
+                    $this->db->rollBack();
+                    return [
+                        'ok' => false,
+                        'error' => 'No pending registration found. Please start registration again.',
+                        'status' => 404,
+                    ];
+                }
+
+                $rowEmail = strtolower(trim((string)$row['email']));
+                $rowUsername = strtolower(trim((string)($row['username'] ?? '')));
+                if ($rowEmail === $preEmail && $rowUsername === $preUsername) {
+                    $lockedEmail = $rowEmail;
+                    $lockedUsername = $rowUsername;
+                    break;
+                }
+
                 $this->db->rollBack();
+                $this->releaseAdvisoryLocks($locksAcquired);
+                $locksAcquired = [];
+                $row = null;
+            }
+
+            if ($row === null || $lockedEmail === '' || strtolower(trim((string)$row['email'])) !== $lockedEmail) {
                 return [
                     'ok' => false,
-                    'error' => 'No pending registration found. Please start registration again.',
-                    'status' => 404,
+                    'error' => 'Registration details changed during completion. Please try again.',
+                    'status' => 409,
                 ];
             }
 
@@ -1011,6 +1073,8 @@ final class CustomerRegistrationPendingService
                 'error' => 'Unable to create your account at this time. Please try again later.',
                 'status' => 500,
             ];
+        } finally {
+            $this->releaseAdvisoryLocks($locksAcquired);
         }
     }
 

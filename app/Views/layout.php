@@ -220,7 +220,7 @@ $docTitle = ($curPath === '/' || $rawTitle === '' || $rawTitle === 'PawCariño')
       >
     </a>
     <div class="topbar-mobile-actions">
-      <?php if (!$inStaffWorkspace && !($isSignedIn && $baseContext === 'employee')): ?>
+      <?php if (!$isSignedIn): ?>
         <a href="/login" class="mobile-nav-signin <?= str_starts_with($curPath, '/login') ? 'is-current' : '' ?>">Sign in</a>
         <a href="/register" class="mobile-nav-signup <?= str_starts_with($curPath, '/register') ? 'is-current' : '' ?>">Sign up</a>
       <?php endif; ?>
@@ -342,6 +342,12 @@ $docTitle = ($curPath === '/' || $rawTitle === '' || $rawTitle === 'PawCariño')
 
   <?php if ($isSignedIn && $baseContext === 'employee'): ?>
     <?php $renderProfileMenu($adminInitials, $authorizedInterfaces, $isTempInv); ?>
+  <?php elseif ($isSignedIn): ?>
+      <span class="nav-divider nav-desktop-auth" aria-hidden="true"></span>
+      <form method="post" action="/logout" class="nav-desktop-auth" style="display:inline-flex;align-items:center;margin:0;">
+        <?= \App\Core\CSRF::field() ?>
+        <button type="submit" class="btn ghost btn-sm">Log Out</button>
+      </form>
   <?php else: ?>
       <span class="nav-divider nav-desktop-auth" aria-hidden="true"></span>
       <a href="/login" class="nav-desktop-auth <?= str_starts_with($curPath, '/login') ? 'is-current' : '' ?>">Sign in</a>
