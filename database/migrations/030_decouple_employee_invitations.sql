@@ -34,7 +34,7 @@ SET @prereq_030_tables = (
 SET @sql_preflight_030 = IF(
     @prereq_030_tables < 7,
     "CALL _p_mig_030_preflight('Mig 030 preflight failed: required tables missing.')",
-    'SELECT 1'
+    'DO 0'
 );
 PREPARE stmt_pf_030 FROM @sql_preflight_030;
 EXECUTE stmt_pf_030;
@@ -60,7 +60,7 @@ SET @has_fk_user_030 = (
       AND CONSTRAINT_NAME = 'fk_emp_inv_user'
       AND CONSTRAINT_TYPE = 'FOREIGN KEY'
 );
-SET @sql_drop_fk_user_030 = IF(@has_fk_user_030 > 0, 'ALTER TABLE employee_invitation DROP FOREIGN KEY fk_emp_inv_user', 'SELECT 1');
+SET @sql_drop_fk_user_030 = IF(@has_fk_user_030 > 0, 'ALTER TABLE employee_invitation DROP FOREIGN KEY fk_emp_inv_user', 'DO 0');
 PREPARE s_drop_fk_user_030 FROM @sql_drop_fk_user_030;
 EXECUTE s_drop_fk_user_030;
 DEALLOCATE PREPARE s_drop_fk_user_030;
@@ -73,7 +73,7 @@ SET @has_fk_emp_030 = (
       AND CONSTRAINT_NAME = 'fk_emp_inv_employee'
       AND CONSTRAINT_TYPE = 'FOREIGN KEY'
 );
-SET @sql_drop_fk_emp_030 = IF(@has_fk_emp_030 > 0, 'ALTER TABLE employee_invitation DROP FOREIGN KEY fk_emp_inv_employee', 'SELECT 1');
+SET @sql_drop_fk_emp_030 = IF(@has_fk_emp_030 > 0, 'ALTER TABLE employee_invitation DROP FOREIGN KEY fk_emp_inv_employee', 'DO 0');
 PREPARE s_drop_fk_emp_030 FROM @sql_drop_fk_emp_030;
 EXECUTE s_drop_fk_emp_030;
 DEALLOCATE PREPARE s_drop_fk_emp_030;
@@ -97,7 +97,7 @@ SET @sql_add_cols_030 = IF(
         ADD COLUMN position_name VARCHAR(100) NULL DEFAULT NULL AFTER position_id,
         ADD COLUMN replaced_invitation_id BIGINT UNSIGNED NULL DEFAULT NULL AFTER revoke_reason,
         ADD COLUMN is_legacy_quarantined TINYINT(1) NOT NULL DEFAULT 0 AFTER created_by_user_id',
-    'SELECT 1'
+    'DO 0'
 );
 PREPARE s_add_cols_030 FROM @sql_add_cols_030;
 EXECUTE s_add_cols_030;
@@ -186,7 +186,7 @@ SET @sql_fk_pos_030 = IF(
     'ALTER TABLE employee_invitation
         ADD CONSTRAINT fk_emp_inv_position FOREIGN KEY (position_id) REFERENCES business_position(position_id) ON DELETE SET NULL,
         ADD CONSTRAINT fk_emp_inv_replaced FOREIGN KEY (replaced_invitation_id) REFERENCES employee_invitation(invitation_id) ON DELETE SET NULL',
-    'SELECT 1'
+    'DO 0'
 );
 PREPARE s_fk_pos_030 FROM @sql_fk_pos_030;
 EXECUTE s_fk_pos_030;
@@ -208,7 +208,7 @@ SET @sql_gen_030 = IF(
         ADD UNIQUE KEY uk_emp_inv_active_pending_username (active_pending_username),
         ADD INDEX idx_emp_inv_email_status (invited_email, status, invitation_id),
         ADD INDEX idx_emp_inv_unit_status_expires (business_unit_id, status, expires_at, created_at)",
-    'SELECT 1'
+    'DO 0'
 );
 PREPARE s_gen_030 FROM @sql_gen_030;
 EXECUTE s_gen_030;
@@ -237,7 +237,7 @@ SET @sql_chk_030 = IF(
                 AND ((user_account_id IS NULL AND employee_id IS NULL) OR is_legacy_quarantined = 1)
             )
         )",
-    'SELECT 1'
+    'DO 0'
 );
 PREPARE s_chk_030 FROM @sql_chk_030;
 EXECUTE s_chk_030;

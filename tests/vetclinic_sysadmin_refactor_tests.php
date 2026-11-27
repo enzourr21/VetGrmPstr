@@ -269,13 +269,23 @@ $bad3 = $vet->post('/sysadmin/employees', [
 ]);
 check('Retired position rejected with 422', $bad3['status'] === 422);
 
-// Successful invitation creation
+// Successful invitation creation using a valid active Veterinary Clinic position from DB
+$activeVetPos = (string)$pdo->query(
+    "SELECT position_name
+     FROM business_position
+     WHERE business_unit_id = 2
+       AND position_status = 'active'
+       AND position_name <> 'Associate Veterinarian'
+     ORDER BY (position_name = 'Receptionist') DESC, position_id ASC
+     LIMIT 1"
+)->fetchColumn();
+
 $createSuccess = $vet->post('/sysadmin/employees', [
     'csrf_token' => $vtok,
     'full_name' => 'Maria Santos',
     'email' => 'vc.test.maria@vetgrpet.local',
     'username' => 'mariasantos',
-    'position' => 'Veterinary Receptionist',
+    'position' => $activeVetPos,
     'roles' => ['RECEPTIONIST'],
     'phone' => '0917-888-9999',
 ]);
@@ -284,14 +294,20 @@ check('Redirects back to /sysadmin/employees', $createSuccess['location'] === '/
 
 $newInv = $pdo->query("SELECT * FROM employee_invitation WHERE invited_email = 'vc.test.maria@vetgrpet.local' ORDER BY invitation_id DESC LIMIT 1")->fetch(PDO::FETCH_ASSOC);
 $prematureUa = (int)$pdo->query("SELECT COUNT(*) FROM user_account WHERE email = 'vc.test.maria@vetgrpet.local'")->fetchColumn();
-check('Decoupled invitation record created in DB', (bool)$newInv && $newInv['user_account_id'] === null && $newInv['employee_id'] === null && $prematureUa === 0);
-check('Invitation belongs to business_unit_id = 2', (int)$newInv['business_unit_id'] === 2);
-check('Invitation position_name saved as "Veterinary Receptionist"', $newInv['position_name'] === 'Veterinary Receptionist');
+$hasInv = is_array($newInv);
+check('Decoupled invitation record created in DB', $hasInv && $newInv['user_account_id'] === null && $newInv['employee_id'] === null && $prematureUa === 0);
+check('Invitation belongs to business_unit_id = 2', $hasInv && (int)$newInv['business_unit_id'] === 2);
+check("Invitation position_name saved as \"$activeVetPos\"", $hasInv && $newInv['position_name'] === $activeVetPos);
 
-// Audit log record
-$invAudit = $pdo->query("SELECT * FROM audit_log WHERE target_type = 'employee_invitation' AND target_id = {$newInv['invitation_id']} AND action_code = 'invitation.created'")->fetch(PDO::FETCH_ASSOC);
-check('Invitation recorded in audit_log as invitation.created', (bool)$invAudit);
-check('Audit log contains NO sensitive tokens or passwords', !str_contains($invAudit['summary'] . (string)$invAudit['new_value'], 'password'));
+// Audit log record (guarded against missing $newInv so later suites always run cleanly)
+$invAudit = false;
+if ($hasInv) {
+    $invAuditStmt = $pdo->prepare("SELECT * FROM audit_log WHERE target_type = 'employee_invitation' AND target_id = ? AND action_code = 'invitation.created' ORDER BY log_id DESC LIMIT 1");
+    $invAuditStmt->execute([(int)$newInv['invitation_id']]);
+    $invAudit = $invAuditStmt->fetch(PDO::FETCH_ASSOC);
+}
+check('Invitation recorded in audit_log as invitation.created', is_array($invAudit));
+check('Audit log contains NO sensitive tokens or passwords', is_array($invAudit) && !str_contains((string)$invAudit['summary'] . (string)$invAudit['new_value'], 'password'));
 
 // Provision direct active employee fixture for role/position/isolation tests
 $vetSysUid = (int)$pdo->query("SELECT user_account_id FROM user_account WHERE email = 'sysadmin.vetclinic@vetgrpet.local'")->fetchColumn();
@@ -302,7 +318,7 @@ $createdVetEmp = AdminAccountService::createEmployeeAccount([
     'password' => 'VetAccepted!2026',
     'password_confirm' => 'VetAccepted!2026',
     'business_unit_id' => 2,
-    'position' => 'Veterinary Receptionist',
+    'position' => $activeVetPos,
     'roles' => ['RECEPTIONIST'],
     'phone' => '0917-888-9999',
 ], null, $vetSysUid, $pdo);

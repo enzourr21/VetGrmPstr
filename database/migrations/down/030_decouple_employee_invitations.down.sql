@@ -45,7 +45,7 @@ SET @sql_down_guard_030 = IF(
         "CALL _p_mig_030_down_guard('Abort 030 down: unarchived decoupled rows exist. Archive via cleanup_invitation_placeholders.php --archive-for-rollback.')",
         "CALL _p_mig_030_down_guard('Abort 030 down: decoupled rows remain in employee_invitation; pass --detach-archived-for-down after archiving.')"
     ),
-    'SELECT 1'
+    'DO 0'
 );
 PREPARE s_down_guard_030 FROM @sql_down_guard_030;
 EXECUTE s_down_guard_030;

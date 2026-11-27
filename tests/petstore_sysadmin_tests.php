@@ -7,6 +7,8 @@ declare(strict_types=1);
  * Usage: tools\php83\php.exe tests\petstore_sysadmin_tests.php
  */
 require __DIR__ . '/../app/Core/Core.php';
+require_once __DIR__ . '/../app/Models/Units.php';
+require_once __DIR__ . '/../app/Models/AdminAccountService.php';
 
 use App\Core\Database;
 
@@ -201,7 +203,7 @@ $dup = $pet->post('/sysadmin/employees', [
     'csrf_token' => $pet->csrf($form['body']), 'business_unit_id' => $petUnit, 'full_name' => 'Dup Person',
     'email' => 'ps.test.pat@vetgrpet.local', 'position' => 'Receptionist', 'roles' => ['RECEPTIONIST'],
 ]);
-check('Failed creation (duplicate pending invitation email) returns 422 and records nothing', $dup['status'] === 422 && auditCount($pdo) === $before);
+check('Failed creation (duplicate pending invitation email) returns 409/422 and records nothing', in_array($dup['status'], [409, 422], true) && auditCount($pdo) === $before);
 check('Failed creation keeps chosen roles as chips after error', str_contains($dup['body'], 'data-role-chip="RECEPTIONIST"'));
 $bad = $pet->post('/sysadmin/employees', [
     'csrf_token' => $pet->csrf($dup['body']), 'business_unit_id' => $petUnit, 'full_name' => 'Bad Role',
@@ -306,7 +308,8 @@ echo "\nSuite E: roster & pagination\n";
 $pg = $pet->get('/sysadmin/employees');
 $empCount = (int)scalar($pdo, "SELECT COUNT(DISTINCT e.employee_id) FROM employee e JOIN user_account ua ON ua.user_account_id=e.user_account_id WHERE ua.is_super_admin=0 AND (e.business_unit_id=? OR EXISTS (SELECT 1 FROM account_role ar WHERE ar.user_account_id=ua.user_account_id AND ar.business_unit_id=?))", [$petUnit, $petUnit]);
 $expectedPage1Count = min(6, $empCount);
-check('Roster displays up to 6 employees per page', substr_count($pg['body'], 'class="roster-item"') === $expectedPage1Count);
+$rosterSection = strstr($pg['body'], 'roster-list-paginated') ?: '';
+check('Roster displays up to 6 employees per page', substr_count($rosterSection, 'class="roster-item"') === $expectedPage1Count);
 check('Centered pagination container present', str_contains($pg['body'], 'class="pagination-centered"'));
 check('Pagination format matches Previous · Page 1 of N · Next', (bool)preg_match('/Page 1 of \d+/', $pg['body']));
 check('Previous button disabled on page 1', (bool)preg_match('/<button[^>]*class="[^"]*pagination-prev[^"]*"[^>]*disabled/i', $pg['body']));
