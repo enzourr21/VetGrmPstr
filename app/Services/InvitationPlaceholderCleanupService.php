@@ -353,6 +353,10 @@ final class InvitationPlaceholderCleanupService
      */
     public function archiveForRollback(bool $detachArchivedFromLive = false): array
     {
+        if ($this->db->inTransaction()) {
+            throw new RuntimeException('Rollback archival cannot start inside an active database transaction.');
+        }
+
         $this->db->exec(
             "CREATE TABLE IF NOT EXISTS employee_invitation_decoupled_archive (
                 invitation_id BIGINT UNSIGNED PRIMARY KEY,
@@ -393,20 +397,39 @@ final class InvitationPlaceholderCleanupService
         try {
             $nowUtc = gmdate('Y-m-d H:i:s');
             $insInv = $this->db->prepare(
-                "INSERT IGNORE INTO employee_invitation_decoupled_archive (
+                "INSERT INTO employee_invitation_decoupled_archive (
                     invitation_id, business_unit_id, invited_email, first_name, last_name,
                     username, phone, position_id, position_name, token_hash, status,
                     expires_at, revoked_at, revoke_reason, replaced_invitation_id,
                     email_submission_status, email_submitted_at, email_failed_at, email_error,
                     created_by_user_id, created_at, updated_at, archived_at
                  )
-                 SELECT invitation_id, business_unit_id, invited_email, first_name, last_name,
-                        username, phone, position_id, position_name, token_hash, status,
-                        expires_at, revoked_at, revoke_reason, replaced_invitation_id,
-                        email_submission_status, email_submitted_at, email_failed_at, email_error,
-                        created_by_user_id, created_at, updated_at, ?
-                 FROM employee_invitation
-                 WHERE user_account_id IS NULL OR employee_id IS NULL"
+                 SELECT src.invitation_id, src.business_unit_id, src.invited_email, src.first_name, src.last_name,
+                        src.username, src.phone, src.position_id, src.position_name, src.token_hash, src.status,
+                        src.expires_at, src.revoked_at, src.revoke_reason, src.replaced_invitation_id,
+                        src.email_submission_status, src.email_submitted_at, src.email_failed_at, src.email_error,
+                        src.created_by_user_id, src.created_at, src.updated_at, src.archived_at
+                 FROM (
+                     SELECT invitation_id, business_unit_id, invited_email, first_name, last_name,
+                            username, phone, position_id, position_name, token_hash, status,
+                            expires_at, revoked_at, revoke_reason, replaced_invitation_id,
+                            email_submission_status, email_submitted_at, email_failed_at, email_error,
+                            created_by_user_id, created_at, updated_at, ? AS archived_at
+                     FROM employee_invitation
+                     WHERE user_account_id IS NULL OR employee_id IS NULL
+                 ) AS src
+                 ON DUPLICATE KEY UPDATE
+                     status = src.status,
+                     expires_at = src.expires_at,
+                     revoked_at = src.revoked_at,
+                     revoke_reason = src.revoke_reason,
+                     replaced_invitation_id = src.replaced_invitation_id,
+                     email_submission_status = src.email_submission_status,
+                     email_submitted_at = src.email_submitted_at,
+                     email_failed_at = src.email_failed_at,
+                     email_error = src.email_error,
+                     updated_at = src.updated_at,
+                     archived_at = src.archived_at"
             );
             $insInv->execute([$nowUtc]);
             $archivedInvCount = $insInv->rowCount();
@@ -425,7 +448,9 @@ final class InvitationPlaceholderCleanupService
                 $this->db->exec(
                     "DELETE eir
                      FROM employee_invitation_role eir
-                     JOIN employee_invitation_decoupled_archive a ON a.invitation_id = eir.invitation_id"
+                     JOIN employee_invitation ei ON ei.invitation_id = eir.invitation_id
+                     JOIN employee_invitation_decoupled_archive a ON a.invitation_id = eir.invitation_id
+                     WHERE ei.user_account_id IS NULL OR ei.employee_id IS NULL"
                 );
                 $this->db->exec(
                     "DELETE ei

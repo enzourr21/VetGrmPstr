@@ -111,14 +111,29 @@ $base = 'http://127.0.0.1:8080';
 $vet = new VetTestHttp($base);
 $login = $vet->staffLogin('sysadmin.vetclinic@vetgrpet.local', 'SysAdminVet!2026');
 
-// Clean up any test records
-$pdo->exec("DELETE FROM employee_invitation_role WHERE invitation_id IN (SELECT invitation_id FROM employee_invitation WHERE invited_email LIKE 'vc.test.%@vetgrpet.local')");
-$pdo->exec("DELETE FROM employee_invitation WHERE invited_email LIKE 'vc.test.%@vetgrpet.local'");
-$pdo->exec("DELETE FROM account_role WHERE user_account_id IN (SELECT user_account_id FROM user_account WHERE email LIKE 'vc.test.%@vetgrpet.local')");
-$pdo->exec("DELETE FROM audit_log WHERE affected_employee_id IN (SELECT employee_id FROM employee WHERE user_account_id IN (SELECT user_account_id FROM user_account WHERE email LIKE 'vc.test.%@vetgrpet.local'))");
-$pdo->exec("DELETE FROM customer WHERE user_account_id IN (SELECT user_account_id FROM user_account WHERE email LIKE 'vc.test.%@vetgrpet.local')");
-$pdo->exec("DELETE FROM employee WHERE user_account_id IN (SELECT user_account_id FROM user_account WHERE email LIKE 'vc.test.%@vetgrpet.local')");
-$pdo->exec("DELETE FROM user_account WHERE email LIKE 'vc.test.%@vetgrpet.local'");
+function cleanupVetTestRecords(PDO $pdo): void
+{
+    $pdo->exec("DELETE FROM audit_log WHERE target_type = 'employee_invitation' AND target_id IN (SELECT invitation_id FROM employee_invitation WHERE invited_email LIKE 'vc.test.%@vetgrpet.local')");
+    $pdo->exec("DELETE FROM audit_log WHERE summary LIKE '%vc.test.%@vetgrpet.local%'");
+    $pdo->exec("DELETE FROM employee_invitation_role WHERE invitation_id IN (SELECT invitation_id FROM employee_invitation WHERE invited_email LIKE 'vc.test.%@vetgrpet.local')");
+    $pdo->exec("DELETE FROM employee_invitation WHERE invited_email LIKE 'vc.test.%@vetgrpet.local'");
+    $pdo->exec("DELETE FROM account_role WHERE user_account_id IN (SELECT user_account_id FROM user_account WHERE email LIKE 'vc.test.%@vetgrpet.local')");
+    $pdo->exec("DELETE FROM audit_log WHERE affected_employee_id IN (SELECT employee_id FROM employee WHERE user_account_id IN (SELECT user_account_id FROM user_account WHERE email LIKE 'vc.test.%@vetgrpet.local'))");
+    $pdo->exec("DELETE FROM audit_log WHERE actor_user_id IN (SELECT user_account_id FROM user_account WHERE email LIKE 'vc.test.%@vetgrpet.local')");
+    $pdo->exec("DELETE FROM customer WHERE user_account_id IN (SELECT user_account_id FROM user_account WHERE email LIKE 'vc.test.%@vetgrpet.local')");
+    $pdo->exec("DELETE FROM employee WHERE user_account_id IN (SELECT user_account_id FROM user_account WHERE email LIKE 'vc.test.%@vetgrpet.local')");
+    $pdo->exec("DELETE FROM user_account WHERE email LIKE 'vc.test.%@vetgrpet.local'");
+}
+
+// Clean up any pre-existing test records before starting and guarantee cleanup on abnormal exit/exception
+cleanupVetTestRecords($pdo);
+register_shutdown_function(static function () use ($pdo): void {
+    try {
+        cleanupVetTestRecords($pdo);
+    } catch (\Throwable $e) {
+        fwrite(STDERR, 'Cleanup warning: ' . $e->getMessage() . "\n");
+    }
+});
 
 echo "\n=== Suite 1: Navigation Consistency & Order ===\n";
 $dash = $vet->get('/sysadmin');
@@ -398,6 +413,9 @@ $crossVetRole = $petAdmin->post("/sysadmin/employees/{$newEmp['employee_id']}/ro
     'roles' => ['RECEPTIONIST'],
 ]);
 check('Pet Admin modifying Vet Clinic employee roles returns HTTP 403', $crossVetRole['status'] === 403);
+
+// Post-run cleanup so test runs leave zero vc.test.* artifacts behind
+cleanupVetTestRecords($pdo);
 
 echo "\n=======================================================\n";
 echo "TOTAL TESTS: " . ($passed + $failed) . " | PASSED: $passed | FAILED: $failed\n";

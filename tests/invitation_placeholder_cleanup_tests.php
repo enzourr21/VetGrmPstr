@@ -97,19 +97,30 @@ final class FakeCleanupPdo extends PDO
     {
         if (str_contains($statement, 'CREATE TABLE IF NOT EXISTS employee_invitation_decoupled_archive')
             || str_contains($statement, 'CREATE TABLE IF NOT EXISTS employee_invitation_role_archive')) {
+            if ($this->inTx) {
+                throw new RuntimeException('DDL must not run inside an active transaction.');
+            }
             return 0;
         }
         if (str_contains($statement, 'DELETE eir') && str_contains($statement, 'employee_invitation_decoupled_archive')) {
+            $filtersDecoupled = str_contains($statement, 'JOIN employee_invitation ei')
+                && str_contains($statement, 'ei.user_account_id IS NULL OR ei.employee_id IS NULL');
             $removed = 0;
             $this->invitationRoles = array_values(array_filter(
                 $this->invitationRoles,
-                function (array $row) use (&$removed): bool {
+                function (array $row) use (&$removed, $filtersDecoupled): bool {
                     $iid = (int)$row['invitation_id'];
-                    if (isset($this->archivedInvitations[$iid])) {
-                        $removed++;
-                        return false;
+                    if (!isset($this->archivedInvitations[$iid])) {
+                        return true;
                     }
-                    return true;
+                    if ($filtersDecoupled) {
+                        $inv = $this->invitations[$iid] ?? null;
+                        if (!$inv || (($inv['user_account_id'] ?? null) !== null && ($inv['employee_id'] ?? null) !== null)) {
+                            return true;
+                        }
+                    }
+                    $removed++;
+                    return false;
                 }
             ));
             return $removed;
@@ -411,13 +422,25 @@ final class FakeCleanupPdo extends PDO
             return [];
         }
 
-        if (str_contains($sql, 'INSERT IGNORE INTO employee_invitation_decoupled_archive')) {
+        if (str_contains($sql, 'INSERT INTO employee_invitation_decoupled_archive') && str_contains($sql, 'ON DUPLICATE KEY UPDATE')) {
             $now = (string)$params[0];
+            $mutableCols = [
+                'status', 'expires_at', 'revoked_at', 'revoke_reason', 'replaced_invitation_id',
+                'email_submission_status', 'email_submitted_at', 'email_failed_at', 'email_error',
+                'updated_at',
+            ];
             foreach ($this->invitations as $iid => $inv) {
                 if (($inv['user_account_id'] ?? null) === null || ($inv['employee_id'] ?? null) === null) {
                     if (!isset($this->archivedInvitations[$iid])) {
                         $this->archivedInvitations[$iid] = $inv + ['archived_at' => $now];
                         $rowCount++;
+                    } else {
+                        // Update only mutable lifecycle/delivery fields; preserve immutable provenance
+                        foreach ($mutableCols as $col) {
+                            $this->archivedInvitations[$iid][$col] = $inv[$col] ?? null;
+                        }
+                        $this->archivedInvitations[$iid]['archived_at'] = $now;
+                        $rowCount += 2; // MySQL rowCount=2 for ON DUPLICATE KEY UPDATE
                     }
                 }
             }
@@ -705,6 +728,147 @@ check('4. archiveForRollback() safely archives detached invitations and only del
     }
     if (!isset($pdo->archivedInvitations[50])) {
         throw new RuntimeException('Archived copy of invitation 50 must exist.');
+    }
+});
+
+check('5. Fix A: archiveForRollback(true) preserves live employee_invitation_role rows for invitations subsequently accepted', function () {
+    $pdo = buildScenarioPdo();
+    $svc = new InvitationPlaceholderCleanupService($pdo);
+    $svc->applyCleanup(true, 1);
+
+    // Archive invitation #50 while decoupled
+    $svc->archiveForRollback(false);
+    if (!isset($pdo->archivedInvitations[50])) {
+        throw new RuntimeException('Expected invitation 50 to be archived.');
+    }
+
+    // Simulate invitation #50 being accepted before a later --detach-archived-for-down run
+    $pdo->invitations[50]['user_account_id'] = 99;
+    $pdo->invitations[50]['employee_id'] = 99;
+    $pdo->invitations[50]['status'] = 'accepted';
+    $pdo->invitations[50]['accepted_at'] = '2026-11-28 00:10:00';
+
+    // Re-run with detach=true: accepted live invitation AND its live role rows MUST remain untouched
+    $svc->archiveForRollback(true);
+    if (!isset($pdo->invitations[50])) {
+        throw new RuntimeException('Accepted invitation 50 must NOT be deleted from live employee_invitation.');
+    }
+    $liveRoles50 = array_values(array_filter(
+        $pdo->invitationRoles,
+        static fn(array $r): bool => (int)$r['invitation_id'] === 50
+    ));
+    assertSameVal(1, count($liveRoles50), 'Accepted invitation 50 must retain its live employee_invitation_role row.');
+    assertSameVal(3, (int)$liveRoles50[0]['role_id'], 'Live role_id for accepted invitation 50 must remain intact.');
+});
+
+check('6. Fix B: archiveForRollback() refreshes mutable status/delivery fields on re-archive without overwriting immutable provenance', function () {
+    $pdo = buildScenarioPdo();
+    $svc = new InvitationPlaceholderCleanupService($pdo);
+    $svc->applyCleanup(true, 1);
+
+    // Initial archive while status=pending, email_submission_status=submitted
+    $svc->archiveForRollback(false);
+    assertSameVal('pending', $pdo->archivedInvitations[50]['status'], 'Initial archive status should be pending.');
+    assertSameVal('submitted', $pdo->archivedInvitations[50]['email_submission_status'], 'Initial archive delivery status should be submitted.');
+    $origEmail = $pdo->archivedInvitations[50]['invited_email'];
+    $origTokenHash = $pdo->archivedInvitations[50]['token_hash'];
+    $origCreator = $pdo->archivedInvitations[50]['created_by_user_id'];
+    $origCreatedAt = $pdo->archivedInvitations[50]['created_at'];
+
+    // Live decoupled invitation transitions status and delivery metadata (plus simulate tampered immutable fields)
+    $pdo->invitations[50]['status'] = 'revoked';
+    $pdo->invitations[50]['revoked_at'] = '2026-11-28 00:20:00';
+    $pdo->invitations[50]['revoke_reason'] = 'admin_revoked';
+    $pdo->invitations[50]['email_submission_status'] = 'failed';
+    $pdo->invitations[50]['email_submitted_at'] = null;
+    $pdo->invitations[50]['email_failed_at'] = '2026-11-28 00:19:00';
+    $pdo->invitations[50]['email_error'] = 'SMTP 502 temporary error';
+    $pdo->invitations[50]['updated_at'] = '2026-11-28 00:20:00';
+    $pdo->invitations[50]['invited_email'] = 'tampered@example.com';
+    $pdo->invitations[50]['created_by_user_id'] = 999;
+
+    // Re-archive refreshes mutable fields while preserving immutable provenance
+    $svc->archiveForRollback(false);
+    $arch = $pdo->archivedInvitations[50];
+    assertSameVal('revoked', $arch['status'], 'Re-archived status must update to revoked.');
+    assertSameVal('2026-11-28 00:20:00', $arch['revoked_at'], 'Re-archived revoked_at must update.');
+    assertSameVal('admin_revoked', $arch['revoke_reason'], 'Re-archived revoke_reason must update.');
+    assertSameVal('failed', $arch['email_submission_status'], 'Re-archived email_submission_status must update to failed.');
+    assertSameVal(null, $arch['email_submitted_at'], 'Re-archived email_submitted_at must clear.');
+    assertSameVal('2026-11-28 00:19:00', $arch['email_failed_at'], 'Re-archived email_failed_at must update.');
+    assertSameVal('SMTP 502 temporary error', $arch['email_error'], 'Re-archived email_error must update.');
+    assertSameVal('2026-11-28 00:20:00', $arch['updated_at'], 'Re-archived updated_at must update.');
+
+    assertSameVal($origEmail, $arch['invited_email'], 'Immutable invited_email must not be overwritten on re-archive.');
+    assertSameVal($origTokenHash, $arch['token_hash'], 'Immutable token_hash must not be overwritten on re-archive.');
+    assertSameVal($origCreator, $arch['created_by_user_id'], 'Immutable created_by_user_id must not be overwritten on re-archive.');
+    assertSameVal($origCreatedAt, $arch['created_at'], 'Immutable created_at must not be overwritten on re-archive.');
+});
+
+check('7. Fix D: archiveForRollback() fails closed if called inside an active database transaction', function () {
+    $pdo = buildScenarioPdo();
+    $svc = new InvitationPlaceholderCleanupService($pdo);
+    $pdo->beginTransaction();
+    $threw = false;
+    try {
+        $svc->archiveForRollback(false);
+    } catch (RuntimeException $e) {
+        $threw = str_contains($e->getMessage(), 'active database transaction');
+    } finally {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+    }
+    if (!$threw) {
+        throw new RuntimeException('Expected archiveForRollback() to fail closed inside an active transaction.');
+    }
+    assertSameVal(0, count($pdo->archivedInvitations), 'No archive records may be written when transaction guard rejects.');
+});
+
+check('8. Fix C: CLI rejects unknown flags, duplicate flags, conflicting modes, and invalid combinations fail-closed (exit 2)', function () {
+    $cliScript = dirname(__DIR__) . '/scripts/cleanup_invitation_placeholders.php';
+    $invalidInvocations = [
+        ['--apply', '--confirm-cleanup', '--dry-run'],
+        ['--archive-for-rollback', '--dry-run'],
+        ['--archive-for-rollback', '--detach-archived-for-down', '--dry-run'],
+        ['--apply', '--archive-for-rollback', '--confirm-cleanup'],
+        ['--apply'],
+        ['--confirm-cleanup'],
+        ['--dry-run', '--confirm-cleanup'],
+        ['--archive-for-rollback', '--confirm-cleanup'],
+        ['--detach-archived-for-down'],
+        ['--dry-run', '--detach-archived-for-down'],
+        ['--apply', '--confirm-cleanup', '--detach-archived-for-down'],
+        ['--archive-for-rollback', '--detach-archived-for-dow'],
+        ['--unknown-flag'],
+        ['--dry-run', '--dry-run'],
+    ];
+
+    foreach ($invalidInvocations as $flags) {
+        $cmd = array_merge([PHP_BINARY, $cliScript], $flags);
+        $spec = [
+            0 => ['pipe', 'r'],
+            1 => ['pipe', 'w'],
+            2 => ['pipe', 'w'],
+        ];
+        $proc = proc_open($cmd, $spec, $pipes);
+        if (!is_resource($proc)) {
+            throw new RuntimeException('Failed to spawn CLI process for flags: ' . implode(' ', $flags));
+        }
+        fclose($pipes[0]);
+        $stdout = stream_get_contents($pipes[1]);
+        $stderr = stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        $exitCode = proc_close($proc);
+
+        assertSameVal(2, $exitCode, 'CLI must fail closed with exit 2 for: ' . implode(' ', $flags));
+        if (trim((string)$stderr) === '') {
+            throw new RuntimeException('CLI must emit error message on STDERR for: ' . implode(' ', $flags));
+        }
+        if (trim((string)$stdout) !== '') {
+            throw new RuntimeException('CLI must not emit JSON output on invalid flags: ' . implode(' ', $flags));
+        }
     }
 });
 

@@ -14,17 +14,61 @@ if (PHP_SAPI !== 'cli') {
     exit("Forbidden: CLI execution only.\n");
 }
 
+$args = array_slice($argv ?? [], 1);
+
+$allowedFlags = [
+    '--dry-run',
+    '--apply',
+    '--confirm-cleanup',
+    '--archive-for-rollback',
+    '--detach-archived-for-down',
+];
+
+$seen = [];
+foreach ($args as $arg) {
+    if (!in_array($arg, $allowedFlags, true)) {
+        fwrite(STDERR, "Invalid or unknown flag: {$arg}\nUse --dry-run, --apply --confirm-cleanup, or --archive-for-rollback [--detach-archived-for-down].\n");
+        exit(2);
+    }
+    if (isset($seen[$arg])) {
+        fwrite(STDERR, "Duplicate flag supplied: {$arg}\n");
+        exit(2);
+    }
+    $seen[$arg] = true;
+}
+
+$hasDryRun = isset($seen['--dry-run']);
+$hasApply = isset($seen['--apply']);
+$hasConfirm = isset($seen['--confirm-cleanup']);
+$hasArchive = isset($seen['--archive-for-rollback']);
+$hasDetachArchived = isset($seen['--detach-archived-for-down']);
+
+// Primary modes are strictly mutually exclusive
+$modeCount = ($hasDryRun ? 1 : 0) + ($hasApply ? 1 : 0) + ($hasArchive ? 1 : 0);
+if ($modeCount > 1) {
+    fwrite(STDERR, "Conflicting modes supplied. Specify only one of --dry-run, --apply, or --archive-for-rollback.\n");
+    exit(2);
+}
+
+// Modifier flags must match their owning primary mode
+if ($hasConfirm && !$hasApply) {
+    fwrite(STDERR, "Invalid flag combination: --confirm-cleanup can only be used with --apply.\n");
+    exit(2);
+}
+if ($hasApply && !$hasConfirm) {
+    fwrite(STDERR, "Refusing --apply without explicit --confirm-cleanup flag.\n");
+    exit(2);
+}
+if ($hasDetachArchived && !$hasArchive) {
+    fwrite(STDERR, "Invalid flag combination: --detach-archived-for-down can only be used with --archive-for-rollback.\n");
+    exit(2);
+}
+
+// Only bootstrap DB connection after all CLI arguments pass strict validation
 require_once dirname(__DIR__) . '/app/bootstrap.php';
 
 use App\Core\Database;
 use App\Services\InvitationPlaceholderCleanupService;
-
-$args = array_slice($argv ?? [], 1);
-$hasDryRun = in_array('--dry-run', $args, true);
-$hasApply = in_array('--apply', $args, true);
-$hasConfirm = in_array('--confirm-cleanup', $args, true);
-$hasArchive = in_array('--archive-for-rollback', $args, true);
-$hasDetachArchived = in_array('--detach-archived-for-down', $args, true);
 
 $pdo = Database::pdo();
 $service = new InvitationPlaceholderCleanupService($pdo);
@@ -36,18 +80,9 @@ if ($hasArchive) {
 }
 
 if ($hasApply) {
-    if (!$hasConfirm) {
-        fwrite(STDERR, "Refusing --apply without explicit --confirm-cleanup flag.\n");
-        exit(2);
-    }
     $res = $service->applyCleanup(true, null);
     echo json_encode($res, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n";
     exit(0);
-}
-
-if (!$hasDryRun && $args !== []) {
-    fwrite(STDERR, "Unknown flags. Use --dry-run, --apply --confirm-cleanup, or --archive-for-rollback.\n");
-    exit(2);
 }
 
 $report = $service->analyze();

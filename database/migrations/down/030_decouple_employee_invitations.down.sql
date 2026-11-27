@@ -21,22 +21,15 @@ SET @archive_table_exists_030 = (
     WHERE TABLE_SCHEMA = DATABASE()
       AND TABLE_NAME = 'employee_invitation_decoupled_archive'
 );
-SET @unarchived_cnt_030 = IF(
-    @decoupled_cnt_030 = 0,
-    0,
-    IF(
-        @archive_table_exists_030 = 0,
-        @decoupled_cnt_030,
-        (
-            SELECT COUNT(*)
-            FROM employee_invitation ei
-            LEFT JOIN employee_invitation_decoupled_archive arch
-                ON arch.invitation_id = ei.invitation_id
-            WHERE (ei.user_account_id IS NULL OR ei.employee_id IS NULL)
-              AND arch.invitation_id IS NULL
-        )
-    )
+SET @unarchived_cnt_030 = @decoupled_cnt_030;
+SET @sql_cnt_unarch_030 = IF(
+    @decoupled_cnt_030 > 0 AND @archive_table_exists_030 > 0,
+    'SELECT COUNT(*) INTO @unarchived_cnt_030 FROM employee_invitation ei LEFT JOIN employee_invitation_decoupled_archive arch ON arch.invitation_id = ei.invitation_id WHERE (ei.user_account_id IS NULL OR ei.employee_id IS NULL) AND arch.invitation_id IS NULL',
+    'DO 0'
 );
+PREPARE s_cnt_unarch_030 FROM @sql_cnt_unarch_030;
+EXECUTE s_cnt_unarch_030;
+DEALLOCATE PREPARE s_cnt_unarch_030;
 
 SET @sql_down_guard_030 = IF(
     @decoupled_cnt_030 > 0,
