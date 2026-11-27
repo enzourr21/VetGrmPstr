@@ -246,6 +246,14 @@ final class FakeProvisioningPdo extends PDO
             }
             return [];
         }
+        if (str_contains($sql, 'SELECT position_id, position_name FROM business_position')) {
+            foreach ($this->positions as $p) {
+                if ((int)$p['business_unit_id'] === (int)$params[0] && $p['position_name'] === (string)$params[1] && $p['position_status'] === 'active') {
+                    return [['position_id' => $p['position_id'] ?? 1, 'position_name' => $p['position_name']]];
+                }
+            }
+            return [];
+        }
         if (str_contains($sql, 'SELECT position_name FROM business_position')) {
             foreach ($this->positions as $p) {
                 if ((int)$p['business_unit_id'] === (int)$params[0] && $p['position_name'] === (string)$params[1] && $p['position_status'] === 'active') {
@@ -254,7 +262,7 @@ final class FakeProvisioningPdo extends PDO
             }
             return [];
         }
-        if (str_contains($sql, 'SELECT position_id FROM business_position')) {
+        if (str_contains($sql, 'SELECT position_id') && str_contains($sql, 'FROM business_position')) {
             foreach ($this->positions as $p) {
                 if ((int)$p['business_unit_id'] === (int)$params[0] && $p['position_name'] === (string)$params[1] && $p['position_status'] === 'active') {
                     return [[(string)($p['position_id'] ?? 1)]];
@@ -836,7 +844,7 @@ try {
             'roles' => ['RECEPTIONIST'],
             'is_invitation' => true,
         ], 1, 2, $pdo, $invSvc);
-        assertTrue($resCustOk['ok'] === true && ($resCustOk['target_mode'] ?? '') === 'existing_customer', 'Inviting active customer without username must succeed');
+        assertTrue($resCustOk['ok'] === true && ($resCustOk['recipient_mode'] ?? '') === 'existing_customer', 'Inviting active customer without username must succeed');
 
         // Existing employee email -> rejected
         $resEmp = AdminAccountService::createEmployeeAccount([
@@ -854,8 +862,8 @@ try {
         $pdo = makeProvisioningFixture();
         $otpSvc = new CustomerRegistrationPendingService($pdo);
         $rawTok = bin2hex(random_bytes(32));
-        $nowTime = '2026-11-20 12:00:00';
-        $futureTime = '2026-11-20 12:30:00';
+        $nowTime = gmdate('Y-m-d H:i:s', time() - 60);
+        $futureTime = gmdate('Y-m-d H:i:s', time() + 1800);
         $pdo->customerRegistrationPending[99] = [
             'pending_id' => 99,
             'session_token_hash' => hash('sha256', $rawTok),
@@ -880,7 +888,7 @@ try {
             'expires_at' => $futureTime,
         ];
 
-        $prov = $otpSvc->provisionVerifiedAccount($rawTok, password_hash('CustPass!2026', PASSWORD_DEFAULT));
+        $prov = $otpSvc->provisionVerifiedAccount($rawTok, 'CustPass!2026');
         assertTrue($prov['ok'] === true && empty($pdo->advisoryLocks), 'Customer OTP provisioning should succeed and release all locks');
         $invSvc = new EmployeeInvitationService($pdo, fn() => ['submitted' => true, 'driver' => 'smtp', 'error' => null, 'status_code' => 200]);
         $invRes = AdminAccountService::createEmployeeAccount([
@@ -891,7 +899,7 @@ try {
             'roles' => ['RECEPTIONIST'],
             'is_invitation' => true,
         ], 1, 2, $pdo, $invSvc);
-        assertTrue($invRes['ok'] === true && ($invRes['target_mode'] ?? '') === 'existing_customer', 'Newly registered customer can subsequently be invited via Workflow B');
+        assertTrue($invRes['ok'] === true && ($invRes['recipient_mode'] ?? '') === 'existing_customer', 'Newly registered customer can subsequently be invited via Workflow B');
     });
 
     test('Direct Super Admin provisioning ($enforcedUnitId === null) continues creating accounts directly without invitations', function () {

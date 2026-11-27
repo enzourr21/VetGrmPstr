@@ -295,7 +295,7 @@ final class FakeCleanupPdo extends PDO
             return [];
         }
 
-        if (str_contains($sql, 'INSERT IGNORE INTO employee_invitation_role')) {
+        if (str_contains($sql, 'INSERT IGNORE INTO employee_invitation_role (')) {
             $iid = (int)$params[0];
             $uid = (int)$params[1];
             $unitId = (int)$params[2];

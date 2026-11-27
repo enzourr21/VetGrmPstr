@@ -295,13 +295,13 @@ try {
         // Verify no multi-statement BEGIN...END routine splits illegally at ";\n" inside migrate.php splitter
         $combinedUp = implode("\n;\n", $upStmts);
         foreach ([
-            'CREATE PROCEDURE _p_mig_030_preflight()',
+            'CREATE PROCEDURE _p_mig_030_preflight(IN p_msg VARCHAR(128))',
             'CREATE TABLE IF NOT EXISTS employee_invitation_role',
             'MODIFY COLUMN user_account_id INT UNSIGNED NULL DEFAULT NULL',
             'MODIFY COLUMN employee_id INT UNSIGNED NULL DEFAULT NULL',
             'ADD COLUMN first_name VARCHAR(100)',
             'ADD COLUMN active_pending_email VARCHAR(255) GENERATED ALWAYS AS',
-            'ADD COLUMN active_pending_username VARCHAR(80) GENERATED ALWAYS AS',
+            'ADD COLUMN active_pending_username VARCHAR(100) GENERATED ALWAYS AS',
             'ADD UNIQUE KEY uk_emp_inv_active_pending_email (active_pending_email)',
             'ADD UNIQUE KEY uk_emp_inv_active_pending_username (active_pending_username)',
             'ADD CONSTRAINT chk_emp_inv_identity_pair CHECK',
@@ -319,8 +319,8 @@ try {
         }
 
         foreach ([
-            'CREATE PROCEDURE _p_mig_030_down_guard()',
-            'CALL _p_mig_030_down_guard()',
+            'CREATE PROCEDURE _p_mig_030_down_guard(IN p_msg VARCHAR(128))',
+            'CALL _p_mig_030_down_guard(',
             'DROP TABLE IF EXISTS employee_invitation_role',
         ] as $needle) {
             if (!str_contains($downRaw, $needle)) {

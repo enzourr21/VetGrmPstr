@@ -217,6 +217,14 @@ final class FakeInvitationPdo extends PDO
             }
             return [$bu];
         }
+        if (str_contains($sql, 'SELECT position_id, position_name FROM business_position')) {
+            foreach ($this->positions as $p) {
+                if ((int)$p['business_unit_id'] === (int)$params[0] && $p['position_name'] === (string)$params[1] && $p['position_status'] === 'active') {
+                    return [['position_id' => $p['position_id'], 'position_name' => $p['position_name']]];
+                }
+            }
+            return [];
+        }
         if (str_contains($sql, 'SELECT position_name FROM business_position')) {
             foreach ($this->positions as $p) {
                 if ((int)$p['business_unit_id'] === (int)$params[0] && $p['position_name'] === (string)$params[1] && $p['position_status'] === 'active') {
@@ -225,7 +233,7 @@ final class FakeInvitationPdo extends PDO
             }
             return [];
         }
-        if (str_contains($sql, 'SELECT position_id FROM business_position')) {
+        if (str_contains($sql, 'SELECT position_id') && str_contains($sql, 'FROM business_position')) {
             foreach ($this->positions as $p) {
                 if ((int)$p['business_unit_id'] === (int)$params[0] && $p['position_name'] === (string)$params[1] && $p['position_status'] === 'active') {
                     return [[(string)$p['position_id']]];
@@ -683,7 +691,7 @@ try {
                 $capturedTokens[] = (string)($q['token'] ?? '');
                 return ['submitted' => true, 'driver' => 'smtp', 'error' => null, 'status_code' => 200];
             },
-            fn() => $now
+            function () use (&$now): int { return $now; }
         );
 
         $beforeUsers = count($pdo->users);
@@ -692,6 +700,7 @@ try {
         $beforeRoles = count($pdo->accountRoles);
 
         $res = $svc->createInvitationForUnit(2, 1, [
+            'business_unit_id' => 1,
             'full_name' => '  Carla   Mendoza ',
             'email' => '  Carla.Mendoza@PawCarino.Test ',
             'username' => 'CarlaM',
@@ -729,6 +738,7 @@ try {
             $pdo = makeFixturePdo();
             $svc = new EmployeeInvitationService($pdo, fn() => ['submitted' => true, 'driver' => 'smtp', 'error' => null, 'status_code' => 200]);
             $res = $svc->createInvitationForUnit($saId, 2, [
+                'business_unit_id' => 2,
                 'full_name' => 'Marco Reyes',
                 'email' => "marco.{$saId}@pawcarino.test",
                 'position' => 'Veterinary Assistant',
@@ -742,6 +752,7 @@ try {
         $svc = new EmployeeInvitationService($pdo, fn() => ['submitted' => true, 'driver' => 'smtp', 'error' => null, 'status_code' => 200]);
         foreach ([[7, 1], [1, 3], [3, 1], [4, 1]] as [$actor, $unit]) {
             $den = $svc->createInvitationForUnit($actor, $unit, [
+                'business_unit_id' => $unit,
                 'full_name' => 'Denied Target',
                 'email' => "denied.{$actor}.{$unit}@pawcarino.test",
                 'position' => 'Receptionist',
@@ -757,11 +768,12 @@ try {
         $svc = new EmployeeInvitationService(
             $pdo,
             fn() => ['submitted' => true, 'driver' => 'smtp', 'error' => null, 'status_code' => 200],
-            fn() => $now
+            function () use (&$now): int { return $now; }
         );
 
         // Existing customer-only WITH username supplied -> 422 on username
         $custWithUser = $svc->createInvitationForUnit(2, 1, [
+            'business_unit_id' => 1,
             'full_name' => 'Existing Cust',
             'email' => 'active.customer@example.com',
             'username' => 'newuser99',
@@ -772,15 +784,17 @@ try {
 
         // Existing customer-only WITHOUT username -> 201 (Workflow B invite)
         $custNoUser = $svc->createInvitationForUnit(2, 1, [
+            'business_unit_id' => 1,
             'full_name' => 'Existing Cust',
             'email' => 'ACTIVE.CUSTOMER@example.com',
             'position' => 'Receptionist',
             'roles' => ['RECEPTIONIST'],
         ]);
-        assertTrue($custNoUser['ok'] === true && $custNoUser['status'] === 201 && ($custNoUser['target_mode'] ?? '') === 'existing_customer', 'Existing active customer without username must succeed');
+        assertTrue($custNoUser['ok'] === true && $custNoUser['status'] === 201 && ($custNoUser['recipient_mode'] ?? '') === 'existing_customer', 'Existing active customer without username must succeed');
 
         // Existing employee email -> 422 on email
         $empDup = $svc->createInvitationForUnit(2, 1, [
+            'business_unit_id' => 1,
             'full_name' => 'Existing Emp',
             'email' => 'sysadmin.pet@pawcarino.test',
             'position' => 'Receptionist',
@@ -790,6 +804,7 @@ try {
 
         // Suspended account email -> 409 / error
         $susp = $svc->createInvitationForUnit(2, 1, [
+            'business_unit_id' => 1,
             'full_name' => 'Susp Emp',
             'email' => 'suspended.account@example.com',
             'position' => 'Receptionist',
@@ -799,6 +814,7 @@ try {
 
         // Active pending invite blocks duplicate email and duplicate username, then revoke frees both!
         $p1 = $svc->createInvitationForUnit(2, 1, [
+            'business_unit_id' => 1,
             'full_name' => 'Release Test',
             'email' => 'release.test@pawcarino.test',
             'username' => 'releaseme',
@@ -809,6 +825,7 @@ try {
         $inv1 = (int)$p1['invitation_id'];
 
         $dupEmail = $svc->createInvitationForUnit(2, 1, [
+            'business_unit_id' => 1,
             'full_name' => 'Dup Email',
             'email' => 'release.test@pawcarino.test',
             'position' => 'Receptionist',
@@ -817,6 +834,7 @@ try {
         assertTrue(!$dupEmail['ok'] && isset($dupEmail['errors']['email']), 'Active pending email blocks duplicate create');
 
         $dupUser = $svc->createInvitationForUnit(2, 1, [
+            'business_unit_id' => 1,
             'full_name' => 'Dup User',
             'email' => 'other.person@pawcarino.test',
             'username' => 'releaseme',
@@ -830,6 +848,7 @@ try {
         assertTrue($rev['ok'] === true, 'Revoke by invitation_id succeeds');
 
         $p2 = $svc->createInvitationForUnit(2, 1, [
+            'business_unit_id' => 1,
             'full_name' => 'Fresh After Revoke',
             'email' => 'release.test@pawcarino.test',
             'username' => 'releaseme',
@@ -842,6 +861,7 @@ try {
         // Past-due expiration auto-expires inside createInvitationForUnit and frees email & username
         $now += EmployeeInvitationService::EXPIRY_SECONDS + 5;
         $p3 = $svc->createInvitationForUnit(2, 1, [
+            'business_unit_id' => 1,
             'full_name' => 'Fresh After Expire',
             'email' => 'release.test@pawcarino.test',
             'username' => 'releaseme',
@@ -865,10 +885,11 @@ try {
                 }
                 return ['submitted' => true, 'driver' => 'smtp', 'error' => null, 'status_code' => 200];
             },
-            fn() => $now
+            function () use (&$now): int { return $now; }
         );
 
         $c = $svc->createInvitationForUnit(2, 1, [
+            'business_unit_id' => 1,
             'full_name' => 'Retry Invitee',
             'email' => 'retry.invitee@pawcarino.test',
             'position' => 'Receptionist',
@@ -909,6 +930,7 @@ try {
         });
 
         $res = $svc->createInvitationForUnit(2, 1, [
+            'business_unit_id' => 1,
             'full_name' => 'Rollback Test',
             'email' => 'rollback.unit@pawcarino.test',
             'position' => 'Receptionist',
