@@ -249,9 +249,11 @@ final class AdminAccountService
     /**
      * Validate and create an employee / System Administrator account atomically inside a DB transaction.
      *
-     * Invitation provisioning is strictly restricted to unit-scoped System Administrator flows
-     * ($enforcedUnitId !== null and !empty($input['is_invitation'])). Super Administrator provisioning
-     * ($enforcedUnitId === null) always uses direct password-based creation without invitations.
+     * Invitation provisioning is used by unit-scoped System Administrator interface flows
+     * ($enforcedUnitId !== null and !empty($input['is_invitation'])), authorized for both
+     * business-unit System Administrators and Super Administrators via EmployeeInvitationService.
+     * Direct Super Administrator provisioning ($enforcedUnitId === null) always uses direct
+     * password-based creation without invitations.
      *
      * @param array $input [full_name, first_name, last_name, email, username, business_unit_id, position, roles (ids or names), password, phone, is_invitation]
      * @param int|null $enforcedUnitId If set (for System Admin), forces and validates business_unit_id === $enforcedUnitId
@@ -440,10 +442,10 @@ final class AdminAccountService
             $resolvedRoleNames = array_values(array_unique($resolvedRoleNames));
         }
 
-        // 7. Password validation (skipped ONLY for unit-scoped System Administrator invitation flow)
+        // 7. Password validation (skipped ONLY for unit-scoped invitation flow)
         $isInvitation = ($enforcedUnitId !== null) && !empty($input['is_invitation']);
         if ($isInvitation && ($actorUserId === null || $actorUserId <= 0)) {
-            $errors['general'] = 'An authorized System Administrator actor is required to create an employee invitation.';
+            $errors['general'] = 'An authorized Super Administrator or System Administrator actor is required to create an employee invitation.';
         }
         $password = is_string($input['password'] ?? null) ? $input['password'] : '';
         if (!$isInvitation) {

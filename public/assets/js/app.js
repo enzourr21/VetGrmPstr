@@ -1284,12 +1284,60 @@
     var msg = el.getAttribute('data-confirm-action');
     if (el.tagName === 'FORM') {
       el.addEventListener('submit', function (ev) {
+        if (el._submitting) {
+          ev.preventDefault();
+          return;
+        }
         if (msg && !window.confirm(msg)) ev.preventDefault();
       });
       return;
     }
     el.addEventListener('click', function (ev) {
       if (msg && !window.confirm(msg)) ev.preventDefault();
+    });
+  });
+
+  // ---- Double-Submit Guard for Action Forms ----------------------------
+  document.querySelectorAll('form[data-prevent-double-submit]').forEach(function (form) {
+    form.addEventListener('submit', function (ev) {
+      if (ev.defaultPrevented) return;
+      if (form._submitting) {
+        ev.preventDefault();
+        return;
+      }
+      form._submitting = true;
+      var pendingLabel = (form.getAttribute('data-prevent-double-submit') || '').trim();
+      var buttons = form.querySelectorAll('button[type="submit"], button:not([type]), input[type="submit"]');
+      buttons.forEach(function (btn) {
+        btn.disabled = true;
+        if (pendingLabel) {
+          if (btn.tagName === 'INPUT') {
+            btn.setAttribute('data-original-text', btn.value);
+            btn.value = pendingLabel;
+          } else {
+            btn.setAttribute('data-original-text', btn.textContent);
+            btn.textContent = pendingLabel;
+          }
+        }
+      });
+    });
+  });
+
+  window.addEventListener('pageshow', function (ev) {
+    if (!ev.persisted) return;
+    document.querySelectorAll('form[data-prevent-double-submit]').forEach(function (form) {
+      form._submitting = false;
+      form.querySelectorAll('button[type="submit"], button:not([type]), input[type="submit"]').forEach(function (btn) {
+        btn.disabled = false;
+        var orig = btn.getAttribute('data-original-text');
+        if (orig !== null) {
+          if (btn.tagName === 'INPUT') {
+            btn.value = orig;
+          } else {
+            btn.textContent = orig;
+          }
+        }
+      });
     });
   });
 

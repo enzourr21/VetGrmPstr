@@ -250,6 +250,8 @@ $r->post('/sysadmin/units/{id}/employees', 'SysAdminController', 'storeEmployee'
 $r->post('/sysadmin/employees/{id}/roles', 'SysAdminController', 'updateEmployeeRoles');
 $r->post('/sysadmin/employees/{id}/status', 'SysAdminController', 'updateEmployeeStatus');
 $r->post('/sysadmin/employees/{id}/position', 'SysAdminController', 'updateEmployeePosition');
+$r->post('/sysadmin/employees/{id}/invitation/resend', 'SysAdminController', 'resendEmployeeInvitation');
+$r->post('/sysadmin/employees/{id}/invitation/revoke', 'SysAdminController', 'revokeEmployeeInvitation');
 $r->get('/sysadmin/activity', 'SysAdminController', 'activity');
 $r->get('/sysadmin/units/{id}/activity', 'SysAdminController', 'activity');
 $r->get('/sysadmin/positions', 'SysAdminController', 'positions');

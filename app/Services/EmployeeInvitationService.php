@@ -12,11 +12,13 @@ use RuntimeException;
 use Throwable;
 
 /**
- * Employee Invitation Lifecycle Service (System Administrator provisioning only).
+ * Employee Invitation Lifecycle Service (System Administrator & Super Administrator provisioning).
  *
  * Responsibilities:
  *  - Create, resend (invalidating prior pending/expired tokens), and revoke employee invitations.
- *  - Enforce strict unit-scoped System Administrator authorization (never Super Administrator).
+ *  - Enforce server-side authorization for active Super Administrators (cross-unit) and
+ *    unit-scoped System Administrators, while strictly prohibiting invitations targeting
+ *    Super Administrator accounts.
  *  - Validate cross-table ownership (user_account <-> employee <-> business_unit <-> email)
  *    under a canonical row-lock order without locking the shared business_unit table.
  *  - Store only SHA-256 token hashes; never persist or log raw tokens.
@@ -463,7 +465,7 @@ final class EmployeeInvitationService
     }
 
     /**
-     * Revoke all pending invitation(s) for an employee within the System Administrator's business unit.
+     * Revoke all pending invitation(s) for an employee within the specified business unit.
      *
      * @return array{
      *   ok: bool,
@@ -525,8 +527,20 @@ final class EmployeeInvitationService
 
             $nowUtc = gmdate('Y-m-d H:i:s', $this->nowUnix());
             $revokedIds = [];
+            $expiredCount = 0;
             foreach ($pendingRows as $row) {
                 $invId = (int)$row['invitation_id'];
+                if ((string)$row['expires_at'] <= $nowUtc) {
+                    $this->markExpiredInsideTransaction(
+                        $invId,
+                        $employeeId,
+                        $businessUnitId,
+                        $actorUserId,
+                        $nowUtc
+                    );
+                    $expiredCount++;
+                    continue;
+                }
                 $this->markRevokedInsideTransaction(
                     $invId,
                     $employeeId,
@@ -537,6 +551,19 @@ final class EmployeeInvitationService
                     true
                 );
                 $revokedIds[] = $invId;
+            }
+
+            if (!$revokedIds) {
+                if ($expiredCount > 0) {
+                    $this->db->commit();
+                } else {
+                    $this->db->rollBack();
+                }
+                return [
+                    'ok' => false,
+                    'status' => 409,
+                    'error' => 'No active pending invitation exists for this employee.',
+                ];
             }
 
             $this->db->commit();
@@ -1532,13 +1559,24 @@ final class EmployeeInvitationService
     }
 
     /**
-     * Verify that $actorUserId is an active System Administrator scoped to $businessUnitId
-     * and NOT a Super Administrator (Super Administrators do not have an invitation path).
+     * Verify that $actorUserId is authorized to manage employee invitations for $businessUnitId:
+     *  - An active Super Administrator (is_super_admin = 1 or SUPER_ADMINISTRATOR role)
+     *    for any active business unit, OR
+     *  - An active System Administrator with an active employee profile assigned to $businessUnitId.
+     * Actors with unresolved, never-accepted employee invitation history are always denied.
      *
      * @return array{ok:false,status:int,error:string}|null Null when authorized.
      */
     private function assertAuthorizedSystemAdmin(int $actorUserId, int $businessUnitId): ?array
     {
+        if (self::isAccountBlockedByUnacceptedInvitation($this->db, $actorUserId)) {
+            return [
+                'ok' => false,
+                'status' => 403,
+                'error' => 'Only an active Super Administrator or a System Administrator assigned to this business unit may manage employee invitations.',
+            ];
+        }
+
         $stmt = $this->db->prepare(
             "SELECT ua.user_account_id, ua.account_status, ua.is_super_admin,
                     e.employee_id, e.employee_status,
@@ -1549,12 +1587,18 @@ final class EmployeeInvitationService
                         JOIN role r_sa ON r_sa.role_id = ar_sa.role_id
                         WHERE ar_sa.user_account_id = ua.user_account_id
                           AND r_sa.role_name = 'SUPER_ADMINISTRATOR'
-                    ) AS has_super_role
+                    ) AS has_super_role,
+                    EXISTS (
+                        SELECT 1
+                        FROM account_role ar_sys
+                        JOIN role r_sys ON r_sys.role_id = ar_sys.role_id
+                        WHERE ar_sys.user_account_id = ua.user_account_id
+                          AND ar_sys.business_unit_id = bu.business_unit_id
+                          AND r_sys.role_name = 'SYSTEM_ADMINISTRATOR'
+                    ) AS has_unit_sysadmin_role
              FROM user_account ua
-             JOIN employee e ON e.user_account_id = ua.user_account_id
-             JOIN account_role ar ON ar.user_account_id = ua.user_account_id AND ar.business_unit_id = ?
-             JOIN role r ON r.role_id = ar.role_id AND r.role_name = 'SYSTEM_ADMINISTRATOR'
-             JOIN business_unit bu ON bu.business_unit_id = ar.business_unit_id
+             JOIN business_unit bu ON bu.business_unit_id = ?
+             LEFT JOIN employee e ON e.user_account_id = ua.user_account_id
              WHERE ua.user_account_id = ?
              LIMIT 1"
         );
@@ -1564,15 +1608,25 @@ final class EmployeeInvitationService
         if (
             !$actor ||
             (string)$actor['account_status'] !== 'active' ||
-            (string)$actor['employee_status'] !== 'active' ||
-            (string)$actor['business_unit_status'] !== 'active' ||
-            (bool)$actor['is_super_admin'] ||
-            (bool)$actor['has_super_role']
+            (string)$actor['business_unit_status'] !== 'active'
         ) {
             return [
                 'ok' => false,
                 'status' => 403,
-                'error' => 'Only an active System Administrator assigned to this business unit may manage employee invitations.',
+                'error' => 'Only an active Super Administrator or a System Administrator assigned to this business unit may manage employee invitations.',
+            ];
+        }
+
+        $isSuperAdmin = (bool)$actor['is_super_admin'] || (bool)$actor['has_super_role'];
+        $isUnitSystemAdmin = $actor['employee_id'] !== null
+            && (string)$actor['employee_status'] === 'active'
+            && (bool)$actor['has_unit_sysadmin_role'];
+
+        if (!$isSuperAdmin && !$isUnitSystemAdmin) {
+            return [
+                'ok' => false,
+                'status' => 403,
+                'error' => 'Only an active Super Administrator or a System Administrator assigned to this business unit may manage employee invitations.',
             ];
         }
 
@@ -1934,6 +1988,39 @@ final class EmployeeInvitationService
     }
 
     /**
+     * Classify an employee's effective roster action state for administrative UI and guards.
+     *
+     * Returns one of:
+     *  - 'inactive': Account or employee record is not active
+     *  - 'pending_invitation': Active record with a pending, unexpired invitation
+     *  - 'expired_invitation': Active record with unresolved expired invitation history
+     *  - 'revoked_invitation': Active record with unresolved revoked invitation history
+     *  - 'active': Active account & employee with no unresolved unaccepted invitation ('none' or 'accepted')
+     *
+     * @param array<string, mixed> $employee
+     */
+    public static function classifyEmployeeRosterActionState(array $employee): string
+    {
+        if (
+            (string)($employee['account_status'] ?? '') !== 'active' ||
+            (string)($employee['employee_status'] ?? '') !== 'active'
+        ) {
+            return 'inactive';
+        }
+
+        $invState = isset($employee['invitation_state']) && is_string($employee['invitation_state'])
+            ? $employee['invitation_state']
+            : self::classifyEmployeeInvitationState($employee);
+
+        return match ($invState) {
+            'pending' => 'pending_invitation',
+            'expired' => 'expired_invitation',
+            'revoked' => 'revoked_invitation',
+            default => 'active',
+        };
+    }
+
+    /**
      * List employees scoped to $unitId (excluding Super Administrators) annotated with their
      * complete invitation-history state from employee_invitation.
      *
@@ -1989,7 +2076,14 @@ final class EmployeeInvitationService
                           AND ei_last.user_account_id = ua.user_account_id
                           AND ei_last.business_unit_id = e.business_unit_id
                         ORDER BY ei_last.invitation_id DESC
-                        LIMIT 1) AS latest_invitation_status
+                        LIMIT 1) AS latest_invitation_status,
+                       (SELECT ei_last_mail.email_submission_status
+                        FROM employee_invitation ei_last_mail
+                        WHERE ei_last_mail.employee_id = e.employee_id
+                          AND ei_last_mail.user_account_id = ua.user_account_id
+                          AND ei_last_mail.business_unit_id = e.business_unit_id
+                        ORDER BY ei_last_mail.invitation_id DESC
+                        LIMIT 1) AS latest_email_submission_status
                 FROM employee e
                 JOIN user_account ua ON ua.user_account_id = e.user_account_id
                 WHERE ua.is_super_admin = 0

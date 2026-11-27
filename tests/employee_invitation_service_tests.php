@@ -159,14 +159,44 @@ final class FakeInvitationPdo extends PDO
             return [['0']];
         }
 
-        // 1. Authorization query: System Administrator check
-        if (str_contains($sql, "r.role_name = 'SYSTEM_ADMINISTRATOR'") && str_contains($sql, 'has_super_role')) {
+        // 1a. Unaccepted invitation block check (isAccountBlockedByUnacceptedInvitation)
+        if (
+            str_contains($sql, 'ei_any.user_account_id = ?')
+            && str_contains($sql, 'ei_acc.user_account_id = ?')
+        ) {
+            $anyUid = (int)$params[0];
+            $accUid = (int)$params[1];
+            $hasAny = false;
+            $hasAccepted = false;
+            foreach ($this->invitations as $inv) {
+                if ((int)$inv['user_account_id'] === $anyUid) {
+                    $hasAny = true;
+                }
+                if ((int)$inv['user_account_id'] === $accUid && (string)$inv['status'] === 'accepted') {
+                    $hasAccepted = true;
+                }
+            }
+            return [[
+                'has_any_invitation' => $hasAny ? 1 : 0,
+                'has_accepted_invitation' => $hasAccepted ? 1 : 0,
+            ]];
+        }
+
+        // 1b. Authorization query: Super Administrator or unit System Administrator check
+        if (
+            str_contains($sql, 'has_super_role')
+            && str_contains($sql, 'has_unit_sysadmin_role')
+            && str_contains($sql, 'LEFT JOIN employee e')
+            && str_contains($sql, 'JOIN business_unit bu')
+            && str_contains($sql, 'WHERE ua.user_account_id = ?')
+        ) {
             [$unitId, $actorUid] = [(int)$params[0], (int)$params[1]];
             $ua = $this->users[$actorUid] ?? null;
             $bu = $this->businessUnits[$unitId] ?? null;
             if (!$ua || !$bu) {
                 return [];
             }
+
             $emp = null;
             foreach ($this->employees as $e) {
                 if ((int)$e['user_account_id'] === $actorUid) {
@@ -174,35 +204,29 @@ final class FakeInvitationPdo extends PDO
                     break;
                 }
             }
-            if (!$emp) {
-                return [];
-            }
 
-            $hasSysAdminInUnit = false;
             $hasSuperRole = $this->userHasSuperRole($actorUid);
+            $hasUnitSysAdminRole = false;
             foreach ($this->accountRoles as $ar) {
                 if ((int)$ar['user_account_id'] !== $actorUid) {
                     continue;
                 }
                 $rName = $this->roles[(int)$ar['role_id']] ?? '';
                 if ($rName === 'SYSTEM_ADMINISTRATOR' && (int)$ar['business_unit_id'] === $unitId) {
-                    $hasSysAdminInUnit = true;
+                    $hasUnitSysAdminRole = true;
                 }
             }
 
-            if (!$hasSysAdminInUnit) {
-                return [];
-            }
-
             return [[
-                'user_account_id' => $actorUid,
+                'user_account_id' => $ua['user_account_id'],
                 'account_status' => $ua['account_status'],
                 'is_super_admin' => $ua['is_super_admin'],
-                'employee_id' => $emp['employee_id'],
-                'employee_status' => $emp['employee_status'],
-                'business_unit_id' => $unitId,
+                'employee_id' => $emp !== null ? $emp['employee_id'] : null,
+                'employee_status' => $emp !== null ? $emp['employee_status'] : null,
+                'business_unit_id' => $bu['business_unit_id'],
                 'business_unit_status' => $bu['business_unit_status'],
                 'has_super_role' => $hasSuperRole ? 1 : 0,
+                'has_unit_sysadmin_role' => $hasUnitSysAdminRole ? 1 : 0,
             ]];
         }
 
@@ -560,6 +584,7 @@ function makeFixturePdo(): FakeInvitationPdo
     $pdo->businessUnits = [
         1 => ['business_unit_id' => 1, 'business_unit_name' => 'Pet Store', 'business_unit_status' => 'active'],
         2 => ['business_unit_id' => 2, 'business_unit_name' => 'Veterinary Clinic', 'business_unit_status' => 'active'],
+        3 => ['business_unit_id' => 3, 'business_unit_name' => 'Grooming Studio', 'business_unit_status' => 'inactive'],
     ];
     $pdo->roles = [
         1 => 'SUPER_ADMINISTRATOR',
@@ -568,7 +593,7 @@ function makeFixturePdo(): FakeInvitationPdo
         4 => 'RECEPTIONIST',
     ];
     $pdo->users = [
-        // 1: Super Administrator via flag (even if also assigned SYSTEM_ADMINISTRATOR, must be denied)
+        // 1: Active Super Administrator via flag (no SYSTEM_ADMINISTRATOR role)
         1 => ['user_account_id' => 1, 'email' => 'super@pawcarino.test', 'account_status' => 'active', 'is_super_admin' => 1, 'email_verified_at' => '2026-01-01 00:00:00'],
         // 2: Pet Store System Administrator
         2 => ['user_account_id' => 2, 'email' => 'sysadmin.pet@pawcarino.test', 'account_status' => 'active', 'is_super_admin' => 0, 'email_verified_at' => '2026-01-01 00:00:00'],
@@ -576,11 +601,15 @@ function makeFixturePdo(): FakeInvitationPdo
         3 => ['user_account_id' => 3, 'email' => 'sysadmin.vet@pawcarino.test', 'account_status' => 'active', 'is_super_admin' => 0, 'email_verified_at' => '2026-01-01 00:00:00'],
         // 4: Pet Store Business Manager (non-SysAdmin)
         4 => ['user_account_id' => 4, 'email' => 'manager.pet@pawcarino.test', 'account_status' => 'active', 'is_super_admin' => 0, 'email_verified_at' => '2026-01-01 00:00:00'],
-        // 5: Actor Super Admin by role (is_super_admin=0 but holds SUPER_ADMINISTRATOR role)
+        // 5: Active Super Administrator by role only (is_super_admin=0, holds SUPER_ADMINISTRATOR role, no SYSTEM_ADMINISTRATOR role)
         5 => ['user_account_id' => 5, 'email' => 'super.role@pawcarino.test', 'account_status' => 'active', 'is_super_admin' => 0, 'email_verified_at' => '2026-01-01 00:00:00'],
+        // 6: Active Super Administrator without an employee row (is_super_admin=1, no roles)
+        6 => ['user_account_id' => 6, 'email' => 'super.noemp@pawcarino.test', 'account_status' => 'active', 'is_super_admin' => 1, 'email_verified_at' => '2026-01-01 00:00:00'],
+        // 7: Inactive Super Administrator (account_status=inactive, is_super_admin=1 + SUPER_ADMINISTRATOR role)
+        7 => ['user_account_id' => 7, 'email' => 'super.inactive@pawcarino.test', 'account_status' => 'inactive', 'is_super_admin' => 1, 'email_verified_at' => '2026-01-01 00:00:00'],
         // 10: Pending Pet Store Employee
         10 => ['user_account_id' => 10, 'email' => 'carla.mendoza@pawcarino.test', 'account_status' => 'active', 'is_super_admin' => 0, 'email_verified_at' => null],
-        // 11: Already-verified Pet Store Employee
+        // 11: Already-verified Pet Store Employee (Receptionist)
         11 => ['user_account_id' => 11, 'email' => 'verified.emp@pawcarino.test', 'account_status' => 'active', 'is_super_admin' => 0, 'email_verified_at' => '2026-06-01 10:00:00'],
         // 12: Inactive Pending Pet Store Employee
         12 => ['user_account_id' => 12, 'email' => 'inactive.emp@pawcarino.test', 'account_status' => 'inactive', 'is_super_admin' => 0, 'email_verified_at' => null],
@@ -592,6 +621,10 @@ function makeFixturePdo(): FakeInvitationPdo
         15 => ['user_account_id' => 15, 'email' => 'target.super.other@pawcarino.test', 'account_status' => 'active', 'is_super_admin' => 0, 'email_verified_at' => null],
         // 16: Target with is_super_admin=1 and email_verified_at=NULL
         16 => ['user_account_id' => 16, 'email' => 'target.super.flag@pawcarino.test', 'account_status' => 'active', 'is_super_admin' => 1, 'email_verified_at' => null],
+        // 17: Pending Veterinary Clinic Employee (unit 2)
+        17 => ['user_account_id' => 17, 'email' => 'marco.reyes@pawcarino.test', 'account_status' => 'active', 'is_super_admin' => 0, 'email_verified_at' => null],
+        // 18: Pending Employee in Inactive Business Unit (unit 3)
+        18 => ['user_account_id' => 18, 'email' => 'groomer.inactive.unit@pawcarino.test', 'account_status' => 'active', 'is_super_admin' => 0, 'email_verified_at' => null],
     ];
     $pdo->employees = [
         1 => ['employee_id' => 1, 'user_account_id' => 1, 'business_unit_id' => 1, 'first_name' => 'Super', 'last_name' => 'Admin', 'position' => 'Super Administrator', 'employee_status' => 'active'],
@@ -599,6 +632,8 @@ function makeFixturePdo(): FakeInvitationPdo
         3 => ['employee_id' => 3, 'user_account_id' => 3, 'business_unit_id' => 2, 'first_name' => 'Vet', 'last_name' => 'SysAdmin', 'position' => 'Veterinary Clinic System Administrator', 'employee_status' => 'active'],
         4 => ['employee_id' => 4, 'user_account_id' => 4, 'business_unit_id' => 1, 'first_name' => 'Pet', 'last_name' => 'Manager', 'position' => 'Business Manager — Pet Store', 'employee_status' => 'active'],
         5 => ['employee_id' => 5, 'user_account_id' => 5, 'business_unit_id' => 1, 'first_name' => 'Role', 'last_name' => 'Super', 'position' => 'Super Administrator', 'employee_status' => 'active'],
+        // Note: User 6 intentionally has NO employee row
+        7 => ['employee_id' => 7, 'user_account_id' => 7, 'business_unit_id' => 1, 'first_name' => 'Inactive', 'last_name' => 'Super', 'position' => 'Super Administrator', 'employee_status' => 'active'],
         10 => ['employee_id' => 10, 'user_account_id' => 10, 'business_unit_id' => 1, 'first_name' => 'Carla', 'last_name' => 'Mendoza', 'position' => 'Receptionist', 'employee_status' => 'active'],
         11 => ['employee_id' => 11, 'user_account_id' => 11, 'business_unit_id' => 1, 'first_name' => 'Verified', 'last_name' => 'Staff', 'position' => 'Receptionist', 'employee_status' => 'active'],
         12 => ['employee_id' => 12, 'user_account_id' => 12, 'business_unit_id' => 1, 'first_name' => 'Inactive', 'last_name' => 'Staff', 'position' => 'Receptionist', 'employee_status' => 'inactive'],
@@ -606,18 +641,22 @@ function makeFixturePdo(): FakeInvitationPdo
         14 => ['employee_id' => 14, 'user_account_id' => 14, 'business_unit_id' => 1, 'first_name' => 'SameUnit', 'last_name' => 'SuperTarget', 'position' => 'Receptionist', 'employee_status' => 'active'],
         15 => ['employee_id' => 15, 'user_account_id' => 15, 'business_unit_id' => 1, 'first_name' => 'CrossUnit', 'last_name' => 'SuperTarget', 'position' => 'Receptionist', 'employee_status' => 'active'],
         16 => ['employee_id' => 16, 'user_account_id' => 16, 'business_unit_id' => 1, 'first_name' => 'Flag', 'last_name' => 'SuperTarget', 'position' => 'Receptionist', 'employee_status' => 'active'],
+        17 => ['employee_id' => 17, 'user_account_id' => 17, 'business_unit_id' => 2, 'first_name' => 'Marco', 'last_name' => 'Reyes', 'position' => 'Veterinary Assistant', 'employee_status' => 'active'],
+        18 => ['employee_id' => 18, 'user_account_id' => 18, 'business_unit_id' => 3, 'first_name' => 'Grooming', 'last_name' => 'Staff', 'position' => 'Groomer', 'employee_status' => 'active'],
     ];
     $pdo->accountRoles = [
         ['user_account_id' => 1, 'role_id' => 1, 'business_unit_id' => 1],
-        ['user_account_id' => 1, 'role_id' => 2, 'business_unit_id' => 1],
         ['user_account_id' => 2, 'role_id' => 2, 'business_unit_id' => 1],
         ['user_account_id' => 3, 'role_id' => 2, 'business_unit_id' => 2],
         ['user_account_id' => 4, 'role_id' => 3, 'business_unit_id' => 1],
         ['user_account_id' => 5, 'role_id' => 1, 'business_unit_id' => 1],
-        ['user_account_id' => 5, 'role_id' => 2, 'business_unit_id' => 1],
+        ['user_account_id' => 7, 'role_id' => 1, 'business_unit_id' => 1],
         ['user_account_id' => 10, 'role_id' => 4, 'business_unit_id' => 1],
+        ['user_account_id' => 11, 'role_id' => 4, 'business_unit_id' => 1],
         ['user_account_id' => 14, 'role_id' => 1, 'business_unit_id' => 1],
         ['user_account_id' => 15, 'role_id' => 1, 'business_unit_id' => 2], // SUPER_ADMINISTRATOR in DIFFERENT unit!
+        ['user_account_id' => 17, 'role_id' => 4, 'business_unit_id' => 2],
+        ['user_account_id' => 18, 'role_id' => 4, 'business_unit_id' => 3],
     ];
     return $pdo;
 }
@@ -685,36 +724,158 @@ try {
         assertTrue(!str_contains($url, 'evil.attacker.invalid'), 'Must ignore HTTP_HOST');
     });
 
-    // --- 2. Actor & Target Super Administrator Protection ---
-    test('Actor Super Administrator (flag or role) and cross-unit SysAdmin are denied (403)', function () use ($tempEnv) {
-        loadTempEnv($tempEnv, "APP_URL=https://portal.pawcarino.test\nMAIL_DRIVER=null\n");
-        $pdo = makeFixturePdo();
-        $svc = new EmployeeInvitationService($pdo);
+    // --- 2. Actor Authorization (Super Admin & Unit SysAdmin) & Target Super Admin Exclusion ---
+    test('Active Super Administrators (flag, role-only, and without employee row) succeed on create, resend, and revoke across active business units', function () use ($tempEnv) {
+        loadTempEnv($tempEnv, "APP_URL=https://portal.pawcarino.test\n");
 
-        $r1 = $svc->createInvitation(1, 10, 10, 1, 'carla.mendoza@pawcarino.test');
-        $r2 = $svc->createInvitation(5, 10, 10, 1, 'carla.mendoza@pawcarino.test');
-        $crossUnit = $svc->createInvitation(3, 10, 10, 1, 'carla.mendoza@pawcarino.test');
-        $manager = $svc->createInvitation(4, 10, 10, 1, 'carla.mendoza@pawcarino.test');
+        $actors = [
+            1 => 'is_super_admin=1 without SYSTEM_ADMINISTRATOR role',
+            5 => 'SUPER_ADMINISTRATOR role without SYSTEM_ADMINISTRATOR role',
+            6 => 'is_super_admin=1 without employee row',
+        ];
+        $targets = [
+            ['employee_id' => 10, 'user_account_id' => 10, 'unit_id' => 1, 'email' => 'carla.mendoza@pawcarino.test'],
+            ['employee_id' => 17, 'user_account_id' => 17, 'unit_id' => 2, 'email' => 'marco.reyes@pawcarino.test'],
+        ];
 
-        assertTrue(!$r1['ok'] && $r1['status'] === 403, 'is_super_admin=1 actor must be denied');
-        assertTrue(!$r2['ok'] && $r2['status'] === 403, 'SUPER_ADMINISTRATOR role actor must be denied');
-        assertTrue(!$crossUnit['ok'] && $crossUnit['status'] === 403, 'Cross-unit SysAdmin must be denied');
-        assertTrue(!$manager['ok'] && $manager['status'] === 403, 'Non-SysAdmin must be denied');
-        assertTrue(count($pdo->invitations) === 0, 'No invitations should be written');
+        foreach ($actors as $actorId => $label) {
+            foreach ($targets as $target) {
+                $pdo = makeFixturePdo();
+                $now = strtotime('2026-11-20 12:00:00 UTC');
+                $capturedTokens = [];
+
+                $svc = new EmployeeInvitationService(
+                    $pdo,
+                    function (string $email, string $name, string $unit, string $pos, string $url) use (&$capturedTokens): array {
+                        parse_str((string)parse_url($url, PHP_URL_QUERY), $q);
+                        $capturedTokens[] = (string)($q['token'] ?? '');
+                        return ['submitted' => true, 'driver' => 'smtp', 'error' => null, 'status_code' => 200];
+                    },
+                    function () use (&$now): int { return $now; }
+                );
+
+                $empId = $target['employee_id'];
+                $uid = $target['user_account_id'];
+                $unitId = $target['unit_id'];
+                $email = $target['email'];
+
+                // 1) Create invitation
+                $created = $svc->createInvitation($actorId, $empId, $uid, $unitId, $email);
+                assertTrue(
+                    $created['ok'] === true && $created['status'] === 201 && $created['email_submitted'] === true,
+                    "Create failed for Super Admin #{$actorId} ({$label}) in unit {$unitId}"
+                );
+                assertTrue(!array_key_exists('raw_token', $created), 'createInvitation must never return raw_token');
+                $inv1Id = (int)$created['invitation_id'];
+                $rawTok1 = $capturedTokens[0] ?? '';
+                assertTrue(EmployeeInvitationService::isValidRawTokenFormat($rawTok1), 'Captured raw token 1 must be 64-char hex');
+                assertTrue(
+                    $pdo->invitations[$inv1Id]['token_hash'] === EmployeeInvitationService::hashToken($rawTok1)
+                    && $pdo->invitations[$inv1Id]['token_hash'] !== $rawTok1,
+                    'Stored token_hash must be SHA-256 digest of raw token'
+                );
+                assertTrue(
+                    $pdo->invitations[$inv1Id]['expires_at'] === gmdate('Y-m-d H:i:s', $now + EmployeeInvitationService::EXPIRY_SECONDS),
+                    'Create must set 48-hour UTC expiry'
+                );
+                assertTrue($pdo->invitations[$inv1Id]['created_by_user_id'] === $actorId, 'created_by_user_id must match Super Admin actor');
+
+                // Verify canonical lock order and non-locking business_unit
+                assertTrue(count($pdo->forUpdateQueries) === 3, 'Expected 3 FOR UPDATE queries on create');
+                assertTrue(str_contains($pdo->forUpdateQueries[0], 'FROM user_account ua'), 'First lock must be user_account');
+                assertTrue(str_contains($pdo->forUpdateQueries[1], 'FROM employee e'), 'Second lock must be employee');
+                assertTrue(str_contains($pdo->forUpdateQueries[2], 'FROM employee_invitation'), 'Third lock must be employee_invitation');
+                foreach ($pdo->forUpdateQueries as $q) {
+                    assertTrue(!str_contains($q, 'FROM business_unit') && !str_contains($q, 'JOIN business_unit'), 'business_unit must never be locked FOR UPDATE');
+                }
+
+                // Single active pending guard: duplicate create rejected 409
+                $dupCreate = $svc->createInvitation($actorId, $empId, $uid, $unitId, $email);
+                assertTrue(!$dupCreate['ok'] && $dupCreate['status'] === 409, 'Duplicate pending create must be rejected 409');
+
+                // 2) Resend invitation
+                $now += 3600;
+                $pdo->forUpdateQueries = [];
+                $resent = $svc->resendInvitation($actorId, $empId, $unitId);
+                assertTrue(
+                    $resent['ok'] === true && $resent['status'] === 200 && $resent['revoked_count'] === 1 && $resent['email_submitted'] === true,
+                    "Resend failed for Super Admin #{$actorId} ({$label}) in unit {$unitId}"
+                );
+                assertTrue(!array_key_exists('raw_token', $resent), 'resendInvitation must never return raw_token');
+                $inv2Id = (int)$resent['invitation_id'];
+                $rawTok2 = $capturedTokens[1] ?? '';
+                assertTrue(EmployeeInvitationService::isValidRawTokenFormat($rawTok2) && $rawTok2 !== $rawTok1, 'Replacement token must be fresh 64-char hex');
+                assertTrue($pdo->invitations[$inv1Id]['status'] === 'revoked' && $pdo->invitations[$inv1Id]['revoke_reason'] === 'resent', 'Prior invite must be revoked with reason resent');
+                assertTrue($pdo->invitations[$inv2Id]['status'] === 'pending', 'Replacement invite must be pending');
+                assertTrue($pdo->invitations[$inv2Id]['token_hash'] === EmployeeInvitationService::hashToken($rawTok2), 'Replacement token_hash must match SHA-256');
+                assertTrue(
+                    $pdo->invitations[$inv2Id]['expires_at'] === gmdate('Y-m-d H:i:s', $now + EmployeeInvitationService::EXPIRY_SECONDS),
+                    'Resend must refresh 48-hour UTC expiry'
+                );
+                assertTrue(
+                    count($pdo->forUpdateQueries) === 3
+                    && str_contains($pdo->forUpdateQueries[0], 'FROM user_account ua')
+                    && str_contains($pdo->forUpdateQueries[1], 'FROM employee e')
+                    && str_contains($pdo->forUpdateQueries[2], 'FROM employee_invitation'),
+                    'Resend must preserve canonical lock order'
+                );
+
+                // 3) Revoke invitation
+                $now += 600;
+                $pdo->forUpdateQueries = [];
+                $revoked = $svc->revokeInvitation($actorId, $empId, $unitId, 'super_admin_revoked');
+                assertTrue(
+                    $revoked['ok'] === true && $revoked['status'] === 200 && $revoked['revoked_count'] === 1 && $revoked['revoked_invitation_ids'] === [$inv2Id],
+                    "Revoke failed for Super Admin #{$actorId} ({$label}) in unit {$unitId}"
+                );
+                assertTrue($pdo->invitations[$inv2Id]['status'] === 'revoked' && $pdo->invitations[$inv2Id]['revoke_reason'] === 'super_admin_revoked', 'Invitation must be revoked');
+                assertTrue(
+                    count($pdo->forUpdateQueries) === 3
+                    && str_contains($pdo->forUpdateQueries[0], 'FROM user_account ua')
+                    && str_contains($pdo->forUpdateQueries[1], 'FROM employee e')
+                    && str_contains($pdo->forUpdateQueries[2], 'FROM employee_invitation'),
+                    'Revoke must preserve canonical lock order'
+                );
+
+                // Single-use / post-revocation guard: subsequent revoke and resend must fail 409
+                $revAgain = $svc->revokeInvitation($actorId, $empId, $unitId);
+                $resAfterRev = $svc->resendInvitation($actorId, $empId, $unitId);
+                assertTrue(!$revAgain['ok'] && $revAgain['status'] === 409, 'Revoking already-revoked invite must fail 409');
+                assertTrue(!$resAfterRev['ok'] && $resAfterRev['status'] === 409, 'Resending after revocation must fail 409');
+
+                // Verify audit logs carry Super Admin actor_user_id and never leak raw tokens
+                assertTrue(count($pdo->auditLogs) === 3, 'Expected 3 audit log entries (created, resent, revoked)');
+                $expectedActions = ['invitation.created', 'invitation.resent', 'invitation.revoked'];
+                foreach ($pdo->auditLogs as $idx => $log) {
+                    assertTrue($log['action_code'] === $expectedActions[$idx], "Unexpected audit action #{$idx}: {$log['action_code']}");
+                    assertTrue((int)$log['actor_user_id'] === $actorId, "Audit log actor_user_id must be Super Admin #{$actorId}");
+                    assertTrue((int)$log['business_unit_id'] === $unitId, "Audit log business_unit_id must be {$unitId}");
+                    assertTrue((int)$log['affected_employee_id'] === $empId, "Audit log affected_employee_id must be {$empId}");
+                    assertTrue(!str_contains((string)$log['summary'], $rawTok1) && !str_contains((string)$log['summary'], $rawTok2), 'Audit log must never expose raw tokens');
+                }
+            }
+        }
     });
 
-    test('Target Super Administrator (flag, same-unit role, or cross-unit role) is rejected across create, resend, and revoke', function () use ($tempEnv) {
-        loadTempEnv($tempEnv, "APP_URL=https://portal.pawcarino.test\nMAIL_DRIVER=null\n");
+    test('Inactive Super Admin, Super Admin targeting inactive business unit, and Super Admin with unresolved unaccepted invitation history are denied (403)', function () use ($tempEnv) {
+        loadTempEnv($tempEnv, "APP_URL=https://portal.pawcarino.test\n");
         $pdo = makeFixturePdo();
-        $svc = new EmployeeInvitationService($pdo);
+        $mailCalls = 0;
+        $svc = new EmployeeInvitationService(
+            $pdo,
+            function () use (&$mailCalls): array {
+                $mailCalls++;
+                return ['submitted' => true, 'driver' => 'smtp', 'error' => null, 'status_code' => 200];
+            }
+        );
 
-        // Seed synthetic pending invitation on target 15 to verify resend & revoke also reject Super Admin targets
-        $pdo->invitations[900] = [
-            'invitation_id' => 900,
-            'user_account_id' => 15,
-            'employee_id' => 15,
+        // Seed synthetic pending invitations on emp 10 (unit 1) and emp 18 (inactive unit 3) so resend & revoke test 403 auth
+        $pdo->invitations[910] = [
+            'invitation_id' => 910,
+            'user_account_id' => 10,
+            'employee_id' => 10,
             'business_unit_id' => 1,
-            'invited_email' => 'target.super.other@pawcarino.test',
+            'invited_email' => 'carla.mendoza@pawcarino.test',
             'token_hash' => hash('sha256', EmployeeInvitationService::generateToken()),
             'status' => 'pending',
             'expires_at' => '2026-11-22 12:00:00',
@@ -729,23 +890,163 @@ try {
             'created_at' => '2026-11-20 12:00:00',
             'updated_at' => '2026-11-20 12:00:00',
         ];
+        $pdo->invitations[918] = [
+            'invitation_id' => 918,
+            'user_account_id' => 18,
+            'employee_id' => 18,
+            'business_unit_id' => 3,
+            'invited_email' => 'groomer.inactive.unit@pawcarino.test',
+            'token_hash' => hash('sha256', EmployeeInvitationService::generateToken()),
+            'status' => 'pending',
+            'expires_at' => '2026-11-22 12:00:00',
+            'accepted_at' => null,
+            'revoked_at' => null,
+            'revoke_reason' => null,
+            'email_submission_status' => 'pending',
+            'email_submitted_at' => null,
+            'email_failed_at' => null,
+            'email_error' => null,
+            'created_by_user_id' => 1,
+            'created_at' => '2026-11-20 12:00:00',
+            'updated_at' => '2026-11-20 12:00:00',
+        ];
 
-        $cSame = $svc->createInvitation(2, 14, 14, 1, 'target.super.same@pawcarino.test');
-        $cOther = $svc->createInvitation(2, 15, 15, 1, 'target.super.other@pawcarino.test');
-        $cFlag = $svc->createInvitation(2, 16, 16, 1, 'target.super.flag@pawcarino.test');
+        // 1) Inactive Super Admin (#7) denied across create, resend, revoke
+        $inactCreate = $svc->createInvitation(7, 17, 17, 2, 'marco.reyes@pawcarino.test');
+        $inactResend = $svc->resendInvitation(7, 10, 1);
+        $inactRevoke = $svc->revokeInvitation(7, 10, 1);
+        assertTrue(!$inactCreate['ok'] && $inactCreate['status'] === 403, 'Inactive Super Admin create must be denied 403');
+        assertTrue(!$inactResend['ok'] && $inactResend['status'] === 403, 'Inactive Super Admin resend must be denied 403');
+        assertTrue(!$inactRevoke['ok'] && $inactRevoke['status'] === 403, 'Inactive Super Admin revoke must be denied 403');
 
-        $resOther = $svc->resendInvitation(2, 15, 1);
-        $revOther = $svc->revokeInvitation(2, 15, 1);
-        $resSame = $svc->resendInvitation(2, 14, 1);
-        $revFlag = $svc->revokeInvitation(2, 16, 1);
+        // 2) Active Super Admins (#1, #5, #6) targeting inactive business unit (unit 3) denied across create, resend, revoke
+        foreach ([1, 5, 6] as $saId) {
+            $buCreate = $svc->createInvitation($saId, 18, 18, 3, 'groomer.inactive.unit@pawcarino.test');
+            $buResend = $svc->resendInvitation($saId, 18, 3);
+            $buRevoke = $svc->revokeInvitation($saId, 18, 3);
+            assertTrue(!$buCreate['ok'] && $buCreate['status'] === 403, "Super Admin #{$saId} create on inactive unit 3 must be denied 403");
+            assertTrue(!$buResend['ok'] && $buResend['status'] === 403, "Super Admin #{$saId} resend on inactive unit 3 must be denied 403");
+            assertTrue(!$buRevoke['ok'] && $buRevoke['status'] === 403, "Super Admin #{$saId} revoke on inactive unit 3 must be denied 403");
+        }
 
-        assertTrue(!$cSame['ok'] && $cSame['status'] === 403, 'Create must reject same-unit SUPER_ADMINISTRATOR role');
-        assertTrue(!$cOther['ok'] && $cOther['status'] === 403, 'Create must reject cross-unit SUPER_ADMINISTRATOR role');
-        assertTrue(!$cFlag['ok'] && $cFlag['status'] === 403, 'Create must reject is_super_admin=1');
-        assertTrue(!$resOther['ok'] && $resOther['status'] === 403, 'Resend must reject cross-unit SUPER_ADMINISTRATOR role');
-        assertTrue(!$revOther['ok'] && $revOther['status'] === 403, 'Revoke must reject cross-unit SUPER_ADMINISTRATOR role');
-        assertTrue(!$resSame['ok'] && $resSame['status'] === 403, 'Resend must reject same-unit SUPER_ADMINISTRATOR role');
-        assertTrue(!$revFlag['ok'] && $revFlag['status'] === 403, 'Revoke must reject is_super_admin=1');
+        // 3) Super Admin (#1) with unresolved unaccepted invitation history (pending, expired, or revoked) denied 403
+        foreach (['pending', 'expired', 'revoked'] as $unacceptedStatus) {
+            $pdo->invitations[950] = [
+                'invitation_id' => 950,
+                'user_account_id' => 1,
+                'employee_id' => 1,
+                'business_unit_id' => 1,
+                'invited_email' => 'super@pawcarino.test',
+                'token_hash' => hash('sha256', EmployeeInvitationService::generateToken()),
+                'status' => $unacceptedStatus,
+                'expires_at' => '2026-11-22 12:00:00',
+                'accepted_at' => null,
+                'revoked_at' => $unacceptedStatus === 'revoked' ? '2026-11-20 12:00:00' : null,
+                'revoke_reason' => $unacceptedStatus === 'revoked' ? 'admin_revoked' : null,
+                'email_submission_status' => 'pending',
+                'email_submitted_at' => null,
+                'email_failed_at' => null,
+                'email_error' => null,
+                'created_by_user_id' => 2,
+                'created_at' => '2026-11-20 12:00:00',
+                'updated_at' => '2026-11-20 12:00:00',
+            ];
+
+            $blkCreate = $svc->createInvitation(1, 17, 17, 2, 'marco.reyes@pawcarino.test');
+            $blkResend = $svc->resendInvitation(1, 10, 1);
+            $blkRevoke = $svc->revokeInvitation(1, 10, 1);
+            assertTrue(!$blkCreate['ok'] && $blkCreate['status'] === 403, "Super Admin with {$unacceptedStatus} unaccepted invite create must be denied 403");
+            assertTrue(!$blkResend['ok'] && $blkResend['status'] === 403, "Super Admin with {$unacceptedStatus} unaccepted invite resend must be denied 403");
+            assertTrue(!$blkRevoke['ok'] && $blkRevoke['status'] === 403, "Super Admin with {$unacceptedStatus} unaccepted invite revoke must be denied 403");
+        }
+
+        assertTrue($pdo->invitations[910]['status'] === 'pending' && $pdo->invitations[918]['status'] === 'pending', 'Seeded invitations must remain untouched');
+        assertTrue(count($pdo->auditLogs) === 0 && $mailCalls === 0, 'No audit logs or emails may be emitted on denied actions');
+    });
+
+    test('Same-unit System Administrator retains access while cross-unit System Administrator and unauthorized ordinary employees are denied (403)', function () use ($tempEnv) {
+        loadTempEnv($tempEnv, "APP_URL=https://portal.pawcarino.test\n");
+        $pdo = makeFixturePdo();
+        $svc = new EmployeeInvitationService(
+            $pdo,
+            fn() => ['submitted' => true, 'driver' => 'smtp', 'error' => null, 'status_code' => 200]
+        );
+
+        // Same-unit SysAdmin (#2) succeeds on create in unit 1
+        $sameCreate = $svc->createInvitation(2, 10, 10, 1, 'carla.mendoza@pawcarino.test');
+        assertTrue($sameCreate['ok'] === true && $sameCreate['status'] === 201, 'Same-unit SysAdmin (#2) create must succeed');
+
+        // Cross-unit SysAdmin (#3), Business Manager (#4), and Receptionist (#11) denied across create, resend, and revoke on unit 1
+        foreach ([3 => 'Cross-unit SysAdmin', 4 => 'Business Manager', 11 => 'Receptionist'] as $actorId => $roleLabel) {
+            $c = $svc->createInvitation($actorId, 10, 10, 1, 'carla.mendoza@pawcarino.test');
+            $rs = $svc->resendInvitation($actorId, 10, 1);
+            $rv = $svc->revokeInvitation($actorId, 10, 1);
+            assertTrue(!$c['ok'] && $c['status'] === 403, "{$roleLabel} (#{$actorId}) create must be denied 403");
+            assertTrue(!$rs['ok'] && $rs['status'] === 403, "{$roleLabel} (#{$actorId}) resend must be denied 403");
+            assertTrue(!$rv['ok'] && $rv['status'] === 403, "{$roleLabel} (#{$actorId}) revoke must be denied 403");
+        }
+
+        // Unit 1 SysAdmin (#2) is also denied cross-unit on unit 2 employee (#17)
+        $crossFrom2 = $svc->createInvitation(2, 17, 17, 2, 'marco.reyes@pawcarino.test');
+        assertTrue(!$crossFrom2['ok'] && $crossFrom2['status'] === 403, 'Unit 1 SysAdmin (#2) must be denied cross-unit access to unit 2');
+
+        // Same-unit SysAdmin (#2) still succeeds on resend and revoke in unit 1
+        $sameResend = $svc->resendInvitation(2, 10, 1);
+        assertTrue($sameResend['ok'] === true && $sameResend['status'] === 200, 'Same-unit SysAdmin (#2) resend must succeed');
+        $sameRevoke = $svc->revokeInvitation(2, 10, 1);
+        assertTrue($sameRevoke['ok'] === true && $sameRevoke['status'] === 200, 'Same-unit SysAdmin (#2) revoke must succeed');
+    });
+
+    test('Target Super Administrator (flag, same-unit role, or cross-unit role) is rejected across create, resend, and revoke for both System Admin and Super Admin actors', function () use ($tempEnv) {
+        loadTempEnv($tempEnv, "APP_URL=https://portal.pawcarino.test\nMAIL_DRIVER=null\n");
+        $pdo = makeFixturePdo();
+        $svc = new EmployeeInvitationService($pdo);
+
+        // Seed synthetic pending invitations on targets 14, 15, and 16 to verify resend & revoke reject Super Admin targets
+        $targets = [
+            14 => ['email' => 'target.super.same@pawcarino.test', 'inv_id' => 900, 'label' => 'same-unit SUPER_ADMINISTRATOR role'],
+            15 => ['email' => 'target.super.other@pawcarino.test', 'inv_id' => 901, 'label' => 'cross-unit SUPER_ADMINISTRATOR role'],
+            16 => ['email' => 'target.super.flag@pawcarino.test', 'inv_id' => 902, 'label' => 'is_super_admin=1'],
+        ];
+        foreach ($targets as $tid => $info) {
+            $pdo->invitations[$info['inv_id']] = [
+                'invitation_id' => $info['inv_id'],
+                'user_account_id' => $tid,
+                'employee_id' => $tid,
+                'business_unit_id' => 1,
+                'invited_email' => $info['email'],
+                'token_hash' => hash('sha256', EmployeeInvitationService::generateToken()),
+                'status' => 'pending',
+                'expires_at' => '2026-11-22 12:00:00',
+                'accepted_at' => null,
+                'revoked_at' => null,
+                'revoke_reason' => null,
+                'email_submission_status' => 'pending',
+                'email_submitted_at' => null,
+                'email_failed_at' => null,
+                'email_error' => null,
+                'created_by_user_id' => 2,
+                'created_at' => '2026-11-20 12:00:00',
+                'updated_at' => '2026-11-20 12:00:00',
+            ];
+        }
+
+        foreach ([2 => 'System Administrator (#2)', 1 => 'Super Administrator (#1)'] as $actorId => $actorLabel) {
+            foreach ($targets as $tid => $info) {
+                $c = $svc->createInvitation($actorId, $tid, $tid, 1, $info['email']);
+                $rs = $svc->resendInvitation($actorId, $tid, 1);
+                $rv = $svc->revokeInvitation($actorId, $tid, 1);
+
+                assertTrue(!$c['ok'] && $c['status'] === 403, "{$actorLabel} create must reject {$info['label']}");
+                assertTrue(!$rs['ok'] && $rs['status'] === 403, "{$actorLabel} resend must reject {$info['label']}");
+                assertTrue(!$rv['ok'] && $rv['status'] === 403, "{$actorLabel} revoke must reject {$info['label']}");
+            }
+        }
+
+        assertTrue(count($pdo->invitations) === 3 && count($pdo->auditLogs) === 0, 'No invitations may be created or mutated for Super Admin targets');
+        foreach ($targets as $info) {
+            assertTrue($pdo->invitations[$info['inv_id']]['status'] === 'pending', 'Seeded Super Admin target invitation must remain untouched');
+        }
     });
 
     // --- 3. Canonical Lock Order & Non-Locking business_unit ---
@@ -1175,6 +1476,100 @@ try {
         assertTrue($pdo->invitations[$invId]['email_submission_status'] === 'submitted', 'Retry should transition status to submitted');
         assertTrue($pdo->invitations[$invId]['email_submitted_at'] === '2026-11-20 12:01:00', 'email_submitted_at should be recorded');
         assertTrue($pdo->invitations[$invId]['email_failed_at'] === null && $pdo->invitations[$invId]['email_error'] === null, 'email_failed_at and email_error should be cleared');
+    });
+
+    test('Email normalization and invitation lifecycle protections (duplicate pending, revoked, and accepted)', function () use ($tempEnv) {
+        loadTempEnv($tempEnv, "APP_URL=https://portal.pawcarino.test\n");
+        $pdo = makeFixturePdo();
+        $now = strtotime('2026-11-20 12:00:00 UTC');
+        $mailCalls = 0;
+
+        $svc = new EmployeeInvitationService(
+            $pdo,
+            function () use (&$mailCalls): array {
+                $mailCalls++;
+                return ['submitted' => true, 'driver' => 'smtp', 'error' => null, 'status_code' => 200];
+            },
+            function () use (&$now): int { return $now; }
+        );
+
+        // 1) Genuinely mismatched email is rejected 422 before creating any invitation
+        $mismatch = $svc->createInvitation(2, 10, 10, 1, 'wrong.person@pawcarino.test');
+        assertTrue(!$mismatch['ok'] && $mismatch['status'] === 422, 'Mismatched email must be rejected with 422');
+        assertTrue(count($pdo->invitations) === 0 && $mailCalls === 0, 'No invitation or email should be created on email mismatch');
+
+        // Case-insensitive + surrounding-whitespace email matches user_account.email and stores normalized lowercase
+        $created = $svc->createInvitation(2, 10, 10, 1, '  Carla.Mendoza@PawCarino.TEST  ');
+        assertTrue($created['ok'] === true && $created['status'] === 201, 'Mixed-case / padded email matching user_account.email must succeed');
+        $invId = (int)$created['invitation_id'];
+        assertTrue($created['invited_email'] === 'carla.mendoza@pawcarino.test', 'Returned invited_email must be normalized lowercase');
+        assertTrue($pdo->invitations[$invId]['invited_email'] === 'carla.mendoza@pawcarino.test', 'Persisted invited_email must be normalized lowercase');
+        assertTrue($mailCalls === 1, 'Initial create must send one email');
+
+        // 2) Duplicate pending invitation protection while unexpired pending exists
+        $now += 60;
+        $dup = $svc->createInvitation(2, 10, 10, 1, 'carla.mendoza@pawcarino.test');
+        assertTrue(!$dup['ok'] && $dup['status'] === 409, 'Duplicate pending createInvitation must reject with 409');
+        assertTrue(count($pdo->invitations) === 1 && $mailCalls === 1, 'Duplicate pending create must not add an invitation or send a duplicate email');
+
+        // 3a) Revoked lifecycle rules: resend and revoke both reject with 409
+        $revoked = $svc->revokeInvitation(2, 10, 1, 'admin_revoked');
+        assertTrue($revoked['ok'] === true && $revoked['status'] === 200, 'Initial revoke must succeed');
+        assertTrue($pdo->invitations[$invId]['status'] === 'revoked', 'Invitation status must be revoked');
+
+        $resendRevoked = $svc->resendInvitation(2, 10, 1);
+        $revokeAgain = $svc->revokeInvitation(2, 10, 1);
+        assertTrue(!$resendRevoked['ok'] && $resendRevoked['status'] === 409, 'resendInvitation after revocation must reject with 409');
+        assertTrue(!$revokeAgain['ok'] && $revokeAgain['status'] === 409, 'revokeInvitation on already-revoked invitation must reject with 409');
+        assertTrue(count($pdo->invitations) === 1 && $mailCalls === 1, 'Rejected post-revoke actions must not create invitations or send mail');
+
+        // 3b) Accepted lifecycle rules: create, resend, and revoke all reject with 409
+        $pdo->invitations[$invId]['status'] = 'accepted';
+        $pdo->invitations[$invId]['accepted_at'] = '2026-11-20 12:05:00';
+        $pdo->invitations[$invId]['revoked_at'] = null;
+        $pdo->invitations[$invId]['revoke_reason'] = null;
+        $pdo->users[10]['email_verified_at'] = '2026-11-20 12:05:00';
+
+        $createAccepted = $svc->createInvitation(2, 10, 10, 1, 'carla.mendoza@pawcarino.test');
+        $resendAccepted = $svc->resendInvitation(2, 10, 1);
+        $revokeAccepted = $svc->revokeInvitation(2, 10, 1);
+        assertTrue(!$createAccepted['ok'] && $createAccepted['status'] === 409, 'createInvitation for accepted employee must reject with 409');
+        assertTrue(!$resendAccepted['ok'] && $resendAccepted['status'] === 409, 'resendInvitation for accepted employee must reject with 409');
+        assertTrue(!$revokeAccepted['ok'] && $revokeAccepted['status'] === 409, 'revokeInvitation for accepted employee must reject with 409');
+        assertTrue(count($pdo->invitations) === 1 && $mailCalls === 1, 'Rejected post-accept actions must not create invitations or send mail');
+    });
+
+    test('revokeInvitation transitions past-due pending invitation to expired and rejects 409 so resend remains possible', function () use ($tempEnv) {
+        loadTempEnv($tempEnv, "APP_URL=https://portal.pawcarino.test\n");
+        $pdo = makeFixturePdo();
+        $now = strtotime('2026-11-20 12:00:00 UTC');
+        $mailCalls = 0;
+
+        $svc = new EmployeeInvitationService(
+            $pdo,
+            function () use (&$mailCalls): array {
+                $mailCalls++;
+                return ['submitted' => true, 'driver' => 'smtp', 'error' => null, 'status_code' => 200];
+            },
+            function () use (&$now): int { return $now; }
+        );
+
+        $created = $svc->createInvitation(1, 10, 10, 1, 'carla.mendoza@pawcarino.test');
+        assertTrue($created['ok'] === true && $mailCalls === 1, 'Initial Super Admin createInvitation should succeed');
+        $invId = (int)$created['invitation_id'];
+
+        // Advance past 48h expiry while DB status is still 'pending'
+        $now += EmployeeInvitationService::EXPIRY_SECONDS + 10;
+
+        $revExpired = $svc->revokeInvitation(1, 10, 1, 'admin_revoked');
+        assertTrue(!$revExpired['ok'] && $revExpired['status'] === 409, 'revokeInvitation must reject past-due pending invitation with 409');
+        assertTrue($pdo->invitations[$invId]['status'] === 'expired', 'Past-due pending invitation must transition to expired (not revoked)');
+
+        // Because it transitioned to expired (not revoked), resendInvitation must still succeed
+        $resent = $svc->resendInvitation(1, 10, 1);
+        assertTrue($resent['ok'] === true && $resent['status'] === 200 && $mailCalls === 2, 'resendInvitation after past-due revoke attempt must still succeed');
+        $newInvId = (int)$resent['invitation_id'];
+        assertTrue($newInvId !== $invId && $pdo->invitations[$newInvId]['status'] === 'pending', 'Replacement pending invitation should be created');
     });
 } finally {
     EnvConfig::setEnvPathForTesting(null);

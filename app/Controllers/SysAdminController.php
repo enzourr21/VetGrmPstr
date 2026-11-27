@@ -164,10 +164,10 @@ final class SysAdminController extends Controller
         $this->render('sysadmin/dashboard', $data);
     }
 
-    public function employees(?int $routeUnitId = null): void
+    /** Render the unit employees page with consistent pagination and view state. */
+    private function renderEmployeesPage(int $unitId, string $unitName, bool $isSuper, array $errors = [], array $old = []): void
     {
-        [, , $unitId, $unitName, $isSuper] = $this->requireSystemAdmin($routeUnitId);
-        $data = $this->employeesData($unitId, $unitName, $isSuper);
+        $data = $this->employeesData($unitId, $unitName, $isSuper, $errors, $old);
         if ($this->isPetStore($unitName)) {
             $perPage = 6;
             $all = $data['allEmployees'];
@@ -187,14 +187,16 @@ final class SysAdminController extends Controller
         $this->render('sysadmin/employees', $data);
     }
 
+    public function employees(?int $routeUnitId = null): void
+    {
+        [, , $unitId, $unitName, $isSuper] = $this->requireSystemAdmin($routeUnitId);
+        $this->renderEmployeesPage($unitId, $unitName, $isSuper);
+    }
+
     public function storeEmployee(?int $routeUnitId = null): void
     {
         [$actorUid, , $unitId, $unitName, $isSuper] = $this->requireSystemAdmin($routeUnitId);
         CSRF::check();
-
-        if ($isSuper) {
-            $this->forbidden('Only business-unit System Administrators can create invited employee accounts. Use the Super Administrator Employees page to create accounts directly.');
-        }
 
         $rawRoles = $_POST['roles'] ?? ($_POST['role_ids'] ?? []);
         if (!is_array($rawRoles)) {
@@ -212,7 +214,6 @@ final class SysAdminController extends Controller
             }
         }
 
-        $isPetStore = $this->isPetStore($unitName);
         $input = [
             'full_name' => $this->post('full_name'),
             'first_name' => $this->post('first_name'),
@@ -235,24 +236,7 @@ final class SysAdminController extends Controller
             Session::flash('error', 'Could not create employee invitation. Please check the form errors.');
             $oldSafe = $input;
             unset($oldSafe['password']);
-            $data = $this->employeesData($unitId, $unitName, $isSuper, $res['errors'], $oldSafe);
-            if ($isPetStore) {
-                $perPage = 6;
-                $all = $data['allEmployees'];
-                $totalEmployees = count($all);
-                $totalPages = max(1, (int)ceil($totalEmployees / $perPage));
-                $currentPage = max(1, (int)($_GET['page'] ?? 1));
-                if ($currentPage > $totalPages) {
-                    $currentPage = $totalPages;
-                }
-                $offset = ($currentPage - 1) * $perPage;
-                $data['currentPage'] = $currentPage;
-                $data['totalPages'] = $totalPages;
-                $data['perPage'] = $perPage;
-                $data['totalEmployees'] = $totalEmployees;
-                $data['employees'] = array_slice($all, $offset, $perPage);
-            }
-            $this->render('sysadmin/employees', $data);
+            $this->renderEmployeesPage($unitId, $unitName, $isSuper, $res['errors'], $oldSafe);
             return;
         }
 
@@ -375,6 +359,13 @@ final class SysAdminController extends Controller
             $this->redirect($back);
         }
 
+        if (EmployeeInvitationService::isAccountBlockedByUnacceptedInvitation($this->db, (int)$emp['user_account_id'])) {
+            http_response_code(409);
+            Session::flash('error', 'Account activation status cannot be changed while the employee has an unaccepted invitation. Use invitation actions instead.');
+            $this->renderEmployeesPage($unitId, $unitName, $isSuper);
+            return;
+        }
+
         $target = $this->post('account_status');
         if (!in_array($target, ['active', 'inactive'], true)) {
             http_response_code(422);
@@ -382,21 +373,48 @@ final class SysAdminController extends Controller
             $this->redirect($back);
         }
         $current = (string)$emp['account_status'];
-        if ($current === $target) {
+        $currentEmpStatus = (string)$emp['employee_status'];
+        if ($current === $target && $currentEmpStatus === $target) {
             Session::flash('info', 'The account already has that status.');
             $this->redirect($back);
         }
 
+        $wasInactive = $current === 'inactive' || $currentEmpStatus === 'inactive';
         if ($target === 'inactive') {
             $code = 'employee.deactivated';
             $verb = 'Deactivated';
         } else {
-            $code = $current === 'inactive' ? 'employee.reactivated' : 'employee.activated';
-            $verb = $current === 'inactive' ? 'Reactivated' : 'Activated';
+            $code = $wasInactive ? 'employee.reactivated' : 'employee.activated';
+            $verb = $wasInactive ? 'Reactivated' : 'Activated';
         }
 
         $this->db->beginTransaction();
         try {
+            $uaLock = $this->db->prepare('SELECT account_status FROM user_account WHERE user_account_id = ? FOR UPDATE');
+            $uaLock->execute([(int)$emp['user_account_id']]);
+            $lockedAccountStatus = (string)$uaLock->fetchColumn();
+
+            $empLock = $this->db->prepare('SELECT employee_status FROM employee WHERE employee_id = ? FOR UPDATE');
+            $empLock->execute([$employeeId]);
+            $lockedEmpStatus = (string)$empLock->fetchColumn();
+
+            if (EmployeeInvitationService::isAccountBlockedByUnacceptedInvitation($this->db, (int)$emp['user_account_id'])) {
+                $this->db->rollBack();
+                http_response_code(409);
+                Session::flash('error', 'Account activation status cannot be changed while the employee has an unaccepted invitation. Use invitation actions instead.');
+                $this->renderEmployeesPage($unitId, $unitName, $isSuper);
+                return;
+            }
+
+            if ($lockedAccountStatus === $target && $lockedEmpStatus === $target) {
+                $this->db->rollBack();
+                Session::flash('info', 'The account already has that status.');
+                $this->redirect($back);
+            }
+
+            $lockedWasInactive = $lockedAccountStatus === 'inactive' || $lockedEmpStatus === 'inactive';
+            $auditOld = ($target === 'active' && $lockedWasInactive) ? 'inactive' : $lockedAccountStatus;
+
             $this->db->prepare('UPDATE user_account SET account_status = ? WHERE user_account_id = ?')
                 ->execute([$target, (int)$emp['user_account_id']]);
             $this->db->prepare('UPDATE employee SET employee_status = ? WHERE employee_id = ?')
@@ -408,7 +426,7 @@ final class SysAdminController extends Controller
                 $unitId,
                 $actorUid,
                 $employeeId,
-                $current,
+                $auditOld,
                 $target,
                 'employee',
                 $employeeId
@@ -438,6 +456,20 @@ final class SysAdminController extends Controller
         }
         $back = '/sysadmin/employees' . $this->suffix($isSuper, $unitId);
 
+        if (EmployeeInvitationService::isAccountBlockedByUnacceptedInvitation($this->db, (int)$emp['user_account_id'])) {
+            http_response_code(409);
+            Session::flash('error', 'Default position cannot be changed while the employee has an unaccepted invitation.');
+            $this->renderEmployeesPage($unitId, $unitName, $isSuper);
+            return;
+        }
+
+        if ((string)$emp['account_status'] !== 'active' || (string)$emp['employee_status'] !== 'active') {
+            http_response_code(409);
+            Session::flash('error', 'Inactive employee accounts must be reactivated before changing their default position.');
+            $this->renderEmployeesPage($unitId, $unitName, $isSuper);
+            return;
+        }
+
         $newPos = $this->post('position');
         $chk = $this->db->prepare('SELECT position_name FROM business_position WHERE business_unit_id = ? AND position_name = ? AND position_status = "active"');
         $chk->execute([$unitId, $newPos]);
@@ -455,6 +487,41 @@ final class SysAdminController extends Controller
 
         $this->db->beginTransaction();
         try {
+            $uaLock = $this->db->prepare('SELECT account_status FROM user_account WHERE user_account_id = ? FOR UPDATE');
+            $uaLock->execute([(int)$emp['user_account_id']]);
+            $lockedAccountStatus = $uaLock->fetchColumn();
+
+            $empLock = $this->db->prepare('SELECT employee_status, position FROM employee WHERE employee_id = ? FOR UPDATE');
+            $empLock->execute([$employeeId]);
+            $lockedEmp = $empLock->fetch();
+
+            if (EmployeeInvitationService::isAccountBlockedByUnacceptedInvitation($this->db, (int)$emp['user_account_id'])) {
+                $this->db->rollBack();
+                http_response_code(409);
+                Session::flash('error', 'Default position cannot be changed while the employee has an unaccepted invitation.');
+                $this->renderEmployeesPage($unitId, $unitName, $isSuper);
+                return;
+            }
+
+            if (
+                $lockedAccountStatus !== 'active' ||
+                !$lockedEmp ||
+                (string)$lockedEmp['employee_status'] !== 'active'
+            ) {
+                $this->db->rollBack();
+                http_response_code(409);
+                Session::flash('error', 'Inactive employee accounts must be reactivated before changing their default position.');
+                $this->renderEmployeesPage($unitId, $unitName, $isSuper);
+                return;
+            }
+
+            $oldPos = (string)$lockedEmp['position'];
+            if ($oldPos === (string)$matched) {
+                $this->db->rollBack();
+                Session::flash('info', 'The employee already holds that default position.');
+                $this->redirect($back);
+            }
+
             $this->db->prepare('UPDATE employee SET position = ? WHERE employee_id = ?')->execute([$matched, $employeeId]);
             Audit::record(
                 $this->db,
@@ -478,6 +545,64 @@ final class SysAdminController extends Controller
 
         Session::flash('success', "Default position updated for {$emp['first_name']} {$emp['last_name']}.");
         $this->redirect($back);
+    }
+
+    /** Resend an employee's pending or expired invitation (home-unit employees only). */
+    public function resendEmployeeInvitation(int $id): void
+    {
+        [$actorUid, , $unitId, $unitName, $isSuper] = $this->requireSystemAdmin();
+        CSRF::check();
+
+        $emp = $this->verifyEmployeeInUnit($id, $unitId);
+        if ((int)$emp['business_unit_id'] !== $unitId) {
+            $this->forbidden('Access denied: only employees assigned to this business unit can have invitations managed here.');
+        }
+
+        $res = (new EmployeeInvitationService($this->db))->resendInvitation($actorUid, $id, $unitId);
+        if (!$res['ok']) {
+            $status = (int)($res['status'] ?? 409);
+            if ($status === 403) {
+                $this->forbidden((string)($res['error'] ?? 'You are not authorized to resend employee invitations for this business unit.'));
+            }
+            http_response_code($status);
+            Session::flash('error', (string)($res['error'] ?? 'Could not resend employee invitation.'));
+            $this->renderEmployeesPage($unitId, $unitName, $isSuper);
+            return;
+        }
+
+        if (!empty($res['email_submitted'])) {
+            Session::flash('success', "Replacement invitation created and email submitted for {$emp['email']}.");
+        } else {
+            Session::flash('error', "Replacement invitation was created for {$emp['email']}, but the invitation email could not be submitted right now. You can retry sending it later.");
+        }
+        $this->redirect('/sysadmin/employees' . $this->suffix($isSuper, $unitId));
+    }
+
+    /** Revoke an employee's pending invitation without deactivating the account (home-unit employees only). */
+    public function revokeEmployeeInvitation(int $id): void
+    {
+        [$actorUid, , $unitId, $unitName, $isSuper] = $this->requireSystemAdmin();
+        CSRF::check();
+
+        $emp = $this->verifyEmployeeInUnit($id, $unitId);
+        if ((int)$emp['business_unit_id'] !== $unitId) {
+            $this->forbidden('Access denied: only employees assigned to this business unit can have invitations managed here.');
+        }
+
+        $res = (new EmployeeInvitationService($this->db))->revokeInvitation($actorUid, $id, $unitId, 'admin_revoked');
+        if (!$res['ok']) {
+            $status = (int)($res['status'] ?? 409);
+            if ($status === 403) {
+                $this->forbidden((string)($res['error'] ?? 'You are not authorized to revoke employee invitations for this business unit.'));
+            }
+            http_response_code($status);
+            Session::flash('error', (string)($res['error'] ?? 'Could not revoke employee invitation.'));
+            $this->renderEmployeesPage($unitId, $unitName, $isSuper);
+            return;
+        }
+
+        Session::flash('success', "Pending invitation revoked for {$emp['first_name']} {$emp['last_name']} ({$emp['email']}).");
+        $this->redirect('/sysadmin/employees' . $this->suffix($isSuper, $unitId));
     }
 
     public function positions(?int $routeUnitId = null): void
@@ -530,7 +655,7 @@ final class SysAdminController extends Controller
             http_response_code(422);
             if ($petStore) {
                 Session::flash('error', implode(' ', $errors));
-                $this->render('sysadmin/employees', $this->employeesData($unitId, $unitName, $isSuper, [], []));
+                $this->renderEmployeesPage($unitId, $unitName, $isSuper);
                 return;
             }
             $this->render('sysadmin/positions', [
