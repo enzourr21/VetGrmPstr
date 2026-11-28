@@ -1100,6 +1100,7 @@ test('Stage 1: New employee acceptance while Super Admin #211 is signed in prese
             'csrf' => $adminCsrf,
             '_flash' => $queuedFlash,
         ];
+        $sessionSnapshot = $_SESSION;
         $_GET = ['token' => $tokens['new_pending']];
         $_POST = [];
 
@@ -1115,7 +1116,7 @@ test('Stage 1: New employee acceptance while Super Admin #211 is signed in prese
         assertTrue(!str_contains($getHtml, 'admin-profile-toggle') && !str_contains($getHtml, 'Switch Interface'), 'GET must not render unrelated admin avatar or interface switcher');
         assertTrue(!str_contains($getHtml, 'action="/logout"'), 'GET must not render unrelated logout form');
         assertTrue(!str_contains($getHtml, 'Admin queued flash must stay untouched'), 'GET must not display or drain unrelated admin flash');
-        assertTrue(($_SESSION['_flash'] ?? null) === $queuedFlash, 'GET must preserve unrelated admin flash in $_SESSION');
+        assertTrue($_SESSION === $sessionSnapshot, 'GET must preserve complete $_SESSION snapshot strictly unchanged');
 
         // POST acceptance while Super Admin #211 is signed in
         $_POST = [
@@ -1136,12 +1137,8 @@ test('Stage 1: New employee acceptance while Super Admin #211 is signed in prese
         assertTrue(!str_contains($postHtml, 'superadmin@vetgrpet.local') && !str_contains($postHtml, 'admin-profile-toggle') && !str_contains($postHtml, 'Switch Interface') && !str_contains($postHtml, 'action="/logout"'), 'Success page must hide unrelated admin chrome');
         assertTrue(!str_contains($postHtml, 'Admin queued flash must stay untouched'), 'Success page must not drain unrelated admin flash');
 
-        // Verify Super Admin #211 session is completely untouched
-        assertTrue((int)($_SESSION['user_id'] ?? 0) === 211, 'Super Admin user_id must remain 211');
-        assertTrue(($_SESSION['email'] ?? '') === 'superadmin@vetgrpet.local', 'Super Admin email must remain intact');
-        assertTrue(($_SESSION['base_context'] ?? '') === 'employee' && ($_SESSION['active_context'] ?? '') === 'employee' && !empty($_SESSION['is_super_admin']), 'Super Admin auth context must remain intact');
-        assertTrue(($_SESSION['csrf'] ?? '') === $adminCsrf, 'Super Admin CSRF token must remain unchanged');
-        assertTrue(($_SESSION['_flash'] ?? null) === $queuedFlash, 'Super Admin queued flash must remain intact');
+        // Verify complete Super Admin #211 $_SESSION snapshot is strictly unchanged
+        assertTrue($_SESSION === $sessionSnapshot, 'Successful acceptance must preserve complete $_SESSION snapshot strictly unchanged');
 
         // Verify new account was provisioned independently (not attached to #211)
         assertTrue(count($pdo->users) === $userCountBefore + 1 && count($pdo->employees) === $empCountBefore + 1, 'Exactly one new user and employee must be provisioned');
@@ -1152,14 +1149,14 @@ test('Stage 1: New employee acceptance while Super Admin #211 is signed in prese
         $newRoles = array_values(array_filter($pdo->accountRoles, fn($ar) => (int)$ar['user_account_id'] === $newUid && (int)$ar['business_unit_id'] === 1));
         assertTrue(count($newRoles) === 1 && (int)$newRoles[0]['role_id'] === 3, 'New employee must receive intended role');
 
-        // Replay of consumed invitation must fail closed with zero duplicates and keep #211 session intact
+        // Replay of consumed invitation must fail closed with zero duplicates and keep #211 session strictly unchanged
         ob_start();
         $ctrl->accept();
         $replayHtml = (string)ob_get_clean();
         assertTrue(str_contains($replayHtml, 'Invitation unavailable'), 'Replay must render Invitation unavailable');
         assertTrue(!str_contains($replayHtml, 'superadmin@vetgrpet.local') && !str_contains($replayHtml, 'admin-profile-toggle'), 'Invalid/replay view must also isolate chrome');
         assertTrue(count($pdo->users) === $userCountBefore + 1 && count($pdo->employees) === $empCountBefore + 1, 'Replay must not create duplicate records');
-        assertTrue((int)($_SESSION['user_id'] ?? 0) === 211 && ($_SESSION['csrf'] ?? '') === $adminCsrf && ($_SESSION['_flash'] ?? null) === $queuedFlash, 'Replay must keep Super Admin #211 session, CSRF, and flash intact');
+        assertTrue($_SESSION === $sessionSnapshot, 'Replay must preserve complete $_SESSION snapshot strictly unchanged');
     } finally {
         $_SESSION = [];
         $_SERVER = $origServer;
@@ -1167,6 +1164,100 @@ test('Stage 1: New employee acceptance while Super Admin #211 is signed in prese
         $_POST = $origPost;
         setDatabasePdoForTest(null);
     }
+});
+
+test('Stage 1: Invalid CSRF on invitation acceptance while Super Admin #211 is signed in returns HTTP 419 with isolated chrome and untouched session', function () {
+    $appRoot = dirname(__DIR__);
+    $adminCsrf = bin2hex(random_bytes(16));
+    $queuedFlash = [['info', 'Admin queued flash must stay untouched on 419']];
+    $expectedSession = [
+        'user_id' => 211,
+        'email' => 'superadmin@vetgrpet.local',
+        'employee_id' => 150,
+        'base_context' => 'employee',
+        'active_context' => 'employee',
+        'auth_method' => 'email',
+        'is_super_admin' => true,
+        'csrf' => $adminCsrf,
+        '_flash' => $queuedFlash,
+    ];
+
+    $childScript = <<<'PHP'
+declare(strict_types=1);
+$payload = json_decode(stream_get_contents(STDIN), true, 512, JSON_THROW_ON_ERROR);
+define('APP_ROOT', $payload['appRoot']);
+function e(mixed $v): string { return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'); }
+
+require_once APP_ROOT . '/app/Core/EnvConfig.php';
+require_once APP_ROOT . '/app/Core/Core.php';
+require_once APP_ROOT . '/app/Models/Audit.php';
+require_once APP_ROOT . '/app/Models/Units.php';
+require_once APP_ROOT . '/app/Models/AdminAccountService.php';
+require_once APP_ROOT . '/app/Services/MailService.php';
+require_once APP_ROOT . '/app/Services/EmployeeInvitationService.php';
+require_once APP_ROOT . '/app/Services/InterfaceSwitcherService.php';
+require_once APP_ROOT . '/app/Controllers/InvitationController.php';
+
+final class NoDbPdo extends PDO {
+    public function __construct() {}
+}
+
+$ref = new ReflectionProperty(\App\Core\Database::class, 'pdo');
+$ref->setAccessible(true);
+$ref->setValue(null, new NoDbPdo());
+
+$_SERVER['REQUEST_URI'] = '/invitations/accept';
+$_SESSION = $payload['session'];
+$snapshot = $_SESSION;
+$_POST = [
+    'csrf_token' => 'invalid-csrf-token',
+    'token' => 'dummy-token',
+    'password' => 'IsolatedNewEmp!2026',
+    'password_confirm' => 'IsolatedNewEmp!2026',
+];
+
+ob_start();
+register_shutdown_function(static function () use ($snapshot): void {
+    $html = ob_get_level() > 0 ? (string)ob_get_clean() : '';
+    echo json_encode([
+        'status' => http_response_code(),
+        'html' => $html,
+        'session_unchanged' => ($_SESSION === $snapshot),
+        'session' => $_SESSION,
+    ], JSON_THROW_ON_ERROR);
+});
+
+(new \App\Controllers\InvitationController())->accept();
+PHP;
+
+    $descriptors = [
+        0 => ['pipe', 'r'],
+        1 => ['pipe', 'w'],
+        2 => ['pipe', 'w'],
+    ];
+    $proc = proc_open([PHP_BINARY, '-d', 'display_errors=0', '-r', $childScript], $descriptors, $pipes);
+    assertTrue(is_resource($proc), 'Child PHP process for isolated CSRF 419 test must start');
+
+    fwrite($pipes[0], json_encode(['appRoot' => $appRoot, 'session' => $expectedSession], JSON_THROW_ON_ERROR));
+    fclose($pipes[0]);
+    $stdout = (string)stream_get_contents($pipes[1]);
+    fclose($pipes[1]);
+    $stderr = (string)stream_get_contents($pipes[2]);
+    fclose($pipes[2]);
+    $exitCode = proc_close($proc);
+
+    assertTrue($exitCode === 0, 'CSRF 419 child process must exit cleanly (stderr: ' . trim($stderr) . ')');
+    $result = json_decode($stdout, true, 512, JSON_THROW_ON_ERROR);
+
+    assertTrue((int)$result['status'] === 419, 'Invalid CSRF submission must return HTTP 419');
+    $html = (string)$result['html'];
+    assertTrue(str_contains($html, '419') && str_contains($html, 'Your form expired'), 'Error page must render HTTP 419 message');
+    assertTrue(!str_contains($html, 'superadmin@vetgrpet.local'), 'CSRF 419 error page must not render administrator email');
+    assertTrue(!str_contains($html, 'admin-profile-toggle') && !preg_match('/>ES</', $html), 'CSRF 419 error page must not render administrator avatar or initials');
+    assertTrue(!str_contains($html, 'Switch Interface'), 'CSRF 419 error page must not render interface switcher');
+    assertTrue(!str_contains($html, 'action="/logout"'), 'CSRF 419 error page must not render logout controls');
+    assertTrue(!str_contains($html, 'Admin queued flash must stay untouched on 419'), 'CSRF 419 error page must not display or drain queued admin flash');
+    assertTrue($result['session_unchanged'] === true && $result['session'] === $expectedSession, 'CSRF 419 failure must preserve complete $_SESSION snapshot and queued flash messages');
 });
 
 echo "\nResults: {$passed} passed, {$failed} failed.\n";

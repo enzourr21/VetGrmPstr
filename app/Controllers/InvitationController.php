@@ -99,7 +99,7 @@ final class InvitationController extends Controller
     public function accept(): void
     {
         $this->sendSensitiveNoCacheHeaders();
-        CSRF::check();
+        CSRF::check(true);
 
         // Only token, password/password_confirm (new account), or confirm_accept (existing customer) are accepted.
         $rawToken = is_string($_POST['token'] ?? null) ? trim($_POST['token']) : '';

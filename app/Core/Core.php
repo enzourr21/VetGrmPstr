@@ -105,12 +105,16 @@ final class CSRF
         return '<input type="hidden" name="csrf_token" value="' . htmlspecialchars(self::token(), ENT_QUOTES, 'UTF-8') . '">';
     }
 
-    public static function check(): void
+    public static function check(bool $isolateSessionChrome = false): void
     {
         $sent = $_POST['csrf_token'] ?? '';
         if (!is_string($sent) || !hash_equals(self::token(), $sent)) {
             http_response_code(419);
-            Controller::renderStatic('errors/error', ['code' => 419, 'message' => 'Your form expired. Go back, refresh the page and try again.']);
+            $data = ['code' => 419, 'message' => 'Your form expired. Go back, refresh the page and try again.'];
+            if ($isolateSessionChrome) {
+                $data['isolateSessionChrome'] = true;
+            }
+            Controller::renderStatic('errors/error', $data);
             exit;
         }
     }
