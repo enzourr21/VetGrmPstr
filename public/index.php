@@ -40,7 +40,6 @@ $r->post('/register/otp/verify', 'AuthController', 'registerVerifyOtp');
 $r->post('/logout', 'AuthController', 'logout');
 $r->get('/invitations/accept', 'InvitationController', 'showAcceptForm');
 $r->post('/invitations/accept', 'InvitationController', 'accept');
-$r->post('/invitations/switch-account', 'InvitationController', 'switchAccount');
 $r->post('/demo/super-admin', 'AuthController', 'demoSuperAdmin');
 $r->get('/customer-interface', 'AuthController', 'enterCustomerInterface');
 $r->get('/workspace', 'AuthController', 'returnToWorkspace');

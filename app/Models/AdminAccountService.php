@@ -248,8 +248,8 @@ final class AdminAccountService
 
     /**
      * Validate normalized employee / invitation provisioning input without mutating database state.
-     * Does not check user_account email/username uniqueness so invitation flows can distinguish
-     * unregistered recipients from eligible existing customer accounts.
+     * Does not check user_account email/username uniqueness so invitation flows can enforce
+     * authoritative locked eligibility checks inside EmployeeInvitationService.
      *
      * @return array{
      *   ok: bool,

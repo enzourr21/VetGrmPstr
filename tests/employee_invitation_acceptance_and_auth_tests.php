@@ -913,44 +913,195 @@ test('Rejects malformed, unknown, expired, and revoked tokens with generic non-e
     assertTrue(count(array_unique($msgs)) === 1 && !str_contains($msgs[0], '@'), 'Rejection errors must be generic');
 });
 
-test('Workflow B (existing_customer): requires matching auth & confirmation and leaves user_account & customer 100% untouched', function () use ($fixedNow) {
+test('Stage 2: Retired existing-customer invitations and newly-registered recipients fail closed (409) with zero mutations, intact history, and no switch-account route', function () use ($fixedNow) {
     ['pdo' => $pdo, 'tokens' => $tokens] = makeAcceptanceFixture();
+    $pdo->simulatedNowTs = $fixedNow;
     $svc = new EmployeeInvitationService($pdo, null, fn(): int => $fixedNow);
 
+    // 1. Historical existing-customer invitation (#202 for existing customer #20) fails closed on validate & accept
+    $origUsers = $pdo->users;
+    $origCustomers = $pdo->customers;
+    $origEmployees = $pdo->employees;
+    $origAccountRoles = $pdo->accountRoles;
+    $origInv202 = $pdo->invitations[202];
+    $origAudits = $pdo->auditLogs;
+
     $display = $svc->validateTokenForAcceptance($tokens['cust_pending']);
-    assertTrue($display['ok'] === true && $display['mode'] === 'existing_customer' && (int)$display['existing_user_account_id'] === 20, 'Must detect existing_customer mode');
+    assertTrue(
+        $display['ok'] === false
+        && $display['status'] === 409
+        && str_contains((string)$display['error'], 'System Administrator'),
+        'Historical existing-customer token must not validate for acceptance (HTTP 409)'
+    );
 
-    // 1. Unauthenticated -> 401 requires_auth
-    $unauth = $svc->acceptInvitation($tokens['cust_pending'], 'SpoofedNewPass!99', 'SpoofedNewPass!99', null, true);
-    assertTrue(!$unauth['ok'] && $unauth['status'] === 401 && !empty($unauth['requires_auth']), 'Unauthenticated Workflow B must return 401 requires_auth');
+    $acceptRes = $svc->acceptInvitation($tokens['cust_pending'], 'SpoofedNewPass!99', 'SpoofedNewPass!99');
+    assertTrue(
+        $acceptRes['ok'] === false
+        && $acceptRes['status'] === 409
+        && str_contains((string)$acceptRes['error'], 'System Administrator'),
+        'Historical existing-customer token acceptance must fail closed with HTTP 409'
+    );
+    assertTrue($pdo->userAccountUpdates === 0 && $pdo->customerUpdates === 0, 'Zero updates on user_account or customer');
+    assertTrue(
+        $pdo->users === $origUsers
+        && $pdo->customers === $origCustomers
+        && $pdo->employees === $origEmployees
+        && $pdo->accountRoles === $origAccountRoles
+        && $pdo->invitations[202] === $origInv202
+        && $pdo->auditLogs === $origAudits,
+        'Rejected existing-customer invitation must preserve credentials, customer history, employees, roles, historical invitation row, and audit logs'
+    );
 
-    // 2. Wrong authenticated user (#21) -> 403 wrong_account
-    $wrong = $svc->acceptInvitation($tokens['cust_pending'], '', '', 21, true);
-    assertTrue(!$wrong['ok'] && $wrong['status'] === 403 && !empty($wrong['wrong_account']), 'Wrong signed-in user must return 403 wrong_account');
+    // 2. Invitation issued to a new recipient (#201) becomes unusable (409) once that email acquires a user_account
+    $beforeSignup = $svc->validateTokenForAcceptance($tokens['new_pending']);
+    assertTrue($beforeSignup['ok'] === true && $beforeSignup['mode'] === 'new_account', 'New-recipient token is initially valid');
 
-    // 3. Matching user (#20) without confirmation -> 422
-    $noConf = $svc->acceptInvitation($tokens['cust_pending'], '', '', 20, false);
-    assertTrue(!$noConf['ok'] && $noConf['status'] === 422, 'Unconfirmed Workflow B must return 422');
+    $newCustUid = 250;
+    $newCustHash = password_hash('CustSelfSignup!2026', PASSWORD_DEFAULT);
+    $pdo->users[$newCustUid] = [
+        'user_account_id' => $newCustUid,
+        'email' => 'new.invitee@pawcarino.test',
+        'username' => 'carla_self',
+        'password_hash' => $newCustHash,
+        'account_status' => 'active',
+        'is_super_admin' => 0,
+        'email_verified_at' => '2026-11-20 11:30:00',
+    ];
+    $pdo->customers[250] = [
+        'customer_id' => 250,
+        'user_account_id' => $newCustUid,
+        'first_name' => 'Carla',
+        'last_name' => 'SelfSigned',
+        'phone' => '09171112222',
+        'customer_status' => 'active',
+    ];
+    $afterSignupUsers = $pdo->users;
+    $afterSignupCustomers = $pdo->customers;
+    $afterSignupEmployees = $pdo->employees;
+    $afterSignupRoles = $pdo->accountRoles;
+    $afterSignupInv201 = $pdo->invitations[201];
+    $afterSignupAudits = $pdo->auditLogs;
 
-    // 4. Stale Branch A form submission (password fields supplied while unauthenticated after signup) -> 401, password untouched
-    $origHash = $pdo->users[20]['password_hash'];
-    $origCust = $pdo->customers[20];
-    $stale = $svc->acceptInvitation($tokens['cust_pending'], 'AttackerOverwrite!2026', 'AttackerOverwrite!2026', null, false);
-    assertTrue(!$stale['ok'] && $stale['status'] === 401 && $pdo->users[20]['password_hash'] === $origHash, 'Stale Branch A submit must fail 401 without overwriting password');
+    $afterDisplay = $svc->validateTokenForAcceptance($tokens['new_pending']);
+    assertTrue(
+        $afterDisplay['ok'] === false
+        && $afterDisplay['status'] === 409
+        && str_contains((string)$afterDisplay['error'], 'System Administrator'),
+        'New-recipient invitation must fail closed (409) once email acquires an account'
+    );
+    $afterAccept = $svc->acceptInvitation($tokens['new_pending'], 'AttemptedActivate!2026', 'AttemptedActivate!2026');
+    assertTrue(
+        $afterAccept['ok'] === false
+        && $afterAccept['status'] === 409
+        && str_contains((string)$afterAccept['error'], 'System Administrator'),
+        'Accepting invitation after email acquires an account must fail closed (409)'
+    );
+    assertTrue(
+        $pdo->users === $afterSignupUsers
+        && $pdo->customers === $afterSignupCustomers
+        && $pdo->employees === $afterSignupEmployees
+        && $pdo->accountRoles === $afterSignupRoles
+        && $pdo->invitations[201] === $afterSignupInv201
+        && $pdo->auditLogs === $afterSignupAudits,
+        'Post-signup rejection must leave account, customer, employees, roles, historical invitation, and audit logs untouched'
+    );
 
-    // 5. Authenticated matching user (#20) with confirm_accept = true -> converts without touching user_account or customer
-    $ok = $svc->acceptInvitation($tokens['cust_pending'], 'ShouldNeverApply!2026', 'ShouldNeverApply!2026', 20, true);
-    assertTrue($ok['ok'] === true && $ok['status'] === 200 && $ok['mode'] === 'existing_customer', 'Confirmed Workflow B acceptance must succeed');
-    assertTrue($pdo->userAccountUpdates === 0, 'Workflow B MUST issue ZERO UPDATE statements on user_account (even when username IS NULL)');
-    assertTrue($pdo->customerUpdates === 0, 'Workflow B MUST issue ZERO UPDATE statements on customer');
-    assertTrue($pdo->users[20]['password_hash'] === $origHash && $pdo->users[20]['username'] === null, 'user_account password & NULL username must stay untouched');
-    assertTrue($pdo->customers[20] === $origCust, 'customer record must stay 100% untouched');
+    // 3. Controller GET/POST for existing-customer invitation fails closed with isolated chrome and untouched session
+    setDatabasePdoForTest($pdo);
+    $origServer = $_SERVER;
+    $origGet = $_GET;
+    $origPost = $_POST;
+    try {
+        $csrf = bin2hex(random_bytes(16));
+        $_SERVER['REQUEST_URI'] = '/invitations/accept';
+        $_SESSION = [
+            'user_id' => 20,
+            'email' => 'existing.cust@pawcarino.test',
+            'customer_id' => 20,
+            'base_context' => 'customer',
+            'active_context' => 'customer',
+            'auth_method' => 'email',
+            'csrf' => $csrf,
+            '_flash' => [['info', 'Customer flash stays untouched']],
+        ];
+        $sessionSnapshot = $_SESSION;
+        $_GET = ['token' => $tokens['cust_pending']];
+        $_POST = [];
 
-    $eid = (int)$ok['employee_id'];
-    assertTrue((int)$pdo->employees[$eid]['user_account_id'] === 20 && $pdo->employees[$eid]['position'] === 'Inventory Manager', 'New employee linked to existing user_account_id=20');
-    $roles = array_values(array_filter($pdo->accountRoles, fn($ar) => (int)$ar['user_account_id'] === 20 && (int)$ar['business_unit_id'] === 1));
-    assertTrue(count($roles) === 1 && (int)$roles[0]['role_id'] === 4, 'Assigned employee role to existing account');
-    assertTrue($pdo->invitations[202]['status'] === 'accepted' && (int)$pdo->invitations[202]['user_account_id'] === 20 && (int)$pdo->invitations[202]['employee_id'] === $eid, 'Invitation consumed & linked');
+        $ctrl = new InvitationController();
+        ob_start();
+        $ctrl->showAcceptForm();
+        $getHtml = (string)ob_get_clean();
+
+        assertTrue(str_contains($getHtml, 'Invitation unavailable'), 'GET existing-customer token must render Invitation unavailable');
+        assertTrue(!str_contains($getHtml, 'switch-account') && !str_contains($getHtml, 'confirm_accept') && !str_contains($getHtml, 'existing.cust@pawcarino.test'), 'GET must not render Workflow B states or leak signed-in email');
+        assertTrue(!str_contains($getHtml, 'Customer flash stays untouched'), 'GET must not drain unrelated session flash');
+        assertTrue($_SESSION === $sessionSnapshot, 'GET rejected invitation must preserve $_SESSION strictly unchanged');
+
+        $_POST = [
+            'csrf_token' => $csrf,
+            'token' => $tokens['cust_pending'],
+            'password' => 'SpoofedPass!2026',
+            'password_confirm' => 'SpoofedPass!2026',
+            'confirm_accept' => '1',
+        ];
+        ob_start();
+        $ctrl->accept();
+        $postHtml = (string)ob_get_clean();
+
+        assertTrue(str_contains($postHtml, 'Invitation unavailable'), 'POST existing-customer token must render Invitation unavailable');
+        assertTrue(!str_contains($postHtml, 'switch-account') && !str_contains($postHtml, 'confirm_accept'), 'POST must not render Workflow B states');
+        assertTrue($_SESSION === $sessionSnapshot, 'POST rejected invitation must preserve $_SESSION strictly unchanged');
+    } finally {
+        $_SESSION = [];
+        $_SERVER = $origServer;
+        $_GET = $origGet;
+        $_POST = $origPost;
+        setDatabasePdoForTest(null);
+    }
+
+    // 4. InvitationController::switchAccount and POST /invitations/switch-account are removed (router returns 404)
+    assertTrue(!method_exists(InvitationController::class, 'switchAccount'), 'InvitationController::switchAccount must be removed');
+    $indexSrc = (string)file_get_contents(dirname(__DIR__) . '/public/index.php');
+    assertTrue(!str_contains($indexSrc, '/invitations/switch-account') && !str_contains($indexSrc, 'switchAccount'), 'public/index.php must not register /invitations/switch-account');
+
+    $acceptViewSrc = (string)file_get_contents(dirname(__DIR__) . '/app/Views/auth/accept_invitation.php');
+    foreach (['existing_customer_signin_required', 'existing_customer_wrong_account', 'existing_customer_confirm', '/invitations/switch-account'] as $removedState) {
+        assertTrue(!str_contains($acceptViewSrc, $removedState), "accept_invitation.php must not contain {$removedState}");
+    }
+
+    // Verify Router dispatches obsolete POST /invitations/switch-account as HTTP 404
+    $router = new \App\Core\Router();
+    $router->get('/invitations/accept', 'InvitationController', 'showAcceptForm');
+    $router->post('/invitations/accept', 'InvitationController', 'accept');
+    $appRoot = dirname(__DIR__);
+    $child404 = <<<'PHP'
+declare(strict_types=1);
+$appRoot = trim((string)stream_get_contents(STDIN));
+define('APP_ROOT', $appRoot);
+function e(mixed $v): string { return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'); }
+require_once APP_ROOT . '/app/Core/EnvConfig.php';
+require_once APP_ROOT . '/app/Core/Core.php';
+$r = new \App\Core\Router();
+$r->get('/invitations/accept', 'InvitationController', 'showAcceptForm');
+$r->post('/invitations/accept', 'InvitationController', 'accept');
+$_SESSION = [];
+$_SERVER['REQUEST_URI'] = '/invitations/switch-account';
+ob_start();
+$r->dispatch('/invitations/switch-account', 'POST');
+$html = (string)ob_get_clean();
+echo json_encode(['status' => http_response_code(), 'has_404' => str_contains($html, '404')], JSON_THROW_ON_ERROR);
+PHP;
+    $proc = proc_open([PHP_BINARY, '-d', 'display_errors=0', '-r', $child404], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+    assertTrue(is_resource($proc), 'Router 404 verification child process must start');
+    fwrite($pipes[0], $appRoot);
+    fclose($pipes[0]);
+    $out = (string)stream_get_contents($pipes[1]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    $code = proc_close($proc);
+    $res404 = json_decode($out, true, 512, JSON_THROW_ON_ERROR);
+    assertTrue($code === 0 && (int)$res404['status'] === 404 && !empty($res404['has_404']), 'Obsolete POST /invitations/switch-account must return HTTP 404');
 });
 
 test('Unified identity separation: employee_status deactivation keeps customer account active and returnToWorkspace downgrades cleanly', function () {

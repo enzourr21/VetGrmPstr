@@ -768,7 +768,7 @@ try {
         assertTrue($rv['ok'] === true, 'Super Admin revokes by invitation_id');
     });
 
-    test('Existing customer-only account: allowed without username, blocked 422 with username; expired/incomplete OTP never blocks', function () {
+    test('Existing customer-only account is rejected for invitation links (with or without username); expired/incomplete OTP never blocks', function () {
         $pdo = makeProvisioningFixture();
         $custUid = $pdo->nextUserId++;
         $pdo->users[$custUid] = [
@@ -813,7 +813,11 @@ try {
             'expires_at' => '2026-11-19 00:30:00',
         ];
 
-        $invSvc = new EmployeeInvitationService($pdo, fn() => ['submitted' => true, 'driver' => 'smtp', 'error' => null, 'status_code' => 200]);
+        $mailCalls = 0;
+        $invSvc = new EmployeeInvitationService($pdo, function () use (&$mailCalls) {
+            $mailCalls++;
+            return ['submitted' => true, 'driver' => 'smtp', 'error' => null, 'status_code' => 200];
+        });
 
         $resOtp = AdminAccountService::createEmployeeAccount([
             'full_name' => 'Exp Otp',
@@ -823,7 +827,13 @@ try {
             'roles' => ['RECEPTIONIST'],
             'is_invitation' => true,
         ], 1, 2, $pdo, $invSvc);
-        assertTrue($resOtp['ok'] === true, 'Expired pending OTP must not block invitation');
+        assertTrue($resOtp['ok'] === true && $mailCalls === 1, 'Expired pending OTP must not block invitation');
+
+        $invCountAfterOtp = count($pdo->invitations);
+        $empSnapshot = $pdo->employees;
+        $roleSnapshot = $pdo->accountRoles;
+        $userSnapshot = $pdo->users;
+        $custSnapshot = $pdo->customers;
 
         $resCustWithUn = AdminAccountService::createEmployeeAccount([
             'full_name' => 'Existing Customer',
@@ -834,9 +844,14 @@ try {
             'roles' => ['RECEPTIONIST'],
             'is_invitation' => true,
         ], 1, 2, $pdo, $invSvc);
-        assertTrue($resCustWithUn['ok'] === false && isset($resCustWithUn['errors']['username']), 'Inviting existing customer with username must fail 422');
+        assertTrue(
+            $resCustWithUn['ok'] === false
+            && isset($resCustWithUn['errors']['email'])
+            && str_contains((string)$resCustWithUn['errors']['email'], 'System Administrator'),
+            'Inviting existing customer with username must fail 422 on email'
+        );
 
-        $resCustOk = AdminAccountService::createEmployeeAccount([
+        $resCustNoUn = AdminAccountService::createEmployeeAccount([
             'full_name' => 'Existing Customer',
             'email' => 'Existing.Customer@GMAIL.COM',
             'business_unit_id' => 1,
@@ -844,7 +859,21 @@ try {
             'roles' => ['RECEPTIONIST'],
             'is_invitation' => true,
         ], 1, 2, $pdo, $invSvc);
-        assertTrue($resCustOk['ok'] === true && ($resCustOk['recipient_mode'] ?? '') === 'existing_customer', 'Inviting active customer without username must succeed');
+        assertTrue(
+            $resCustNoUn['ok'] === false
+            && isset($resCustNoUn['errors']['email'])
+            && str_contains((string)$resCustNoUn['errors']['email'], 'System Administrator'),
+            'Inviting existing customer without username must fail 422 on email'
+        );
+        assertTrue(
+            count($pdo->invitations) === $invCountAfterOtp
+            && $mailCalls === 1
+            && $pdo->employees === $empSnapshot
+            && $pdo->accountRoles === $roleSnapshot
+            && $pdo->users === $userSnapshot
+            && $pdo->customers === $custSnapshot,
+            'Rejected existing-customer invitations must cause zero mutations and zero emails'
+        );
 
         // Existing employee email -> rejected
         $resEmp = AdminAccountService::createEmployeeAccount([
@@ -858,7 +887,7 @@ try {
         assertTrue($resEmp['ok'] === false && isset($resEmp['errors']['email']), 'Existing employee email must still be rejected');
     });
 
-    test('CustomerRegistrationPendingService OTP-to-customer conversion shares canonical locks and stays clean', function () {
+    test('CustomerRegistrationPendingService OTP-to-customer conversion shares canonical locks and blocks subsequent invitation creation', function () {
         $pdo = makeProvisioningFixture();
         $otpSvc = new CustomerRegistrationPendingService($pdo);
         $rawTok = bin2hex(random_bytes(32));
@@ -890,7 +919,11 @@ try {
 
         $prov = $otpSvc->provisionVerifiedAccount($rawTok, 'CustPass!2026');
         assertTrue($prov['ok'] === true && empty($pdo->advisoryLocks), 'Customer OTP provisioning should succeed and release all locks');
-        $invSvc = new EmployeeInvitationService($pdo, fn() => ['submitted' => true, 'driver' => 'smtp', 'error' => null, 'status_code' => 200]);
+        $mailCalled = false;
+        $invSvc = new EmployeeInvitationService($pdo, function () use (&$mailCalled) {
+            $mailCalled = true;
+            return ['submitted' => true, 'driver' => 'smtp', 'error' => null, 'status_code' => 200];
+        });
         $invRes = AdminAccountService::createEmployeeAccount([
             'full_name' => 'Otp Customer',
             'email' => 'otp.customer@pawcarino.test',
@@ -899,7 +932,14 @@ try {
             'roles' => ['RECEPTIONIST'],
             'is_invitation' => true,
         ], 1, 2, $pdo, $invSvc);
-        assertTrue($invRes['ok'] === true && ($invRes['recipient_mode'] ?? '') === 'existing_customer', 'Newly registered customer can subsequently be invited via Workflow B');
+        assertTrue(
+            $invRes['ok'] === false
+            && isset($invRes['errors']['email'])
+            && str_contains((string)$invRes['errors']['email'], 'System Administrator')
+            && !$mailCalled
+            && count($pdo->invitations) === 0,
+            'Newly registered customer must be rejected for employee invitation links'
+        );
     });
 
     test('Direct Super Admin provisioning ($enforcedUnitId === null) continues creating accounts directly without invitations', function () {

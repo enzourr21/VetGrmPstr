@@ -143,7 +143,7 @@ final class FakeReportingPdo extends PDO
         }
 
         // 2. listUnitInvitations (active pending + unreplaced latest expired)
-        if (str_contains($sql, 'AS is_existing_customer_email') && str_contains($sql, 'FROM employee_invitation ei')) {
+        if (str_contains($sql, 'AS action_state') && str_contains($sql, 'FROM employee_invitation ei')) {
             $hasExplicitNow = str_contains($sql, 'ei.expires_at > ?');
             $nowUtc = $hasExplicitNow ? (string)$params[0] : gmdate('Y-m-d H:i:s');
             $unitId = $hasExplicitNow ? (int)$params[2] : (int)$params[0];
@@ -189,14 +189,6 @@ final class FakeReportingPdo extends PDO
                 }
                 sort($roleNames);
 
-                $isExistingCust = 0;
-                foreach ($this->users as $ua) {
-                    if (strtolower((string)$ua['email']) === $emailLower) {
-                        $isExistingCust = 1;
-                        break;
-                    }
-                }
-
                 $rows[] = [
                     'invitation_id' => $inv['invitation_id'],
                     'business_unit_id' => $inv['business_unit_id'],
@@ -217,7 +209,6 @@ final class FakeReportingPdo extends PDO
                     'invitation_state' => $isActivePending ? 'pending' : 'expired',
                     'action_state' => $isActivePending ? 'pending_invitation' : 'expired_invitation',
                     'unit_roles' => implode(', ', $roleNames),
-                    'is_existing_customer_email' => $isExistingCust,
                 ];
             }
 
@@ -419,7 +410,7 @@ test('listPendingInvitationsForUnit returns only active unexpired pending invita
     assertTrue($ids === [101, 102, 106], 'Expected only pending unexpired unit 1 invitations [101, 102, 106], got ' . json_encode($ids));
 });
 
-test('listUnitInvitations shows active pending + unreplaced expired invitations, hides revoked/accepted, and flags existing customers', function () use ($nowUtc) {
+test('listUnitInvitations shows active pending + unreplaced expired invitations and hides revoked/accepted', function () use ($nowUtc) {
     $pdo = makeReportingFixture();
     $invs = EmployeeInvitationService::listUnitInvitations($pdo, 1, $nowUtc);
     $byId = [];
@@ -429,7 +420,7 @@ test('listUnitInvitations shows active pending + unreplaced expired invitations,
 
     assertTrue(isset($byId[101], $byId[102], $byId[103], $byId[106]), 'Pending and unreplaced past-due invitations must appear');
     assertTrue(!isset($byId[104]) && !isset($byId[105]) && !isset($byId[107]) && !isset($byId[108]), 'Revoked, superseded expired, accepted, and other-unit invitations must be excluded');
-    assertTrue($byId[102]['is_existing_customer_email'] == 1, 'Invitation for existing customer #30 must set is_existing_customer_email=1');
+    assertTrue(!array_key_exists('is_existing_customer_email', $byId[102]), 'listUnitInvitations must no longer emit retired is_existing_customer_email flag');
     assertTrue($byId[103]['action_state'] === 'expired_invitation', 'Past-due unreplaced invitation #103 must classify as expired_invitation');
 });
 
@@ -502,9 +493,10 @@ test('Live rendering of sysadmin/employees.php separates Pending & Expired Invit
     $empCards = extractCardsByPrefix($htmlSuper, 'ID #');
     assertTrue(count($invCards) === 4 && count($empCards) === 5, 'Card counts must match section totals');
 
-    // Invitation #101 (pending, submitted) & #102 (pending, failed, Existing Customer)
+    // Invitation #101 (pending, submitted) & #102 (pending, failed; no retired Existing Customer badge)
     assertTrue(str_contains($invCards[101], '/sysadmin/invitations/101/resend?unit_id=1') && str_contains($invCards[101], '/sysadmin/invitations/101/revoke?unit_id=1') && str_contains($invCards[101], 'Email sent'), 'Inv #101 actions & delivery badge missing');
-    assertTrue(str_contains($invCards[102], 'Existing Customer') && str_contains($invCards[102], 'Delivery failed'), 'Inv #102 existing customer & delivery failed badge missing');
+    assertTrue(str_contains($invCards[102], 'Delivery failed') && !str_contains($invCards[102], 'Existing Customer'), 'Inv #102 must show Delivery failed without retired Existing Customer badge');
+    assertTrue(!str_contains($htmlSuper, 'Existing Customer'), 'employees.php must not render retired Existing Customer badge anywhere');
     // Invitation #103 (expired): Resend only, NO Revoke
     assertTrue(str_contains($invCards[103], 'Invitation Expired') && str_contains($invCards[103], '/sysadmin/invitations/103/resend?unit_id=1') && !str_contains($invCards[103], 'Revoke Invitation'), 'Expired Inv #103 must show Resend only');
 
@@ -538,11 +530,11 @@ test('Live rendering of sysadmin/employees.php separates Pending & Expired Invit
     }
 });
 
-test('Routes register invitation-id resend/revoke and switch-account POST endpoints without GET or legacy routes', function () {
+test('Routes register invitation-id resend/revoke POST endpoints without retired switch-account, GET, or legacy routes', function () {
     $indexSrc = (string)file_get_contents(dirname(__DIR__) . '/public/index.php');
     assertTrue(str_contains($indexSrc, "'/sysadmin/invitations/{id}/resend', 'SysAdminController', 'resendEmployeeInvitation'"), 'Missing POST /sysadmin/invitations/{id}/resend');
     assertTrue(str_contains($indexSrc, "'/sysadmin/invitations/{id}/revoke', 'SysAdminController', 'revokeEmployeeInvitation'"), 'Missing POST /sysadmin/invitations/{id}/revoke');
-    assertTrue(str_contains($indexSrc, "'/invitations/switch-account', 'InvitationController', 'switchAccount'"), 'Missing POST /invitations/switch-account');
+    assertTrue(!str_contains($indexSrc, '/invitations/switch-account') && !str_contains($indexSrc, 'switchAccount'), 'Retired POST /invitations/switch-account route must not be registered');
     assertTrue(!str_contains($indexSrc, '/sysadmin/employees/{id}/invitation/'), 'Legacy employee-id invitation routes must be removed');
     assertTrue(preg_match("/\\\$r->get\\([^;]*\\/invitations?\\/(resend|revoke|switch)/i", $indexSrc) === 0, 'Must never expose GET resend/revoke/switch routes');
 });

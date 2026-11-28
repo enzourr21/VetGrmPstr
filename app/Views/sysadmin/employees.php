@@ -43,16 +43,12 @@ $unitInvitations = $unitInvitations ?? [];
         $invFullName = trim((string)$inv['first_name'] . ' ' . (string)$inv['last_name']);
         $invActionState = (string)($inv['action_state'] ?? (((string)($inv['invitation_state'] ?? '') === 'pending') ? 'pending_invitation' : 'expired_invitation'));
         $emailSubStatus = (string)($inv['email_submission_status'] ?? 'pending');
-        $isExistingCust = !empty($inv['is_existing_customer_email']);
       ?>
         <article class="roster-item">
           <header class="roster-item-head">
             <div>
               <strong><?= e($invFullName) ?></strong>
               <span class="caption">Invitation #<?= $invId ?></span>
-              <?php if ($isExistingCust): ?>
-                <span class="status neutral">Existing Customer</span>
-              <?php endif; ?>
             </div>
             <?php if ($invActionState === 'pending_invitation'): ?>
               <span class="status warn">Pending Invitation</span>

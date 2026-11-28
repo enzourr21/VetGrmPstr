@@ -762,16 +762,25 @@ try {
         }
     });
 
-    test('Email and username uniqueness allow existing active customer without username, block existing customer with username, and release on revoke/expire', function () {
+    test('Email and username uniqueness reject any existing user_account (including customers), block resending/emailing historical customer invites, and release on revoke/expire', function () {
         $pdo = makeFixturePdo();
         $now = strtotime('2026-11-20 12:00:00 UTC');
+        $mailCalls = 0;
         $svc = new EmployeeInvitationService(
             $pdo,
-            fn() => ['submitted' => true, 'driver' => 'smtp', 'error' => null, 'status_code' => 200],
+            function () use (&$mailCalls): array {
+                $mailCalls++;
+                return ['submitted' => true, 'driver' => 'smtp', 'error' => null, 'status_code' => 200];
+            },
             function () use (&$now): int { return $now; }
         );
 
-        // Existing customer-only WITH username supplied -> 422 on username
+        $origUsers = $pdo->users;
+        $origCustomers = $pdo->customers;
+        $origEmployees = $pdo->employees;
+        $origAccountRoles = $pdo->accountRoles;
+
+        // Existing customer-only WITH username supplied -> rejected 422 on email (direct System Admin assignment required)
         $custWithUser = $svc->createInvitationForUnit(2, 1, [
             'business_unit_id' => 1,
             'full_name' => 'Existing Cust',
@@ -780,9 +789,15 @@ try {
             'position' => 'Receptionist',
             'roles' => ['RECEPTIONIST'],
         ]);
-        assertTrue(!$custWithUser['ok'] && $custWithUser['status'] === 422 && isset($custWithUser['errors']['username']), 'Existing customer with username must fail 422 on username');
+        assertTrue(
+            !$custWithUser['ok']
+            && $custWithUser['status'] === 422
+            && isset($custWithUser['errors']['email'])
+            && str_contains((string)$custWithUser['errors']['email'], 'System Administrator'),
+            'Existing customer with username must fail 422 on email explaining direct System Administrator assignment'
+        );
 
-        // Existing customer-only WITHOUT username -> 201 (Workflow B invite)
+        // Existing customer-only WITHOUT username (case-insensitive) -> ALSO rejected 422 on email
         $custNoUser = $svc->createInvitationForUnit(2, 1, [
             'business_unit_id' => 1,
             'full_name' => 'Existing Cust',
@@ -790,7 +805,77 @@ try {
             'position' => 'Receptionist',
             'roles' => ['RECEPTIONIST'],
         ]);
-        assertTrue($custNoUser['ok'] === true && $custNoUser['status'] === 201 && ($custNoUser['recipient_mode'] ?? '') === 'existing_customer', 'Existing active customer without username must succeed');
+        assertTrue(
+            !$custNoUser['ok']
+            && $custNoUser['status'] === 422
+            && isset($custNoUser['errors']['email'])
+            && str_contains((string)$custNoUser['errors']['email'], 'System Administrator'),
+            'Existing active customer without username must fail 422 on email'
+        );
+        assertTrue(count($pdo->invitations) === 0 && $mailCalls === 0, 'Rejected existing-customer creates must write zero invitations and send zero emails');
+        assertTrue(
+            $pdo->users === $origUsers
+            && $pdo->customers === $origCustomers
+            && $pdo->employees === $origEmployees
+            && $pdo->accountRoles === $origAccountRoles,
+            'Rejected existing-customer creates must not mutate user_account, customer, employee, or account_role'
+        );
+
+        // Resending or submitting email for a historical pending/expired existing-customer invitation fails closed (409)
+        // and preserves the historical invitation row and audit logs untouched.
+        $histRawToken = EmployeeInvitationService::generateToken();
+        $histId = 9001;
+        $pdo->invitations[$histId] = [
+            'invitation_id' => $histId,
+            'user_account_id' => null,
+            'employee_id' => null,
+            'business_unit_id' => 1,
+            'invited_email' => 'active.customer@example.com',
+            'first_name' => 'Existing',
+            'last_name' => 'Cust',
+            'username' => null,
+            'phone' => null,
+            'position_id' => 10,
+            'position_name' => 'Receptionist',
+            'token_hash' => EmployeeInvitationService::hashToken($histRawToken),
+            'status' => 'pending',
+            'expires_at' => gmdate('Y-m-d H:i:s', $now + 3600),
+            'accepted_at' => null,
+            'revoked_at' => null,
+            'revoke_reason' => null,
+            'replaced_invitation_id' => null,
+            'email_submission_status' => 'pending',
+            'email_submitted_at' => null,
+            'email_failed_at' => null,
+            'email_error' => null,
+            'created_by_user_id' => 2,
+            'is_legacy_quarantined' => 0,
+            'created_at' => gmdate('Y-m-d H:i:s', $now - 600),
+            'updated_at' => gmdate('Y-m-d H:i:s', $now - 600),
+        ];
+        $pdo->invitationRoles[] = ['invitation_id' => $histId, 'role_id' => 3];
+        $histSnapshot = $pdo->invitations[$histId];
+        $auditSnapshot = $pdo->auditLogs;
+
+        $resendHist = $svc->resendInvitation(2, $histId, 1);
+        assertTrue(
+            !$resendHist['ok']
+            && $resendHist['status'] === 409
+            && str_contains((string)$resendHist['error'], 'System Administrator'),
+            'Resending a historical existing-customer invitation must fail closed with 409'
+        );
+        assertTrue(count($pdo->invitations) === 1 && $pdo->invitations[$histId] === $histSnapshot, 'Historical invitation row must remain intact and no replacement row created');
+        assertTrue($pdo->auditLogs === $auditSnapshot && $mailCalls === 0, 'Failed resend must not write audit mutations or submit email');
+
+        $mailHist = $svc->submitInvitationEmail($histId, $histRawToken, 'active.customer@example.com');
+        assertTrue(
+            $mailHist['submitted'] === false
+            && $mailHist['status_code'] === 409
+            && str_contains((string)$mailHist['error'], 'System Administrator')
+            && $mailCalls === 0,
+            'submitInvitationEmail must fail closed (409) without calling mailer for existing-account email'
+        );
+        assertTrue($pdo->invitations[$histId] === $histSnapshot, 'Blocked email submission must leave historical invitation intact');
 
         // Existing employee email -> 422 on email
         $empDup = $svc->createInvitationForUnit(2, 1, [
@@ -802,7 +887,7 @@ try {
         ]);
         assertTrue(!$empDup['ok'] && isset($empDup['errors']['email']), 'Existing employee email must fail');
 
-        // Suspended account email -> 409 / error
+        // Suspended account email -> 422 on email
         $susp = $svc->createInvitationForUnit(2, 1, [
             'business_unit_id' => 1,
             'full_name' => 'Susp Emp',
@@ -810,7 +895,7 @@ try {
             'position' => 'Receptionist',
             'roles' => ['RECEPTIONIST'],
         ]);
-        assertTrue(!$susp['ok'], 'Suspended account email must be rejected');
+        assertTrue(!$susp['ok'] && isset($susp['errors']['email']), 'Suspended account email must be rejected');
 
         // Active pending invite blocks duplicate email and duplicate username, then revoke frees both!
         $p1 = $svc->createInvitationForUnit(2, 1, [

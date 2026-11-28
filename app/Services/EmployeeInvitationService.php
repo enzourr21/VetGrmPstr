@@ -14,7 +14,7 @@ use RuntimeException;
 use Throwable;
 
 /**
- * Employee Invitation Lifecycle & Dual-Path Acceptance Service.
+ * Employee Invitation Lifecycle & New-Account Acceptance Service.
  *
  * Architectural Invariants:
  *  - Invitations are completely independent of user_account, employee, customer, and account_role
@@ -23,17 +23,15 @@ use Throwable;
  *  - Intended employee profile (first_name, last_name, optional username, phone), position snapshot
  *    (position_id, position_name), and role assignments (employee_invitation_role) live on the
  *    invitation until acceptance.
- *  - Dual-path acceptance:
- *      * Workflow A (unregistered email): atomically provisions user_account, employee, customer,
- *        and account_role on acceptance.
- *      * Workflow B (existing eligible customer-only account): requires authenticated session
- *        matching the invited email + explicit confirmation; reuses existing user_account and
- *        customer 100% untouched (never mutating password, email, username, or customer data)
- *        and creates only employee + account_role.
+ *  - Single-path onboarding (Workflow A — genuinely new recipients only):
+ *      * Any email already belonging to a user_account (including existing customer accounts) is
+ *        rejected across creation, resend, email submission, token validation, and acceptance.
+ *        Existing accounts must be assigned employee access directly by a System Administrator.
+ *      * Acceptance for a new recipient atomically provisions user_account, employee, customer,
+ *        and account_role without reading or mutating any existing browser session.
  *  - Stores only SHA-256 token hashes; builds URLs strictly from EnvConfig::appUrl(); serializes
  *    concurrent identity/invitation mutations via MySQL GET_LOCK (pc_em_ -> pc_un_) + InnoDB
- *    row locks (user_account -> customer -> employee -> employee_invitation); runs SMTP outside
- *    any database transaction.
+ *    row locks (user_account -> employee_invitation); runs SMTP outside any database transaction.
  */
 final class EmployeeInvitationService
 {
@@ -133,8 +131,8 @@ final class EmployeeInvitationService
      * Create an independent employee invitation for $businessUnitId without creating any
      * user_account, employee, customer, or account_role records, commit, and submit email post-commit.
      *
-     * Accepts both unregistered recipients (even when customer_registration_pending rows exist)
-     * and eligible active customer-only accounts (leaving username NULL/untouched).
+     * Accepts only unregistered recipients (even when customer_registration_pending rows exist).
+     * Rejects any email that already belongs to an existing user_account.
      *
      * @param array<string, mixed> $input
      * @return array<string, mixed>
@@ -275,7 +273,7 @@ final class EmployeeInvitationService
                 'invited_email' => $email,
                 'first_name' => $clean['first_name'],
                 'last_name' => $clean['last_name'],
-                'username' => $recipientMode === 'existing_customer' ? null : $username,
+                'username' => $username,
                 'phone' => $clean['phone'],
                 'position_id' => $clean['position_id'],
                 'position_name' => $clean['position_name'],
@@ -290,8 +288,7 @@ final class EmployeeInvitationService
             $this->insertInvitationRoles($invitationId, $clean['role_ids']);
 
             $roleListStr = implode(', ', $clean['role_names']);
-            $modeNote = $recipientMode === 'existing_customer' ? 'existing customer account' : 'new employee onboarding';
-            $summary = "Created employee invitation #{$invitationId} for {$clean['full_name']} ({$email}) in {$clean['business_unit_name']} as '{$clean['position_name']}' with role(s): {$roleListStr} ({$modeNote}; expires {$expiresAtUtc} UTC).";
+            $summary = "Created employee invitation #{$invitationId} for {$clean['full_name']} ({$email}) in {$clean['business_unit_name']} as '{$clean['position_name']}' with role(s): {$roleListStr} (new employee onboarding; expires {$expiresAtUtc} UTC).";
 
             Audit::record(
                 $this->db,
@@ -521,7 +518,7 @@ final class EmployeeInvitationService
                 ];
             }
 
-            $replacementUsername = ($elig['mode'] === 'existing_customer') ? null : $targetUsername;
+            $replacementUsername = $targetUsername;
             if ($replacementUsername !== null) {
                 $uChk = $this->db->prepare('SELECT user_account_id FROM user_account WHERE username = ? LIMIT 1');
                 $uChk->execute([$replacementUsername]);
@@ -849,7 +846,8 @@ final class EmployeeInvitationService
 
     /**
      * Validate a raw token for read-only display on GET /invitations/accept.
-     * Dynamically classifies the acceptance path as 'new_account' or 'existing_customer'.
+     * Supports new-recipient onboarding only; fails closed (HTTP 409) if the invited email
+     * already belongs to an existing user_account.
      *
      * @return array<string, mixed>
      */
@@ -931,12 +929,15 @@ final class EmployeeInvitationService
             ];
         }
 
-        $elig = $this->evaluateEmailEligibility($invitedEmail, $invUsername, false, true);
+        $elig = $this->evaluateEmailEligibility($invitedEmail, $invUsername, false);
         if (!$elig['ok']) {
+            $errMsg = isset($elig['errors']['email'])
+                ? (string)$elig['errors']['email']
+                : 'This invitation cannot be accepted because the associated email or username is not eligible for employee onboarding.';
             return [
                 'ok' => false,
                 'status' => 409,
-                'error' => 'This invitation cannot be accepted because the associated email or username is not eligible for employee onboarding.',
+                'error' => $errMsg,
             ];
         }
 
@@ -948,15 +949,14 @@ final class EmployeeInvitationService
         return [
             'ok' => true,
             'status' => 200,
-            'mode' => (string)$elig['mode'],
-            'existing_user_account_id' => $elig['existing_user_account_id'] ?? null,
+            'mode' => 'new_account',
             'invitation' => [
                 'invitation_id' => (int)$row['invitation_id'],
                 'full_name' => trim((string)$row['first_name'] . ' ' . (string)$row['last_name']),
                 'first_name' => (string)$row['first_name'],
                 'last_name' => (string)$row['last_name'],
                 'email' => $invitedEmail,
-                'username' => $elig['mode'] === 'existing_customer' ? null : $invUsername,
+                'username' => $invUsername,
                 'business_unit_id' => $businessUnitId,
                 'business_unit_name' => $unitName,
                 'position' => $positionName,
@@ -967,25 +967,22 @@ final class EmployeeInvitationService
     }
 
     /**
-     * Accept a single-use employee invitation atomically via one of two paths resolved
-     * authoritatively under advisory + InnoDB locks:
+     * Accept a single-use employee invitation atomically for a genuinely new recipient
+     * under advisory + InnoDB locks:
      *
-     *  - Workflow A (no existing user_account for invited_email):
-     *      Validates password policy, creates user_account (email_verified_at=UTC), employee,
-     *      customer, and account_role, and links + accepts employee_invitation.
-     *  - Workflow B (existing eligible customer-only account for invited_email):
-     *      Requires $authenticatedUserId matching the existing user_account and
-     *      $confirmedExistingAccount === true; leaves user_account and customer 100% untouched
-     *      (zero password/email/username mutation) and inserts only employee + account_role.
+     *  - If any user_account already exists for invited_email (including pre-existing or
+     *    subsequently registered customer accounts), fails closed with HTTP 409 without
+     *    mutating any account, customer, employee, role, or historical invitation row.
+     *  - Otherwise (Workflow A): validates password policy, creates user_account
+     *    (email_verified_at=UTC), employee, customer, and account_role, and links + accepts
+     *    employee_invitation.
      *
      * @return array<string, mixed>
      */
     public function acceptInvitation(
         string $rawToken,
         string $password = '',
-        string $passwordConfirm = '',
-        ?int $authenticatedUserId = null,
-        bool $confirmedExistingAccount = false
+        string $passwordConfirm = ''
     ): array {
         $genericError = 'This invitation link is invalid, expired, or has already been used.';
 
@@ -1035,7 +1032,7 @@ final class EmployeeInvitationService
         try {
             $this->db->beginTransaction();
 
-            // 1. Canonical lock order: user_account -> customer -> employee -> employee_invitation
+            // 1. Canonical lock order: user_account -> employee_invitation
             $uaStmt = $this->db->prepare(
                 "SELECT ua.user_account_id, ua.email, ua.username, ua.account_status, ua.is_super_admin, ua.email_verified_at,
                         EXISTS (
@@ -1051,29 +1048,6 @@ final class EmployeeInvitationService
             );
             $uaStmt->execute([$invitedEmail]);
             $ua = $uaStmt->fetch(PDO::FETCH_ASSOC);
-
-            $existingCustomer = false;
-            $existingEmployee = false;
-            if ($ua) {
-                $existingUid = (int)$ua['user_account_id'];
-                $custStmt = $this->db->prepare(
-                    "SELECT customer_id, user_account_id, first_name, last_name, phone, customer_status
-                     FROM customer
-                     WHERE user_account_id = ?
-                     FOR UPDATE"
-                );
-                $custStmt->execute([$existingUid]);
-                $existingCustomer = $custStmt->fetch(PDO::FETCH_ASSOC);
-
-                $empStmt = $this->db->prepare(
-                    "SELECT employee_id, user_account_id, business_unit_id, employee_status
-                     FROM employee
-                     WHERE user_account_id = ?
-                     FOR UPDATE"
-                );
-                $empStmt->execute([$existingUid]);
-                $existingEmployee = $empStmt->fetch(PDO::FETCH_ASSOC);
-            }
 
             $allInvRows = $this->lockInvitationsByEmail($invitedEmail, 'DESC');
             $targetInv = null;
@@ -1175,140 +1149,14 @@ final class EmployeeInvitationService
             $roleListStr = implode(', ', $roleNames);
             $empActionCode = in_array('SYSTEM_ADMINISTRATOR', $roleNames, true) ? 'sysadmin.created' : 'employee.created';
 
-            // ------------------------------------------------------------------
-            // WORKFLOW B: Existing user_account for invited_email
-            // ------------------------------------------------------------------
+            // Existing accounts cannot use employee invitation links; fail closed with HTTP 409
+            // without provisioning an employee, modifying the account, or granting roles.
             if ($ua) {
-                $existingUid = (int)$ua['user_account_id'];
-                if (
-                    (bool)$ua['is_super_admin'] ||
-                    (bool)$ua['has_super_role'] ||
-                    $existingEmployee !== false ||
-                    (string)$ua['account_status'] !== 'active' ||
-                    !$existingCustomer ||
-                    (string)$existingCustomer['customer_status'] !== 'active'
-                ) {
-                    $this->db->rollBack();
-                    return [
-                        'ok' => false,
-                        'status' => 409,
-                        'error' => 'This account is not eligible to accept an employee invitation.',
-                    ];
-                }
-
-                if ($authenticatedUserId === null || $authenticatedUserId <= 0) {
-                    $this->db->rollBack();
-                    return [
-                        'ok' => false,
-                        'status' => 401,
-                        'mode' => 'existing_customer',
-                        'requires_auth' => true,
-                        'error' => 'Please sign in to your existing PawCariño account before accepting this employee invitation.',
-                    ];
-                }
-
-                if ($authenticatedUserId !== $existingUid) {
-                    $this->db->rollBack();
-                    return [
-                        'ok' => false,
-                        'status' => 403,
-                        'mode' => 'existing_customer',
-                        'wrong_account' => true,
-                        'error' => 'You are signed in to a different account. Sign in with the invited email address to accept this invitation.',
-                    ];
-                }
-
-                if (strtolower(trim((string)$ua['email'])) !== $invitedEmail) {
-                    $this->db->rollBack();
-                    return [
-                        'ok' => false,
-                        'status' => 409,
-                        'error' => 'Your account email address no longer matches this invitation.',
-                    ];
-                }
-
-                if (!$confirmedExistingAccount) {
-                    $this->db->rollBack();
-                    return [
-                        'ok' => false,
-                        'status' => 422,
-                        'mode' => 'existing_customer',
-                        'error' => 'Please confirm that you want to join as an employee using your existing account.',
-                        'errors' => ['confirm_accept' => 'Confirm acceptance to continue.'],
-                    ];
-                }
-
-                // NEVER update user_account or customer in Workflow B.
-                // Create ONLY the missing employee record and unit role assignments.
-                $effectivePhone = $invPhone ?? ($existingCustomer['phone'] !== null ? (string)$existingCustomer['phone'] : null);
-                $insEmp = $this->db->prepare(
-                    "INSERT INTO employee (user_account_id, business_unit_id, first_name, last_name, position, phone, employee_status)
-                     VALUES (?, ?, ?, ?, ?, ?, 'active')"
-                );
-                $insEmp->execute([$existingUid, $businessUnitId, $firstName, $lastName, $positionName, $effectivePhone]);
-                $eid = (int)$this->db->lastInsertId();
-
-                $insRole = $this->db->prepare(
-                    'INSERT INTO account_role (user_account_id, role_id, business_unit_id) VALUES (?, ?, ?)'
-                );
-                foreach ($roleIds as $rid) {
-                    $insRole->execute([$existingUid, $rid, $businessUnitId]);
-                }
-
-                $consumeStmt = $this->db->prepare(
-                    "UPDATE employee_invitation
-                     SET status = 'accepted',
-                         accepted_at = ?,
-                         user_account_id = ?,
-                         employee_id = ?,
-                         is_legacy_quarantined = 0,
-                         updated_at = ?
-                     WHERE invitation_id = ?
-                       AND status = 'pending'
-                       AND token_hash = ?"
-                );
-                $consumeStmt->execute([$nowUtc, $existingUid, $eid, $nowUtc, $invitationId, $tokenHash]);
-                if ($consumeStmt->rowCount() !== 1) {
-                    $this->db->rollBack();
-                    return ['ok' => false, 'status' => 409, 'error' => $genericError];
-                }
-
-                Audit::record(
-                    $this->db,
-                    $empActionCode,
-                    "Attached employee profile $firstName $lastName ($invitedEmail) to existing customer account in $unitName as '$positionName' with role(s): $roleListStr.",
-                    $businessUnitId,
-                    $existingUid,
-                    $eid,
-                    'customer_only',
-                    "Position: $positionName; Roles: $roleListStr",
-                    'employee',
-                    $eid
-                );
-
-                Audit::record(
-                    $this->db,
-                    'invitation.accepted',
-                    "Existing customer $firstName $lastName ({$invitedEmail}) accepted employee invitation #{$invitationId} in {$unitName}.",
-                    $businessUnitId,
-                    $existingUid,
-                    $eid,
-                    'pending',
-                    'accepted',
-                    'employee_invitation',
-                    $invitationId
-                );
-
-                $this->db->commit();
-
+                $this->db->rollBack();
                 return [
-                    'ok' => true,
-                    'status' => 200,
-                    'mode' => 'existing_customer',
-                    'invitation_id' => $invitationId,
-                    'user_account_id' => $existingUid,
-                    'employee_id' => $eid,
-                    'customer_id' => (int)$existingCustomer['customer_id'],
+                    'ok' => false,
+                    'status' => 409,
+                    'error' => 'An existing PawCariño account already uses this email address. Existing accounts cannot be onboarded via invitation links and must be assigned employee access directly by a System Administrator.',
                 ];
             }
 
@@ -1446,7 +1294,7 @@ final class EmployeeInvitationService
                 return [
                     'ok' => false,
                     'status' => 409,
-                    'error' => 'An account with this email or username already exists. Sign in to continue or request a new invitation.',
+                    'error' => 'An account with this email or username already exists. Existing accounts must be assigned employee access directly by a System Administrator.',
                 ];
             }
             return [
@@ -1964,10 +1812,7 @@ final class EmployeeInvitationService
                        (SELECT GROUP_CONCAT(DISTINCT r.role_name ORDER BY r.role_name SEPARATOR ', ')
                         FROM employee_invitation_role eir
                         JOIN role r ON r.role_id = eir.role_id
-                        WHERE eir.invitation_id = ei.invitation_id) AS unit_roles,
-                       EXISTS (
-                           SELECT 1 FROM user_account ua_ex WHERE ua_ex.email = ei.invited_email
-                       ) AS is_existing_customer_email
+                        WHERE eir.invitation_id = ei.invitation_id) AS unit_roles
                 FROM employee_invitation ei
                 WHERE ei.business_unit_id = ?
                   AND (
@@ -2220,23 +2065,22 @@ final class EmployeeInvitationService
     }
 
     /**
-     * Evaluate whether $email (and optional $username) is eligible for an employee invitation.
-     * Never treats customer_registration_pending rows as blocking.
+     * Evaluate whether $email (and optional $username) is eligible for a new-recipient employee invitation.
+     * Rejects any email already belonging to a user_account (existing accounts must be assigned
+     * employee access directly by a System Administrator). Never treats customer_registration_pending
+     * rows as blocking.
      *
      * @return array{
      *   ok: bool,
      *   status?: int,
      *   mode?: string,
-     *   existing_user_account_id?: int,
-     *   existing_customer_id?: int,
      *   errors?: array<string, string>
      * }
      */
     private function evaluateEmailEligibility(
         string $normalizedEmail,
         ?string $username,
-        bool $forUpdate,
-        bool $allowUsernameIgnoredForExistingCustomer = false
+        bool $forUpdate
     ): array {
         $lockClause = $forUpdate ? ' FOR UPDATE' : '';
         $uaStmt = $this->db->prepare(
@@ -2293,41 +2137,12 @@ final class EmployeeInvitationService
             ];
         }
 
-        $acctStatus = (string)$ua['account_status'];
-        if ($acctStatus !== 'active') {
-            return [
-                'ok' => false,
-                'status' => 422,
-                'errors' => ['email' => "This account is currently {$acctStatus} and cannot receive an employee invitation."],
-            ];
-        }
-
-        $custStmt = $this->db->prepare("SELECT customer_id, customer_status FROM customer WHERE user_account_id = ? LIMIT 1{$lockClause}");
-        $custStmt->execute([$uid]);
-        $cust = $custStmt->fetch(PDO::FETCH_ASSOC);
-        if (!$cust || (string)$cust['customer_status'] !== 'active') {
-            return [
-                'ok' => false,
-                'status' => 422,
-                'errors' => ['email' => 'This account does not have an active customer profile eligible for employee conversion.'],
-            ];
-        }
-
-        if (!$allowUsernameIgnoredForExistingCustomer && $username !== null && $username !== '') {
-            return [
-                'ok' => false,
-                'status' => 422,
-                'errors' => [
-                    'username' => 'This email belongs to an existing customer account; leave Username blank because existing account credentials are not modified.',
-                ],
-            ];
-        }
-
         return [
-            'ok' => true,
-            'mode' => 'existing_customer',
-            'existing_user_account_id' => $uid,
-            'existing_customer_id' => (int)$cust['customer_id'],
+            'ok' => false,
+            'status' => 422,
+            'errors' => [
+                'email' => 'An existing PawCariño account already uses this email address. Existing accounts cannot receive employee invitation links and must be assigned employee access directly by a System Administrator.',
+            ],
         ];
     }
 
