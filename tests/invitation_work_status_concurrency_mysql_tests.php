@@ -6,13 +6,15 @@ declare(strict_types=1);
  * InvitationPlaceholderCleanupService employee_work_status locking.
  *
  * SAFETY:
- *  - Requires an explicitly supplied disposable database via --db=<name> or
+ *  - Uses a strict explicit allowlist of dedicated disposable concurrency test databases
+ *    (currently only `vetgrpet_test_concurrency`), supplied via --db=<name> or
  *    PAWCARINO_CONCURRENCY_TEST_DB=<name>.
- *  - Hard-refuses protected/existing databases: vetgrpet_db, vetgrpet_test, vetgrpet_test_rollback.
+ *  - Rejects production, application, rollback, system, and arbitrary database names
+ *    before opening any PDO connection, and re-verifies SELECT DATABASE() after connecting.
  *  - Does not modify .env, run migrations, or touch any non-fixture records.
  *
  * Prerequisites before running:
- *  1. Provision a dedicated disposable MySQL 8.4 database (e.g., vetgrpet_test_concurrency)
+ *  1. Provision the dedicated disposable MySQL 8.4 database `vetgrpet_test_concurrency`
  *     with all migrations 001..030 applied and grant privileges to the configured DB user.
  *  2. Run:
  *     php tests/invitation_work_status_concurrency_mysql_tests.php --db=vetgrpet_test_concurrency
@@ -23,12 +25,15 @@ if (PHP_SAPI !== 'cli') {
     exit("Forbidden: CLI execution only.\n");
 }
 
+$allowedDbs = ['vetgrpet_test_concurrency'];
+
 $targetDb = null;
 foreach (array_slice($argv ?? [], 1) as $arg) {
     if (str_starts_with($arg, '--db=')) {
         $targetDb = trim(substr($arg, 5));
     } elseif ($arg === '--help' || $arg === '-h') {
-        echo "Usage: php tests/invitation_work_status_concurrency_mysql_tests.php --db=<disposable_db>\n";
+        echo "Usage: php tests/invitation_work_status_concurrency_mysql_tests.php --db=vetgrpet_test_concurrency\n";
+        echo "Allowed disposable databases: " . implode(', ', $allowedDbs) . "\n";
         exit(0);
     } else {
         fwrite(STDERR, "Unknown argument: {$arg}\n");
@@ -41,12 +46,12 @@ if ($targetDb === null || $targetDb === '') {
     $targetDb = is_string($envDb) ? trim($envDb) : '';
 }
 
-$forbiddenDbs = ['vetgrpet_db', 'vetgrpet_test', 'vetgrpet_test_rollback', 'mysql', 'information_schema', 'performance_schema', 'sys'];
-if ($targetDb === '' || !preg_match('/^[A-Za-z0-9_]+$/', $targetDb) || in_array(strtolower($targetDb), $forbiddenDbs, true)) {
+if ($targetDb === '' || !in_array($targetDb, $allowedDbs, true)) {
     fwrite(
         STDERR,
-        "Refusing to run: provide a dedicated disposable database via --db=<name> or PAWCARINO_CONCURRENCY_TEST_DB.\n"
-        . "Protected databases (vetgrpet_db, vetgrpet_test, vetgrpet_test_rollback) are strictly forbidden.\n"
+        "Refusing to run: target database '" . ($targetDb === '' ? '<empty>' : $targetDb) . "' is not in the strict allowlist.\n"
+        . "Allowed disposable databases: " . implode(', ', $allowedDbs) . "\n"
+        . "Supply via --db=vetgrpet_test_concurrency or PAWCARINO_CONCURRENCY_TEST_DB=vetgrpet_test_concurrency.\n"
     );
     exit(2);
 }
@@ -68,7 +73,7 @@ $port = (string)(getenv('DB_PORT') ?: ($env['DB_PORT'] ?? '3310'));
 $user = (string)(getenv('DB_USERNAME') ?: ($env['DB_USERNAME'] ?? ''));
 $pass = (string)(getenv('DB_PASSWORD') ?: ($env['DB_PASSWORD'] ?? ''));
 
-$openConn = static function () use ($host, $port, $targetDb, $user, $pass): PDO {
+$openConn = static function () use ($host, $port, $targetDb, $allowedDbs, $user, $pass): PDO {
     $pdo = new PDO(
         "mysql:host={$host};port={$port};dbname={$targetDb};charset=utf8mb4",
         $user,
@@ -82,8 +87,8 @@ $openConn = static function () use ($host, $port, $targetDb, $user, $pass): PDO 
     $pdo->exec("SET time_zone = '+00:00'");
     $pdo->exec('SET SESSION innodb_lock_wait_timeout = 2');
     $actual = (string)$pdo->query('SELECT DATABASE()')->fetchColumn();
-    if ($actual !== $targetDb) {
-        throw new RuntimeException("ABORT: connected to '{$actual}', expected '{$targetDb}'.");
+    if ($actual !== $targetDb || !in_array($actual, $allowedDbs, true)) {
+        throw new RuntimeException("ABORT: connected to '{$actual}', expected allowlisted '{$targetDb}'.");
     }
     return $pdo;
 };
@@ -109,7 +114,8 @@ $check = static function (string $label, bool $cond, string $detail = '') use (&
 };
 
 /**
- * Seed a disposable proven-placeholder fixture in business_unit_id = 1.
+ * Atomically seed a disposable proven-placeholder fixture inside a single transaction.
+ * Any failure rolls back all inserted rows cleanly so no partial fixture is left behind.
  *
  * @return array{uid:int,eid:int,cid:int,inv_id:int,log_id:int,actor_uid:int}
  */
@@ -125,74 +131,111 @@ $seedFixture = static function (PDO $pdo, string $tag, ?string $initialWorkStatu
     $exp = gmdate('Y-m-d H:i:s', time() + 172800);
     $email = "ws.concurrency.{$tag}." . bin2hex(random_bytes(4)) . '@example.invalid';
 
-    $pdo->prepare("INSERT INTO user_account (email, password_hash, account_status, is_super_admin, email_verified_at) VALUES (?, ?, 'active', 0, NULL)")
-        ->execute([$email, password_hash(bin2hex(random_bytes(16)), PASSWORD_DEFAULT)]);
-    $uid = (int)$pdo->lastInsertId();
+    $pdo->beginTransaction();
+    try {
+        $pdo->prepare("INSERT INTO user_account (email, password_hash, account_status, is_super_admin, email_verified_at) VALUES (?, ?, 'active', 0, NULL)")
+            ->execute([$email, password_hash(bin2hex(random_bytes(16)), PASSWORD_DEFAULT)]);
+        $uid = (int)$pdo->lastInsertId();
 
-    $pdo->prepare("INSERT INTO employee (user_account_id, business_unit_id, first_name, last_name, position, employee_status) VALUES (?, ?, 'Conc', 'Test', 'Delivery Personnel', 'active')")
-        ->execute([$uid, $unitId]);
-    $eid = (int)$pdo->lastInsertId();
+        $pdo->prepare("INSERT INTO employee (user_account_id, business_unit_id, first_name, last_name, position, employee_status) VALUES (?, ?, 'Conc', 'Test', 'Delivery Personnel', 'active')")
+            ->execute([$uid, $unitId]);
+        $eid = (int)$pdo->lastInsertId();
 
-    $pdo->prepare("INSERT INTO customer (user_account_id, first_name, last_name, customer_status) VALUES (?, 'Conc', 'Test', 'active')")
-        ->execute([$uid]);
-    $cid = (int)$pdo->lastInsertId();
+        $pdo->prepare("INSERT INTO customer (user_account_id, first_name, last_name, customer_status) VALUES (?, 'Conc', 'Test', 'active')")
+            ->execute([$uid]);
+        $cid = (int)$pdo->lastInsertId();
 
-    $pdo->prepare('INSERT INTO account_role (user_account_id, role_id, business_unit_id) VALUES (?, ?, ?)')
-        ->execute([$uid, $roleId, $unitId]);
+        $pdo->prepare('INSERT INTO account_role (user_account_id, role_id, business_unit_id) VALUES (?, ?, ?)')
+            ->execute([$uid, $roleId, $unitId]);
 
-    if ($initialWorkStatus !== null) {
-        $pdo->prepare('INSERT INTO employee_work_status (employee_id, work_status) VALUES (?, ?)')
-            ->execute([$eid, $initialWorkStatus]);
+        if ($initialWorkStatus !== null) {
+            $pdo->prepare('INSERT INTO employee_work_status (employee_id, work_status) VALUES (?, ?)')
+                ->execute([$eid, $initialWorkStatus]);
+        }
+
+        $pdo->prepare(
+            "INSERT INTO employee_invitation (
+                user_account_id, employee_id, business_unit_id, invited_email, first_name, last_name,
+                position_name, token_hash, status, expires_at, email_submission_status,
+                created_by_user_id, is_legacy_quarantined, created_at, updated_at
+             ) VALUES (?, ?, ?, ?, 'Conc', 'Test', 'Delivery Personnel', ?, 'pending', ?, 'pending', ?, 1, ?, ?)"
+        )->execute([$uid, $eid, $unitId, $email, bin2hex(random_bytes(32)), $exp, $actorUid, $now, $now]);
+        $invId = (int)$pdo->lastInsertId();
+
+        $pdo->prepare('INSERT INTO employee_invitation_role (invitation_id, role_id) VALUES (?, ?)')
+            ->execute([$invId, $roleId]);
+
+        $pdo->prepare(
+            "INSERT INTO audit_log (actor_user_id, business_unit_id, action_code, target_type, target_id, affected_employee_id, summary, old_value, new_value, created_at)
+             VALUES (?, ?, 'invitation.created', 'employee_invitation', ?, ?, 'Concurrency test fixture', NULL, 'pending', ?)"
+        )->execute([$actorUid, $unitId, $invId, $eid, $now]);
+        $logId = (int)$pdo->lastInsertId();
+
+        $pdo->commit();
+
+        return [
+            'uid' => $uid,
+            'eid' => $eid,
+            'cid' => $cid,
+            'inv_id' => $invId,
+            'log_id' => $logId,
+            'actor_uid' => $actorUid,
+        ];
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        throw $e;
     }
-
-    $pdo->prepare(
-        "INSERT INTO employee_invitation (
-            user_account_id, employee_id, business_unit_id, invited_email, first_name, last_name,
-            position_name, token_hash, status, expires_at, email_submission_status,
-            created_by_user_id, is_legacy_quarantined, created_at, updated_at
-         ) VALUES (?, ?, ?, ?, 'Conc', 'Test', 'Delivery Personnel', ?, 'pending', ?, 'pending', ?, 1, ?, ?)"
-    )->execute([$uid, $eid, $unitId, $email, bin2hex(random_bytes(32)), $exp, $actorUid, $now, $now]);
-    $invId = (int)$pdo->lastInsertId();
-
-    $pdo->prepare('INSERT INTO employee_invitation_role (invitation_id, role_id) VALUES (?, ?)')
-        ->execute([$invId, $roleId]);
-
-    $pdo->prepare(
-        "INSERT INTO audit_log (actor_user_id, business_unit_id, action_code, target_type, target_id, affected_employee_id, summary, old_value, new_value, created_at)
-         VALUES (?, ?, 'invitation.created', 'employee_invitation', ?, ?, 'Concurrency test fixture', NULL, 'pending', ?)"
-    )->execute([$actorUid, $unitId, $invId, $eid, $now]);
-    $logId = (int)$pdo->lastInsertId();
-
-    return [
-        'uid' => $uid,
-        'eid' => $eid,
-        'cid' => $cid,
-        'inv_id' => $invId,
-        'log_id' => $logId,
-        'actor_uid' => $actorUid,
-    ];
 };
 
-$cleanupFixture = static function (PDO $pdo, array $fx): void {
+$cleanupFixture = static function (PDO $pdo, ?array $fx): void {
     if ($pdo->inTransaction()) {
         $pdo->rollBack();
     }
-    $pdo->prepare('DELETE FROM audit_log WHERE log_id = ?')->execute([$fx['log_id']]);
-    $pdo->prepare('DELETE FROM employee_invitation_role WHERE invitation_id = ?')->execute([$fx['inv_id']]);
-    $pdo->prepare('DELETE FROM employee_invitation WHERE invitation_id = ?')->execute([$fx['inv_id']]);
-    $pdo->prepare('DELETE FROM employee_work_status WHERE employee_id = ?')->execute([$fx['eid']]);
-    $pdo->prepare('DELETE FROM account_role WHERE user_account_id = ?')->execute([$fx['uid']]);
-    $pdo->prepare('DELETE FROM customer WHERE customer_id = ?')->execute([$fx['cid']]);
-    $pdo->prepare('DELETE FROM employee WHERE employee_id = ?')->execute([$fx['eid']]);
-    $pdo->prepare('DELETE FROM user_account WHERE user_account_id = ?')->execute([$fx['uid']]);
+    if ($fx === null) {
+        return;
+    }
+    $pdo->beginTransaction();
+    try {
+        if (!empty($fx['log_id'])) {
+            $pdo->prepare('DELETE FROM audit_log WHERE log_id = ?')->execute([(int)$fx['log_id']]);
+        }
+        if (!empty($fx['inv_id'])) {
+            $pdo->prepare('DELETE FROM employee_invitation_role WHERE invitation_id = ?')->execute([(int)$fx['inv_id']]);
+            $pdo->prepare('DELETE FROM employee_invitation WHERE invitation_id = ?')->execute([(int)$fx['inv_id']]);
+        }
+        if (!empty($fx['eid'])) {
+            $pdo->prepare('DELETE FROM employee_work_status WHERE employee_id = ?')->execute([(int)$fx['eid']]);
+        }
+        if (!empty($fx['uid'])) {
+            $pdo->prepare('DELETE FROM account_role WHERE user_account_id = ?')->execute([(int)$fx['uid']]);
+        }
+        if (!empty($fx['cid'])) {
+            $pdo->prepare('DELETE FROM customer WHERE customer_id = ?')->execute([(int)$fx['cid']]);
+        }
+        if (!empty($fx['eid'])) {
+            $pdo->prepare('DELETE FROM employee WHERE employee_id = ?')->execute([(int)$fx['eid']]);
+        }
+        if (!empty($fx['uid'])) {
+            $pdo->prepare('DELETE FROM user_account WHERE user_account_id = ?')->execute([(int)$fx['uid']]);
+        }
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        throw $e;
+    }
 };
 
 // ---------------------------------------------------------------------------
 // Scenario A — Existing work-status row (Free -> On Duty uncommitted on B)
 // ---------------------------------------------------------------------------
 echo "\n--- Scenario A: Existing work-status row ---\n";
-$fxA = $seedFixture($connA, 'a', 'Free');
+$fxA = null;
 try {
+    $fxA = $seedFixture($connA, 'a', 'Free');
     $svcA = new InvitationPlaceholderCleanupService($connA);
 
     // 1. Connection B starts a transaction and changes Free -> On Duty without committing
@@ -200,7 +243,7 @@ try {
     $connB->prepare("UPDATE employee_work_status SET work_status = 'On Duty' WHERE employee_id = ?")
         ->execute([$fxA['eid']]);
 
-    // 2. Connection A attempts cleanup's locking read (via applyCleanup) -> must block and hit MySQL 1205
+    // 2. Connection A attempts cleanup's locking read (via applyCleanup) -> expected MySQL 1205 lock wait
     $errCodeA = null;
     $errMsgA = '';
     try {
@@ -210,7 +253,7 @@ try {
         $errMsgA = $e->getMessage();
     }
     echo "Scenario A lock-wait outcome: MySQL error={$errCodeA} ({$errMsgA})\n";
-    $check('Scenario A: Connection A blocked on FOR UPDATE instead of reading stale Free (MySQL 1205)', $errCodeA === 1205, "got {$errCodeA}");
+    $check('Scenario A: Connection A blocked on FOR UPDATE instead of reading stale Free (expected MySQL 1205)', $errCodeA === 1205, "got {$errCodeA}");
 
     // 3. Commit B's transaction
     $connB->commit();
@@ -235,12 +278,19 @@ try {
 }
 
 // ---------------------------------------------------------------------------
-// Scenario B — Missing work-status row (A locks missing row; B tries INSERT)
+// Scenario B — Missing work-status row (reproduced cleanup locking sequence vs competing INSERT)
+// Verifies the expected lock interaction when Connection A holds the cleanup's
+// account/employee FOR UPDATE lock and missing-status FOR UPDATE lock while
+// Connection B attempts to insert the corresponding employee_work_status row.
+// Does not isolate which individual lock (parent employee lock vs index gap lock)
+// caused Connection B to block.
 // ---------------------------------------------------------------------------
-echo "\n--- Scenario B: Missing work-status row ---\n";
-$fxB = $seedFixture($connA, 'b', null);
+echo "\n--- Scenario B: Missing work-status row (lock interaction for cleanup sequence) ---\n";
+$fxB = null;
 try {
-    // 1. Connection A acquires cleanup's exact locking sequence (uaLock + employee_work_status FOR UPDATE)
+    $fxB = $seedFixture($connA, 'b', null);
+
+    // 1. Connection A reproduces cleanup's locking sequence (uaLock + missing employee_work_status FOR UPDATE)
     $connA->beginTransaction();
     $uaLock = $connA->prepare(
         "SELECT ua.user_account_id, e.employee_id, c.customer_id
@@ -257,7 +307,7 @@ try {
     $wsLock->execute([$fxB['eid']]);
     $check('Scenario B: Missing work-status row read returns false', $wsLock->fetch() === false);
 
-    // 2. Connection B attempts to insert the corresponding work-status row -> must block (MySQL 1205)
+    // 2. Connection B attempts a competing INSERT -> expected MySQL 1205 under this lock sequence
     $errCodeB = null;
     $errMsgB = '';
     try {
@@ -268,7 +318,7 @@ try {
         $errMsgB = $e->getMessage();
     }
     echo "Scenario B insert-race outcome: MySQL error={$errCodeB} ({$errMsgB})\n";
-    $check('Scenario B: Concurrent INSERT blocked by parent employee + gap lock (MySQL 1205)', $errCodeB === 1205, "got {$errCodeB}");
+    $check('Scenario B: Competing INSERT blocked under cleanup locking sequence (expected MySQL 1205)', $errCodeB === 1205, "got {$errCodeB}");
 
     $connA->rollBack();
 
