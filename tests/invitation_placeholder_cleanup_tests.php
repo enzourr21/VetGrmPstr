@@ -41,6 +41,9 @@ final class FakeCleanupPdo extends PDO
     public int $nextAuditId = 1000;
     public int $lastInsertIdVal = 0;
     public bool $inTx = false;
+    /** @var list<array{employee_id:int,for_update:bool,in_tx:bool}> */
+    public array $workStatusQueries = [];
+    public ?Closure $onBeforeWorkStatusForUpdate = null;
     private ?array $snapshot = null;
 
     public function __construct() {}
@@ -271,14 +274,28 @@ final class FakeCleanupPdo extends PDO
             return [[(string)$cnt]];
         }
 
-        if (str_contains($sql, 'FROM employee_work_status') && str_contains($sql, "work_status <> 'Free'")) {
+        if (str_contains($sql, 'SELECT work_status FROM employee_work_status WHERE employee_id = ?')) {
             $eid = (int)$params[0];
-            $row = $this->employeeWorkStatus[$eid] ?? null;
-            if (!$row) {
-                return [['0']];
+            $isForUpdate = str_contains($sql, 'FOR UPDATE');
+            if ($isForUpdate && !$this->inTx) {
+                throw new RuntimeException('FOR UPDATE must execute inside an active transaction.');
             }
-            $ws = (string)($row['work_status'] ?? 'Free');
-            return [[$ws !== 'Free' ? '1' : '0']];
+            $this->workStatusQueries[] = [
+                'employee_id' => $eid,
+                'for_update' => $isForUpdate,
+                'in_tx' => $this->inTx,
+            ];
+            if ($isForUpdate && $this->onBeforeWorkStatusForUpdate !== null) {
+                $hook = $this->onBeforeWorkStatusForUpdate;
+                $this->onBeforeWorkStatusForUpdate = null;
+                $hook($this, $eid);
+            }
+            if (!array_key_exists($eid, $this->employeeWorkStatus)) {
+                return [];
+            }
+            $row = $this->employeeWorkStatus[$eid];
+            $ws = array_key_exists('work_status', $row) ? $row['work_status'] : 'Free';
+            return [['work_status' => $ws]];
         }
 
         if (str_contains($sql, 'FROM employee_invitation')
@@ -385,9 +402,14 @@ final class FakeCleanupPdo extends PDO
 
         if (str_contains($sql, 'DELETE FROM employee_work_status WHERE employee_id = ?')) {
             $eid = (int)$params[0];
-            if (isset($this->employeeWorkStatus[$eid])) {
-                unset($this->employeeWorkStatus[$eid]);
-                $rowCount = 1;
+            if (array_key_exists($eid, $this->employeeWorkStatus)) {
+                $onlyFree = str_contains($sql, "work_status = 'Free'");
+                $row = $this->employeeWorkStatus[$eid];
+                $ws = array_key_exists('work_status', $row) ? $row['work_status'] : 'Free';
+                if (!$onlyFree || $ws === 'Free') {
+                    unset($this->employeeWorkStatus[$eid]);
+                    $rowCount = 1;
+                }
             }
             return [];
         }
@@ -613,7 +635,7 @@ final class FakeCleanupStatement extends PDOStatement
             return false;
         }
         $vals = array_values($row);
-        return $vals[$column] ?? false;
+        return array_key_exists($column, $vals) ? $vals[$column] : false;
     }
 
     public function rowCount(): int
@@ -1073,7 +1095,29 @@ check('10. Non-default employee_work_status (On Duty / Not Present) quarantines 
         throw new RuntimeException('Not Present user, employee, and work_status rows must remain intact.');
     }
 
-    // C. Positive: missing employee_work_status row (and 'Free' already covered in Check 3) cleans up cleanly
+    // C. NULL work_status -> treated as unknown/non-default and quarantined (defensive fail-closed)
+    $pdoNullWs = buildScenarioPdo();
+    $pdoNullWs->employeeWorkStatus[5] = ['employee_id' => 5, 'work_status' => null];
+    $svcNullWs = new InvitationPlaceholderCleanupService($pdoNullWs);
+    $analysisNullWs = $svcNullWs->analyze();
+    assertSameVal(0, $analysisNullWs['summary']['proven_placeholder_count'], 'NULL work_status must not be PROVEN_PLACEHOLDER.');
+    $q5Null = null;
+    foreach ($analysisNullWs['quarantined_uncertain'] as $row) {
+        if ((int)$row['user_account_id'] === 5) {
+            $q5Null = $row;
+        }
+    }
+    if ($q5Null === null || !in_array('employee_work_status_non_default', $q5Null['reasons'], true)) {
+        throw new RuntimeException('Expected user 5 with NULL work_status to be quarantined with employee_work_status_non_default.');
+    }
+    $applyNullWs = $svcNullWs->applyCleanup(true, 1);
+    assertSameVal([], $applyNullWs['cleaned_user_ids'], 'NULL work_status candidate must not reach cleanup deletion path.');
+    if (!isset($pdoNullWs->users[5], $pdoNullWs->employees[5], $pdoNullWs->employeeWorkStatus[5])) {
+        throw new RuntimeException('NULL work_status user, employee, and work_status rows must remain intact.');
+    }
+    assertSameVal(1, $pdoNullWs->invitations[50]['is_legacy_quarantined'], 'NULL work_status candidate invitation must be marked quarantined.');
+
+    // D. Positive: missing employee_work_status row (and 'Free' already covered in Check 3) cleans up cleanly
     $pdoMissingWs = buildScenarioPdo();
     unset($pdoMissingWs->employeeWorkStatus[5]);
     $svcMissingWs = new InvitationPlaceholderCleanupService($pdoMissingWs);
@@ -1220,7 +1264,10 @@ check('13. foreignKeyCoverage() distinguishes classification checks from cleanup
         }
     }
 
-    // Parse database/migrations/001..NNN for every effective FK referencing user_account, customer, or employee
+    // Static best-effort scan of database/migrations/001..999 for FKs referencing user_account, customer, or employee.
+    // Limitations (does NOT replace a live INFORMATION_SCHEMA.KEY_COLUMN_USAGE verifier):
+    //  - Does not verify live MySQL schema state or track DROP FOREIGN KEY / DROP TABLE / RENAME TABLE / replacements.
+    //  - Regex assumes CREATE TABLE ... ENGINE=, single-column FOREIGN KEY (col) REFERENCES tbl(col), and non-CONCAT PREPARE strings.
     $files = glob(dirname(__DIR__) . '/database/migrations/[0-9][0-9][0-9]_*.sql');
     if (!$files) {
         throw new RuntimeException('No migration files found.');
@@ -1289,6 +1336,66 @@ check('13. foreignKeyCoverage() distinguishes classification checks from cleanup
     }
     if ($stale) {
         throw new RuntimeException('Stale FK coverage entries not present in migrations: ' . implode(', ', $stale));
+    }
+});
+
+check('14. applyCleanup() locks employee_work_status FOR UPDATE in-transaction and quarantines on concurrent work_status change', function () {
+    // A. Standalone analyze() must NOT acquire FOR UPDATE locks
+    $pdoRead = buildScenarioPdo();
+    $svcRead = new InvitationPlaceholderCleanupService($pdoRead);
+    $svcRead->analyze();
+    if (!$pdoRead->workStatusQueries) {
+        throw new RuntimeException('Expected analyze() to inspect employee_work_status.');
+    }
+    foreach ($pdoRead->workStatusQueries as $q) {
+        assertSameVal(false, $q['for_update'], 'analyze() must not use FOR UPDATE on employee_work_status.');
+        assertSameVal(false, $q['in_tx'], 'analyze() must run outside a transaction.');
+    }
+
+    // B. Concurrent transition Free -> On Duty between initial analyze() and transactional FOR UPDATE recheck
+    $pdoRace = buildScenarioPdo();
+    $pdoRace->employeeWorkStatus[5] = ['employee_id' => 5, 'work_status' => 'Free'];
+    $pdoRace->onBeforeWorkStatusForUpdate = static function (FakeCleanupPdo $db, int $eid): void {
+        if ($eid === 5) {
+            $db->employeeWorkStatus[5]['work_status'] = 'On Duty';
+        }
+    };
+    $svcRace = new InvitationPlaceholderCleanupService($pdoRace);
+    $resRace = $svcRace->applyCleanup(true, 1);
+
+    assertSameVal([], $resRace['cleaned_user_ids'], 'Concurrent On Duty transition must prevent cleanup deletion.');
+    if (!in_array(5, $resRace['quarantined_user_ids'], true)) {
+        throw new RuntimeException('Concurrent On Duty transition must quarantine user 5.');
+    }
+    if (!isset($pdoRace->users[5], $pdoRace->employees[5], $pdoRace->employeeWorkStatus[5])) {
+        throw new RuntimeException('User 5, employee 5, and employee_work_status must remain intact after concurrent transition.');
+    }
+    assertSameVal('On Duty', $pdoRace->employeeWorkStatus[5]['work_status'], 'Updated work_status must be preserved.');
+    assertSameVal(1, $pdoRace->invitations[50]['is_legacy_quarantined'], 'Invitation 50 must be marked quarantined.');
+
+    $emp5Queries = array_values(array_filter(
+        $pdoRace->workStatusQueries,
+        static fn(array $q): bool => $q['employee_id'] === 5
+    ));
+    assertSameVal(2, count($emp5Queries), 'Expected 2 employee_work_status reads for employee 5 (initial analyze + transactional recheck).');
+    assertSameVal(false, $emp5Queries[0]['for_update'], 'Initial analyze() read must not lock.');
+    assertSameVal(false, $emp5Queries[0]['in_tx'], 'Initial analyze() read must be outside transaction.');
+    assertSameVal(true, $emp5Queries[1]['for_update'], 'Transactional recheck must lock employee_work_status FOR UPDATE.');
+    assertSameVal(true, $emp5Queries[1]['in_tx'], 'Transactional recheck FOR UPDATE must execute inside transaction.');
+
+    // C. Concurrent transition Free -> NULL between initial analyze() and transactional FOR UPDATE recheck
+    $pdoRaceNull = buildScenarioPdo();
+    $pdoRaceNull->employeeWorkStatus[5] = ['employee_id' => 5, 'work_status' => 'Free'];
+    $pdoRaceNull->onBeforeWorkStatusForUpdate = static function (FakeCleanupPdo $db, int $eid): void {
+        if ($eid === 5) {
+            $db->employeeWorkStatus[5]['work_status'] = null;
+        }
+    };
+    $svcRaceNull = new InvitationPlaceholderCleanupService($pdoRaceNull);
+    $resRaceNull = $svcRaceNull->applyCleanup(true, 1);
+    assertSameVal([], $resRaceNull['cleaned_user_ids'], 'Concurrent NULL work_status transition must prevent cleanup deletion.');
+    if (!isset($pdoRaceNull->users[5], $pdoRaceNull->employees[5], $pdoRaceNull->employeeWorkStatus[5])) {
+        throw new RuntimeException('User 5, employee 5, and NULL work_status row must remain intact.');
     }
 });
 

@@ -360,7 +360,7 @@ final class InvitationPlaceholderCleanupService
                     continue;
                 }
 
-                $recheck = $this->classifyAccount($lockedAcct);
+                $recheck = $this->classifyAccount($lockedAcct, true);
                 if ($recheck['classification'] !== self::CLASS_PROVEN_PLACEHOLDER) {
                     if ($recheck['classification'] === self::CLASS_QUARANTINED) {
                         $this->db->prepare(
@@ -418,7 +418,7 @@ final class InvitationPlaceholderCleanupService
                          WHERE affected_employee_id = ?"
                     )->execute([$lockedEid]);
 
-                    $this->db->prepare('DELETE FROM employee_work_status WHERE employee_id = ?')->execute([$lockedEid]);
+                    $this->db->prepare("DELETE FROM employee_work_status WHERE employee_id = ? AND work_status = 'Free'")->execute([$lockedEid]);
                 }
 
                 $this->db->prepare('DELETE FROM account_role WHERE user_account_id = ?')->execute([$uid]);
@@ -622,9 +622,10 @@ final class InvitationPlaceholderCleanupService
 
     /**
      * @param array<string, mixed> $acct
+     * @param bool $lockForUpdate Acquire FOR UPDATE lock on employee_work_status inside applyCleanup()'s transaction.
      * @return array<string, mixed>
      */
-    private function classifyAccount(array $acct): array
+    private function classifyAccount(array $acct, bool $lockForUpdate = false): array
     {
         $uid = (int)$acct['user_account_id'];
         $eid = $acct['employee_id'] !== null ? (int)$acct['employee_id'] : null;
@@ -721,13 +722,16 @@ final class InvitationPlaceholderCleanupService
                 }
             }
 
-            $wsStmt = $this->db->prepare(
-                "SELECT COUNT(*) FROM employee_work_status WHERE employee_id = ? AND work_status <> 'Free'"
-            );
+            $wsSql = 'SELECT work_status FROM employee_work_status WHERE employee_id = ?'
+                . ($lockForUpdate ? ' FOR UPDATE' : '');
+            $wsStmt = $this->db->prepare($wsSql);
             $wsStmt->execute([$eid]);
-            $nonFreeWorkStatus = (int)$wsStmt->fetchColumn();
-            if ($nonFreeWorkStatus > 0) {
-                $dependencies['employee_work_status_non_default'] = $nonFreeWorkStatus;
+            $wsRow = $wsStmt->fetch(PDO::FETCH_ASSOC);
+            if ($wsRow !== false) {
+                $wsVal = $wsRow['work_status'] ?? null;
+                if ($wsVal === null || (string)$wsVal !== 'Free') {
+                    $dependencies['employee_work_status_non_default'] = 1;
+                }
             }
 
             $crossInvStmt = $this->db->prepare(
