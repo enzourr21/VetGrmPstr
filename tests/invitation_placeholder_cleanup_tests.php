@@ -207,7 +207,7 @@ final class FakeCleanupPdo extends PDO
             return [$this->buildJoinedAccountRow($uid)];
         }
 
-        if (str_contains($sql, 'SELECT invitation_id, business_unit_id, status, accepted_at, revoked_at, expires_at')
+        if (str_contains($sql, 'SELECT invitation_id, employee_id, business_unit_id, status, accepted_at, revoked_at, expires_at')
             && str_contains($sql, 'FROM employee_invitation')) {
             $uid = (int)$params[0];
             $rows = [];
@@ -215,6 +215,7 @@ final class FakeCleanupPdo extends PDO
                 if ((int)($inv['user_account_id'] ?? 0) === $uid) {
                     $rows[] = [
                         'invitation_id' => $inv['invitation_id'],
+                        'employee_id' => $inv['employee_id'] ?? null,
                         'business_unit_id' => $inv['business_unit_id'],
                         'status' => $inv['status'],
                         'accepted_at' => $inv['accepted_at'] ?? null,
@@ -264,6 +265,32 @@ final class FakeCleanupPdo extends PDO
                     (int)($log['affected_employee_id'] ?? 0) === $eid
                     && in_array((string)$log['action_code'], ['invitation.created', 'invitation.resent'], true)
                 ) {
+                    $cnt++;
+                }
+            }
+            return [[(string)$cnt]];
+        }
+
+        if (str_contains($sql, 'FROM employee_work_status') && str_contains($sql, "work_status <> 'Free'")) {
+            $eid = (int)$params[0];
+            $row = $this->employeeWorkStatus[$eid] ?? null;
+            if (!$row) {
+                return [['0']];
+            }
+            $ws = (string)($row['work_status'] ?? 'Free');
+            return [[$ws !== 'Free' ? '1' : '0']];
+        }
+
+        if (str_contains($sql, 'FROM employee_invitation')
+            && str_contains($sql, 'WHERE employee_id = ?')
+            && str_contains($sql, 'user_account_id IS NULL OR user_account_id <> ?')) {
+            $eid = (int)$params[0];
+            $uid = (int)$params[1];
+            $cnt = 0;
+            foreach ($this->invitations as $inv) {
+                $invEid = $inv['employee_id'] !== null ? (int)$inv['employee_id'] : null;
+                $invUid = $inv['user_account_id'] !== null ? (int)$inv['user_account_id'] : null;
+                if ($invEid === $eid && ($invUid === null || $invUid !== $uid)) {
                     $cnt++;
                 }
             }
@@ -462,6 +489,32 @@ final class FakeCleanupPdo extends PDO
             return [];
         }
 
+        if (str_contains($sql, 'SELECT COUNT(DISTINCT ei.invitation_id)') && str_contains($sql, 'JOIN employee_invitation_decoupled_archive')) {
+            $seen = [];
+            foreach ($this->invitations as $iid => $inv) {
+                if ((($inv['user_account_id'] ?? null) === null || ($inv['employee_id'] ?? null) === null)
+                    && isset($this->archivedInvitations[(int)$iid])) {
+                    $seen[(int)$iid] = true;
+                }
+            }
+            return [[(string)count($seen)]];
+        }
+
+        if (str_contains($sql, 'FROM employee_invitation_role eir') && str_contains($sql, 'JOIN employee_invitation_role_archive ra')) {
+            $cnt = 0;
+            foreach ($this->invitationRoles as $ir) {
+                $iid = (int)$ir['invitation_id'];
+                $rid = (int)$ir['role_id'];
+                $inv = $this->invitations[$iid] ?? null;
+                if ($inv
+                    && (($inv['user_account_id'] ?? null) === null || ($inv['employee_id'] ?? null) === null)
+                    && isset($this->archivedInvitationRoles[$iid . ':' . $rid])) {
+                    $cnt++;
+                }
+            }
+            return [[(string)$cnt]];
+        }
+
         throw new RuntimeException('Unhandled SQL in FakeCleanupPdo: ' . $sql);
     }
 
@@ -620,7 +673,7 @@ function buildScenarioPdo(): FakeCleanupPdo
     $pdo->employees[5] = ['employee_id' => 5, 'user_account_id' => 5, 'business_unit_id' => 1, 'first_name' => 'Place', 'last_name' => 'Holder', 'position' => 'Cashier', 'phone' => '09170000005', 'employee_status' => 'active'];
     $pdo->customers[5] = ['customer_id' => 5, 'user_account_id' => 5];
     $pdo->accountRoles[] = ['user_account_id' => 5, 'role_id' => 3, 'business_unit_id' => 1];
-    $pdo->employeeWorkStatus[5] = ['employee_id' => 5];
+    $pdo->employeeWorkStatus[5] = ['employee_id' => 5, 'work_status' => 'Free'];
     $pdo->invitations[50] = ['invitation_id' => 50, 'user_account_id' => 5, 'employee_id' => 5, 'business_unit_id' => 1, 'invited_email' => 'placeholder@pawcarino.ph', 'first_name' => 'Place', 'last_name' => 'Holder', 'position_name' => 'Cashier', 'token_hash' => str_repeat('c', 64), 'status' => 'pending', 'expires_at' => '2026-12-01 00:00:00', 'email_submission_status' => 'submitted', 'created_by_user_id' => 1, 'created_at' => '2026-11-15 00:00:00', 'updated_at' => '2026-11-15 00:00:00'];
     $pdo->auditLogs[] = ['audit_log_id' => 500, 'action_code' => 'invitation.created', 'summary' => 'Invite 50', 'business_unit_id' => 1, 'actor_user_id' => 1, 'affected_employee_id' => 5, 'old_value' => null, 'new_value' => 'pending', 'target_type' => 'employee_invitation', 'target_id' => 50];
 
@@ -717,12 +770,18 @@ check('4. archiveForRollback() safely archives detached invitations and only del
     assertSameVal(1, $archOnly['archived_invitations'], 'Should archive 1 decoupled invitation (id 50).');
     assertSameVal(1, $archOnly['archived_roles'], 'Should archive 1 decoupled role.');
     assertSameVal(false, $archOnly['detached_from_live'], 'Live row should remain until detach requested.');
+    assertSameVal(0, $archOnly['detached_invitations'], 'No invitations detached when detachArchivedFromLive=false.');
+    assertSameVal(0, $archOnly['detached_roles'], 'No roles detached when detachArchivedFromLive=false.');
     if (!isset($pdo->invitations[50])) {
         throw new RuntimeException('Invitation 50 should remain in live table when detachArchivedFromLive=false.');
     }
 
     $detachRes = $svc->archiveForRollback(true);
+    assertSameVal(1, $detachRes['archived_invitations'], 'Should report 1 decoupled invitation archived before detach.');
+    assertSameVal(1, $detachRes['archived_roles'], 'Should report 1 decoupled role archived before detach.');
     assertSameVal(true, $detachRes['detached_from_live'], 'detach flag should be true.');
+    assertSameVal(1, $detachRes['detached_invitations'], 'Should detach 1 decoupled invitation.');
+    assertSameVal(1, $detachRes['detached_roles'], 'Should detach 1 decoupled role.');
     if (isset($pdo->invitations[50])) {
         throw new RuntimeException('Decoupled invitation 50 should be removed from live table after archival + detach.');
     }
@@ -869,6 +928,367 @@ check('8. Fix C: CLI rejects unknown flags, duplicate flags, conflicting modes, 
         if (trim((string)$stdout) !== '') {
             throw new RuntimeException('CLI must not emit JSON output on invalid flags: ' . implode(' ', $flags));
         }
+    }
+});
+
+check('9. archiveForRollback() reports accurate distinct counts across multi-row, re-archive, repeated, and detach operations', function () {
+    $pdo = buildScenarioPdo();
+    $svc = new InvitationPlaceholderCleanupService($pdo);
+    $svc->applyCleanup(true, 1);
+
+    // Add a second role to decoupled invitation 50 and add a second decoupled invitation 80 with 1 role.
+    $pdo->invitationRoles[] = ['invitation_id' => 50, 'role_id' => 2];
+    $pdo->invitations[80] = [
+        'invitation_id' => 80,
+        'user_account_id' => null,
+        'employee_id' => null,
+        'business_unit_id' => 1,
+        'invited_email' => 'decoupled.second@pawcarino.ph',
+        'first_name' => 'Second',
+        'last_name' => 'Decoupled',
+        'username' => 'seconddec80',
+        'phone' => '09170000080',
+        'position_id' => 12,
+        'position_name' => 'Receptionist',
+        'token_hash' => str_repeat('f', 64),
+        'status' => 'pending',
+        'expires_at' => '2026-12-05 00:00:00',
+        'revoked_at' => null,
+        'revoke_reason' => null,
+        'replaced_invitation_id' => null,
+        'email_submission_status' => 'pending',
+        'email_submitted_at' => null,
+        'email_failed_at' => null,
+        'email_error' => null,
+        'created_by_user_id' => 1,
+        'created_at' => '2026-11-20 00:00:00',
+        'updated_at' => '2026-11-20 00:00:00',
+    ];
+    $pdo->invitationRoles[] = ['invitation_id' => 80, 'role_id' => 3];
+
+    // 1) Initial archival of multiple decoupled invitations (50 and 80; accepted 30 must be excluded)
+    $first = $svc->archiveForRollback(false);
+    assertSameVal(2, $first['archived_invitations'], 'Initial archive must count 2 distinct decoupled invitations.');
+    assertSameVal(3, $first['archived_roles'], 'Initial archive must count 3 decoupled role rows.');
+    assertSameVal(false, $first['detached_from_live'], 'Detach flag should be false.');
+    assertSameVal(0, $first['detached_invitations'], 'Detached invitations must be 0.');
+    assertSameVal(0, $first['detached_roles'], 'Detached roles must be 0.');
+
+    // Capture immutable archive provenance for both invitations
+    $snap50 = $pdo->archivedInvitations[50];
+    $snap80 = $pdo->archivedInvitations[80];
+
+    // 2) Mutate mutable metadata + simulate tampered immutable fields on live rows, then re-archive
+    // FakeCleanupPdo simulates MySQL rowCount=2 per updated row (total rowCount=4), which must NOT leak into archived_invitations.
+    $pdo->invitations[50]['status'] = 'revoked';
+    $pdo->invitations[50]['revoked_at'] = '2026-11-28 01:00:00';
+    $pdo->invitations[50]['revoke_reason'] = 'admin_revoked';
+    $pdo->invitations[50]['updated_at'] = '2026-11-28 01:00:00';
+    $pdo->invitations[50]['invited_email'] = 'tampered50@example.com';
+    $pdo->invitations[50]['token_hash'] = str_repeat('9', 64);
+
+    $pdo->invitations[80]['email_submission_status'] = 'failed';
+    $pdo->invitations[80]['email_failed_at'] = '2026-11-28 01:05:00';
+    $pdo->invitations[80]['email_error'] = 'SMTP error';
+    $pdo->invitations[80]['updated_at'] = '2026-11-28 01:05:00';
+    $pdo->invitations[80]['first_name'] = 'TamperedFirst';
+    $pdo->invitations[80]['created_by_user_id'] = 999;
+
+    $rearchive = $svc->archiveForRollback(false);
+    assertSameVal(2, $rearchive['archived_invitations'], 'Re-archive must report 2 distinct invitations (not 4 from ON DUPLICATE KEY UPDATE rowCount).');
+    assertSameVal(3, $rearchive['archived_roles'], 'Re-archive must report 3 ensured roles (not 0 from INSERT IGNORE rowCount).');
+    assertSameVal(0, $rearchive['detached_invitations'], 'No detachment on re-archive with detach=false.');
+
+    // Mutable refreshed, immutable preserved
+    assertSameVal('revoked', $pdo->archivedInvitations[50]['status'], 'Invitation 50 mutable status must refresh.');
+    assertSameVal($snap50['invited_email'], $pdo->archivedInvitations[50]['invited_email'], 'Invitation 50 immutable email must be preserved.');
+    assertSameVal($snap50['token_hash'], $pdo->archivedInvitations[50]['token_hash'], 'Invitation 50 immutable token_hash must be preserved.');
+    assertSameVal('failed', $pdo->archivedInvitations[80]['email_submission_status'], 'Invitation 80 mutable delivery status must refresh.');
+    assertSameVal($snap80['first_name'], $pdo->archivedInvitations[80]['first_name'], 'Invitation 80 immutable first_name must be preserved.');
+    assertSameVal($snap80['created_by_user_id'], $pdo->archivedInvitations[80]['created_by_user_id'], 'Invitation 80 immutable creator must be preserved.');
+    assertSameVal($snap80['created_at'], $pdo->archivedInvitations[80]['created_at'], 'Invitation 80 immutable created_at must be preserved.');
+
+    // 3) Repeated archival with no live changes must still report exact distinct ensured counts
+    $repeat = $svc->archiveForRollback(false);
+    assertSameVal(2, $repeat['archived_invitations'], 'Repeated archive must report 2 distinct decoupled invitations.');
+    assertSameVal(3, $repeat['archived_roles'], 'Repeated archive must report 3 ensured decoupled roles.');
+    assertSameVal(2, count($pdo->archivedInvitations), 'Repeated archive must not duplicate archive rows.');
+    assertSameVal(3, count($pdo->archivedInvitationRoles), 'Repeated archive must not duplicate role archive rows.');
+
+    // 4) Detach enabled: reports archived (pre-detach) and detached counts accurately, then subsequent run reports 0
+    $detach = $svc->archiveForRollback(true);
+    assertSameVal(2, $detach['archived_invitations'], 'Detach pass must report 2 distinct decoupled invitations archived before detach.');
+    assertSameVal(3, $detach['archived_roles'], 'Detach pass must report 3 decoupled roles archived before detach.');
+    assertSameVal(true, $detach['detached_from_live'], 'Detach flag must be true.');
+    assertSameVal(2, $detach['detached_invitations'], 'Detach pass must report 2 detached invitations.');
+    assertSameVal(3, $detach['detached_roles'], 'Detach pass must report 3 detached roles.');
+    if (isset($pdo->invitations[50]) || isset($pdo->invitations[80])) {
+        throw new RuntimeException('Decoupled invitations 50 and 80 must be deleted from live table when detach=true.');
+    }
+    if (!isset($pdo->invitations[30])) {
+        throw new RuntimeException('Accepted invitation 30 must remain intact in live table.');
+    }
+
+    $afterDetach = $svc->archiveForRollback(true);
+    assertSameVal(0, $afterDetach['archived_invitations'], 'Post-detach run must report 0 archived decoupled invitations.');
+    assertSameVal(0, $afterDetach['archived_roles'], 'Post-detach run must report 0 archived decoupled roles.');
+    assertSameVal(0, $afterDetach['detached_invitations'], 'Post-detach run must report 0 detached invitations.');
+    assertSameVal(0, $afterDetach['detached_roles'], 'Post-detach run must report 0 detached roles.');
+    assertSameVal(2, count($pdo->archivedInvitations), 'Archive rows remain preserved after detachment.');
+    assertSameVal(3, count($pdo->archivedInvitationRoles), 'Archive role rows remain preserved after detachment.');
+});
+
+check('10. Non-default employee_work_status (On Duty / Not Present) quarantines candidate while Free or missing row remains cleanable', function () {
+    // A. 'On Duty' -> quarantined and excluded from applyCleanup deletion path
+    $pdoOnDuty = buildScenarioPdo();
+    $pdoOnDuty->employeeWorkStatus[5] = ['employee_id' => 5, 'work_status' => 'On Duty'];
+    $svcOnDuty = new InvitationPlaceholderCleanupService($pdoOnDuty);
+
+    $analysisOnDuty = $svcOnDuty->analyze();
+    assertSameVal(0, $analysisOnDuty['summary']['proven_placeholder_count'], 'On Duty candidate must not be PROVEN_PLACEHOLDER.');
+    assertSameVal(3, $analysisOnDuty['summary']['quarantined_uncertain_count'], 'On Duty candidate must be QUARANTINED_UNCERTAIN.');
+    $q5 = null;
+    foreach ($analysisOnDuty['quarantined_uncertain'] as $row) {
+        if ((int)$row['user_account_id'] === 5) {
+            $q5 = $row;
+        }
+    }
+    if ($q5 === null || !in_array('employee_work_status_non_default', $q5['reasons'], true)) {
+        throw new RuntimeException('Expected user 5 to be quarantined with employee_work_status_non_default.');
+    }
+    $applyOnDuty = $svcOnDuty->applyCleanup(true, 1);
+    assertSameVal([], $applyOnDuty['cleaned_user_ids'], 'On Duty candidate must not reach cleanup deletion path.');
+    if (!isset($pdoOnDuty->users[5], $pdoOnDuty->employees[5], $pdoOnDuty->employeeWorkStatus[5])) {
+        throw new RuntimeException('On Duty user, employee, and work_status rows must remain intact.');
+    }
+    assertSameVal(1, $pdoOnDuty->invitations[50]['is_legacy_quarantined'], 'On Duty candidate invitation must be marked quarantined.');
+
+    // B. 'Not Present' -> quarantined and excluded from applyCleanup deletion path
+    $pdoNotPresent = buildScenarioPdo();
+    $pdoNotPresent->employeeWorkStatus[5] = ['employee_id' => 5, 'work_status' => 'Not Present'];
+    $svcNotPresent = new InvitationPlaceholderCleanupService($pdoNotPresent);
+    $applyNotPresent = $svcNotPresent->applyCleanup(true, 1);
+    assertSameVal([], $applyNotPresent['cleaned_user_ids'], 'Not Present candidate must not reach cleanup deletion path.');
+    if (!isset($pdoNotPresent->users[5], $pdoNotPresent->employees[5], $pdoNotPresent->employeeWorkStatus[5])) {
+        throw new RuntimeException('Not Present user, employee, and work_status rows must remain intact.');
+    }
+
+    // C. Positive: missing employee_work_status row (and 'Free' already covered in Check 3) cleans up cleanly
+    $pdoMissingWs = buildScenarioPdo();
+    unset($pdoMissingWs->employeeWorkStatus[5]);
+    $svcMissingWs = new InvitationPlaceholderCleanupService($pdoMissingWs);
+    $applyMissingWs = $svcMissingWs->applyCleanup(true, 1);
+    assertSameVal([5], $applyMissingWs['cleaned_user_ids'], 'Missing work_status row must still allow proven placeholder cleanup.');
+
+    // D. Accepted invitee with 'On Duty' remains PROTECTED_GENUINE
+    $pdoProt = buildScenarioPdo();
+    $pdoProt->employeeWorkStatus[3] = ['employee_id' => 3, 'work_status' => 'On Duty'];
+    $svcProt = new InvitationPlaceholderCleanupService($pdoProt);
+    $analysisProt = $svcProt->analyze();
+    $prot3 = null;
+    foreach ($analysisProt['protected_with_invitations'] as $row) {
+        if ((int)$row['user_account_id'] === 3) {
+            $prot3 = $row;
+        }
+    }
+    if ($prot3 === null || $prot3['classification'] !== InvitationPlaceholderCleanupService::CLASS_PROTECTED) {
+        throw new RuntimeException('Accepted account with On Duty work_status must stay PROTECTED_GENUINE.');
+    }
+});
+
+check('11. Mismatched invitation employee_id on user-linked rows (different employee or NULL) quarantines candidate', function () {
+    // A. Invitation linked to user 5 points to employee_id = 3 instead of 5
+    $pdoDiffEmp = buildScenarioPdo();
+    $pdoDiffEmp->invitations[50]['employee_id'] = 3;
+    $svcDiffEmp = new InvitationPlaceholderCleanupService($pdoDiffEmp);
+
+    $analysisA = $svcDiffEmp->analyze();
+    assertSameVal(0, $analysisA['summary']['proven_placeholder_count'], 'Mismatched employee_id must block PROVEN_PLACEHOLDER.');
+    $q5A = null;
+    foreach ($analysisA['quarantined_uncertain'] as $row) {
+        if ((int)$row['user_account_id'] === 5) {
+            $q5A = $row;
+        }
+    }
+    if ($q5A === null || !in_array('mismatched_invitation_employee_link', $q5A['reasons'], true)) {
+        throw new RuntimeException('Expected mismatched_invitation_employee_link quarantine reason.');
+    }
+    $applyA = $svcDiffEmp->applyCleanup(true, 1);
+    assertSameVal([], $applyA['cleaned_user_ids'], 'Mismatched employee_id candidate must not be cleaned.');
+    if (!isset($pdoDiffEmp->users[5], $pdoDiffEmp->employees[5], $pdoDiffEmp->employees[3])) {
+        throw new RuntimeException('Mismatched cleanup must leave user 5 and employees 3/5 intact.');
+    }
+    assertSameVal(3, $pdoDiffEmp->invitations[50]['employee_id'], 'Mismatched invitation employee_id must not be detached.');
+
+    // B. Invitation linked to user 5 has employee_id = NULL while user 5 owns employee 5
+    $pdoNullEid = buildScenarioPdo();
+    $pdoNullEid->invitations[50]['employee_id'] = null;
+    $svcNullEid = new InvitationPlaceholderCleanupService($pdoNullEid);
+
+    $analysisB = $svcNullEid->analyze();
+    assertSameVal(0, $analysisB['summary']['proven_placeholder_count'], 'NULL employee_id on user-linked invitation must block PROVEN_PLACEHOLDER.');
+    $applyB = $svcNullEid->applyCleanup(true, 1);
+    assertSameVal([], $applyB['cleaned_user_ids'], 'NULL employee_id mismatch candidate must not be cleaned.');
+    if (!isset($pdoNullEid->users[5], $pdoNullEid->employees[5])) {
+        throw new RuntimeException('NULL employee_id mismatch must preserve user 5 and employee 5.');
+    }
+});
+
+check('12. Cross-linked invitations referencing candidate employee_id (another account or NULL) quarantine candidate', function () {
+    // A. User 5 has matched invitation 50 (5,5), plus invitation 51 referencing employee 5 under user 4 (accepted)
+    $pdoOtherAcct = buildScenarioPdo();
+    $pdoOtherAcct->invitations[51] = [
+        'invitation_id' => 51,
+        'user_account_id' => 4,
+        'employee_id' => 5,
+        'business_unit_id' => 1,
+        'invited_email' => 'cross.other@pawcarino.ph',
+        'first_name' => 'Cross',
+        'last_name' => 'Link',
+        'position_name' => 'Cashier',
+        'token_hash' => str_repeat('f', 64),
+        'status' => 'accepted',
+        'expires_at' => '2026-12-01 00:00:00',
+        'accepted_at' => '2026-11-16 00:00:00',
+        'email_submission_status' => 'submitted',
+        'created_by_user_id' => 1,
+        'created_at' => '2026-11-15 00:00:00',
+        'updated_at' => '2026-11-16 00:00:00',
+    ];
+    $svcOther = new InvitationPlaceholderCleanupService($pdoOtherAcct);
+    $analysisOther = $svcOther->analyze();
+    assertSameVal(0, $analysisOther['summary']['proven_placeholder_count'], 'Cross-linked employee invitation under another account must block PROVEN_PLACEHOLDER.');
+    $q5Other = null;
+    foreach ($analysisOther['quarantined_uncertain'] as $row) {
+        if ((int)$row['user_account_id'] === 5) {
+            $q5Other = $row;
+        }
+    }
+    if ($q5Other === null || !in_array('cross_linked_employee_invitation', $q5Other['reasons'], true)) {
+        throw new RuntimeException('Expected cross_linked_employee_invitation quarantine reason.');
+    }
+    $applyOther = $svcOther->applyCleanup(true, 1);
+    assertSameVal([], $applyOther['cleaned_user_ids'], 'Cross-linked candidate must not reach cleanup deletion.');
+    if (!isset($pdoOtherAcct->users[5], $pdoOtherAcct->employees[5], $pdoOtherAcct->invitations[51])) {
+        throw new RuntimeException('Cross-linked accounts/invitations must remain untouched.');
+    }
+
+    // B. User 5 has matched invitation 50 (5,5), plus invitation 52 referencing employee 5 with user_account_id = NULL
+    $pdoNullUser = buildScenarioPdo();
+    $pdoNullUser->invitations[52] = [
+        'invitation_id' => 52,
+        'user_account_id' => null,
+        'employee_id' => 5,
+        'business_unit_id' => 1,
+        'invited_email' => 'cross.nulluser@pawcarino.ph',
+        'first_name' => 'Cross',
+        'last_name' => 'NullUser',
+        'position_name' => 'Cashier',
+        'token_hash' => str_repeat('1', 64),
+        'status' => 'pending',
+        'expires_at' => '2026-12-01 00:00:00',
+        'email_submission_status' => 'submitted',
+        'created_by_user_id' => 1,
+        'created_at' => '2026-11-15 00:00:00',
+        'updated_at' => '2026-11-15 00:00:00',
+    ];
+    $svcNullUser = new InvitationPlaceholderCleanupService($pdoNullUser);
+    $applyNullUser = $svcNullUser->applyCleanup(true, 1);
+    assertSameVal([], $applyNullUser['cleaned_user_ids'], 'Employee referenced by NULL-user invitation must not be deleted.');
+    if (!isset($pdoNullUser->users[5], $pdoNullUser->employees[5], $pdoNullUser->invitations[52])) {
+        throw new RuntimeException('Employee 5 and invitation 52 must remain intact.');
+    }
+});
+
+check('13. foreignKeyCoverage() distinguishes classification checks from cleanup handling and covers all migration FKs to user_account, customer, and employee', function () {
+    $coverage = InvitationPlaceholderCleanupService::foreignKeyCoverage();
+    $classKeys = $coverage['classification_checks'];
+    $cleanupKeys = $coverage['cleanup_handled'];
+
+    // Verify clear distinction between unconditional blocking checks and cleanup-handled FKs
+    assertSameVal('blocking_dependency', $classKeys['pet.customer_id']['check_kind'], 'pet.customer_id must be a classification blocking dependency.');
+    assertSameVal('non_default_status', $classKeys['employee_work_status.employee_id']['check_kind'], 'employee_work_status.employee_id must be classified as non_default_status.');
+    assertSameVal('identity_link_and_lifecycle', $classKeys['employee_invitation.user_account_id']['check_kind'], 'employee_invitation.user_account_id must be classified as identity_link_and_lifecycle.');
+    assertSameVal('identity_link_and_lifecycle', $classKeys['employee_invitation.employee_id']['check_kind'], 'employee_invitation.employee_id must be classified as identity_link_and_lifecycle.');
+
+    foreach (['customer.user_account_id', 'employee.user_account_id', 'account_role.user_account_id'] as $handledOnlyKey) {
+        if (isset($classKeys[$handledOnlyKey])) {
+            throw new RuntimeException("{$handledOnlyKey} is handled via downstream/snapshot cleanup and must not be a direct blocker key.");
+        }
+        if (!isset($cleanupKeys[$handledOnlyKey])) {
+            throw new RuntimeException("{$handledOnlyKey} must be registered in cleanup_handled.");
+        }
+    }
+
+    // Parse database/migrations/001..NNN for every effective FK referencing user_account, customer, or employee
+    $files = glob(dirname(__DIR__) . '/database/migrations/[0-9][0-9][0-9]_*.sql');
+    if (!$files) {
+        throw new RuntimeException('No migration files found.');
+    }
+    sort($files);
+
+    $discovered = [];
+    $targetRef = '(?:user_account|customer|employee)';
+    foreach ($files as $file) {
+        $raw = (string)file_get_contents($file);
+        $raw = preg_replace('/^\s*--.*$/m', '', $raw);
+
+        // 1) CREATE TABLE [IF NOT EXISTS] tbl ( ... )
+        if (preg_match_all('/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?`?([a-z_]+)`?\s*\((.*?)\)\s*ENGINE=/is', $raw, $tables, PREG_SET_ORDER)) {
+            foreach ($tables as $t) {
+                $tbl = strtolower($t[1]);
+                $body = $t[2];
+                if (preg_match_all('/FOREIGN\s+KEY\s*\(\s*`?([a-z_]+)`?\s*\)\s*REFERENCES\s+`?(' . $targetRef . ')`?\s*\(\s*`?([a-z_]+)`?\s*\)/i', $body, $fks, PREG_SET_ORDER)) {
+                    foreach ($fks as $fk) {
+                        $discovered[$tbl . '.' . strtolower($fk[1])] = strtolower($fk[2]) . '.' . strtolower($fk[3]);
+                    }
+                }
+            }
+        }
+
+        // 2) ALTER TABLE tbl ... ADD [CONSTRAINT ...] FOREIGN KEY (...) REFERENCES ... (including inside single-quoted PREPARE strings)
+        if (preg_match_all('/ALTER\s+TABLE\s+`?([a-z_]+)`?\s+([^;\']*)/is', $raw, $alters, PREG_SET_ORDER)) {
+            foreach ($alters as $a) {
+                $tbl = strtolower($a[1]);
+                $clause = $a[2];
+                if (preg_match_all('/FOREIGN\s+KEY\s*\(\s*`?([a-z_]+)`?\s*\)\s*REFERENCES\s+`?(' . $targetRef . ')`?\s*\(\s*`?([a-z_]+)`?\s*\)/i', $clause, $fks, PREG_SET_ORDER)) {
+                    foreach ($fks as $fk) {
+                        $discovered[$tbl . '.' . strtolower($fk[1])] = strtolower($fk[2]) . '.' . strtolower($fk[3]);
+                    }
+                }
+            }
+        }
+    }
+
+    // Must discover at least the 37 current schema FKs
+    if (count($discovered) < 37) {
+        throw new RuntimeException('Expected at least 37 FKs referencing user_account/customer/employee in migrations, found ' . count($discovered));
+    }
+
+    $allCovered = $classKeys + $cleanupKeys;
+    $uncovered = [];
+    foreach ($discovered as $key => $ref) {
+        if (!isset($allCovered[$key])) {
+            $uncovered[] = "{$key} -> {$ref}";
+        } else {
+            $expectedRef = $allCovered[$key]['referenced_table'] . '.' . $allCovered[$key]['referenced_column'];
+            if ($expectedRef !== $ref) {
+                throw new RuntimeException("FK target mismatch for {$key}: expected {$expectedRef}, migration has {$ref}");
+            }
+        }
+    }
+    if ($uncovered) {
+        throw new RuntimeException('Uncovered migration FKs found: ' . implode(', ', $uncovered));
+    }
+
+    $stale = [];
+    foreach ($allCovered as $key => $_meta) {
+        if (!isset($discovered[$key])) {
+            $stale[] = $key;
+        }
+    }
+    if ($stale) {
+        throw new RuntimeException('Stale FK coverage entries not present in migrations: ' . implode(', ', $stale));
     }
 });
 

@@ -8,6 +8,12 @@ declare(strict_types=1);
  *   php scripts/cleanup_invitation_placeholders.php --dry-run
  *   php scripts/cleanup_invitation_placeholders.php --apply --confirm-cleanup
  *   php scripts/cleanup_invitation_placeholders.php --archive-for-rollback [--detach-archived-for-down]
+ *
+ * Rollback archive notes (see database/README.md for recovery procedure):
+ *   - employee_invitation is authoritative for live state; employee_invitation_decoupled_archive is a
+ *     point-in-time rollback snapshot, not a synchronized live history.
+ *   - Recovery after re-applying Migration 030 is manual and must skip any invitation_id already
+ *     present (e.g., subsequently accepted) in live employee_invitation.
  */
 if (PHP_SAPI !== 'cli') {
     http_response_code(403);

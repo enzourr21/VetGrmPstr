@@ -78,11 +78,127 @@ final class InvitationPlaceholderCleanupService
         'invitation_creator' => [['table' => 'employee_invitation', 'column' => 'created_by_user_id']],
     ];
 
+    /**
+     * Foreign keys referencing user_account, customer, or employee that are intentionally handled
+     * (detached or deleted in FK-safe order) during applyCleanup() rather than treated as unconditional blockers.
+     *
+     * @var array<string, array{table:string,column:string,referenced_table:string,referenced_column:string,handling:string}>
+     */
+    private const CLEANUP_HANDLED_FKS = [
+        'employee_invitation.user_account_id' => [
+            'table' => 'employee_invitation',
+            'column' => 'user_account_id',
+            'referenced_table' => 'user_account',
+            'referenced_column' => 'user_account_id',
+            'handling' => 'detach_null_unaccepted',
+        ],
+        'employee_invitation.employee_id' => [
+            'table' => 'employee_invitation',
+            'column' => 'employee_id',
+            'referenced_table' => 'employee',
+            'referenced_column' => 'employee_id',
+            'handling' => 'detach_null_unaccepted',
+        ],
+        'account_role.user_account_id' => [
+            'table' => 'account_role',
+            'column' => 'user_account_id',
+            'referenced_table' => 'user_account',
+            'referenced_column' => 'user_account_id',
+            'handling' => 'snapshot_roles_and_delete',
+        ],
+        'employee_work_status.employee_id' => [
+            'table' => 'employee_work_status',
+            'column' => 'employee_id',
+            'referenced_table' => 'employee',
+            'referenced_column' => 'employee_id',
+            'handling' => 'delete_when_free_or_absent',
+        ],
+        'customer.user_account_id' => [
+            'table' => 'customer',
+            'column' => 'user_account_id',
+            'referenced_table' => 'user_account',
+            'referenced_column' => 'user_account_id',
+            'handling' => 'delete_after_customer_checks',
+        ],
+        'employee.user_account_id' => [
+            'table' => 'employee',
+            'column' => 'user_account_id',
+            'referenced_table' => 'user_account',
+            'referenced_column' => 'user_account_id',
+            'handling' => 'delete_after_employee_checks',
+        ],
+    ];
+
     private PDO $db;
 
     public function __construct(PDO $db)
     {
         $this->db = $db;
+    }
+
+    /**
+     * Return foreign-key coverage metadata distinguishing relationships inspected during classification
+     * from relationships intentionally detached/deleted during cleanup.
+     *
+     * @return array{
+     *   classification_checks: array<string, array{table:string,column:string,referenced_table:string,referenced_column:string,check_kind:string,check_key:string}>,
+     *   cleanup_handled: array<string, array{table:string,column:string,referenced_table:string,referenced_column:string,handling:string}>
+     * }
+     */
+    public static function foreignKeyCoverage(): array
+    {
+        $classification = [];
+        $groups = [
+            ['map' => self::USER_DEP_CHECKS, 'ref_table' => 'user_account', 'ref_col' => 'user_account_id'],
+            ['map' => self::CUSTOMER_DEP_CHECKS, 'ref_table' => 'customer', 'ref_col' => 'customer_id'],
+            ['map' => self::EMPLOYEE_DEP_CHECKS, 'ref_table' => 'employee', 'ref_col' => 'employee_id'],
+        ];
+        foreach ($groups as $g) {
+            foreach ($g['map'] as $checkKey => $pairs) {
+                foreach ($pairs as $pair) {
+                    $key = $pair['table'] . '.' . $pair['column'];
+                    $classification[$key] = [
+                        'table' => $pair['table'],
+                        'column' => $pair['column'],
+                        'referenced_table' => $g['ref_table'],
+                        'referenced_column' => $g['ref_col'],
+                        'check_kind' => 'blocking_dependency',
+                        'check_key' => $checkKey,
+                    ];
+                }
+            }
+        }
+
+        // Targeted non-blocking-when-clean FKs also inspected during classifyAccount()
+        $classification['employee_work_status.employee_id'] = [
+            'table' => 'employee_work_status',
+            'column' => 'employee_id',
+            'referenced_table' => 'employee',
+            'referenced_column' => 'employee_id',
+            'check_kind' => 'non_default_status',
+            'check_key' => 'employee_work_status_non_default',
+        ];
+        $classification['employee_invitation.user_account_id'] = [
+            'table' => 'employee_invitation',
+            'column' => 'user_account_id',
+            'referenced_table' => 'user_account',
+            'referenced_column' => 'user_account_id',
+            'check_kind' => 'identity_link_and_lifecycle',
+            'check_key' => 'cross_linked_employee_invitation',
+        ];
+        $classification['employee_invitation.employee_id'] = [
+            'table' => 'employee_invitation',
+            'column' => 'employee_id',
+            'referenced_table' => 'employee',
+            'referenced_column' => 'employee_id',
+            'check_kind' => 'identity_link_and_lifecycle',
+            'check_key' => 'mismatched_invitation_employee_link',
+        ];
+
+        return [
+            'classification_checks' => $classification,
+            'cleanup_handled' => self::CLEANUP_HANDLED_FKS,
+        ];
     }
 
     /**
@@ -349,7 +465,16 @@ final class InvitationPlaceholderCleanupService
      * Archive decoupled invitations (user_account_id IS NULL OR employee_id IS NULL) and their
      * employee_invitation_role rows so 030.down.sql can safely verify zero data loss before rolling back.
      *
-     * @return array{archived_invitations:int, archived_roles:int, detached_from_live:bool}
+     * Note: The archive is a rollback/recovery snapshot of decoupled rows, not a synchronized live history;
+     * live employee_invitation remains authoritative if an archived invitation is later accepted.
+     *
+     * @return array{
+     *   archived_invitations:int,
+     *   archived_roles:int,
+     *   detached_from_live:bool,
+     *   detached_invitations:int,
+     *   detached_roles:int
+     * }
      */
     public function archiveForRollback(bool $detachArchivedFromLive = false): array
     {
@@ -432,7 +557,6 @@ final class InvitationPlaceholderCleanupService
                      archived_at = src.archived_at"
             );
             $insInv->execute([$nowUtc]);
-            $archivedInvCount = $insInv->rowCount();
 
             $insRoles = $this->db->prepare(
                 "INSERT IGNORE INTO employee_invitation_role_archive (invitation_id, role_id)
@@ -442,17 +566,36 @@ final class InvitationPlaceholderCleanupService
                  WHERE ei.user_account_id IS NULL OR ei.employee_id IS NULL"
             );
             $insRoles->execute();
-            $archivedRoleCount = $insRoles->rowCount();
 
+            // Measure distinct decoupled records ensured in archive inside the transaction
+            // before any optional live-row detachment (avoiding MySQL ON DUPLICATE KEY UPDATE rowCount=2).
+            $archivedInvCount = (int)$this->db->query(
+                "SELECT COUNT(DISTINCT ei.invitation_id)
+                 FROM employee_invitation ei
+                 JOIN employee_invitation_decoupled_archive a ON a.invitation_id = ei.invitation_id
+                 WHERE ei.user_account_id IS NULL OR ei.employee_id IS NULL"
+            )->fetchColumn();
+
+            $archivedRoleCount = (int)$this->db->query(
+                "SELECT COUNT(*)
+                 FROM employee_invitation_role eir
+                 JOIN employee_invitation ei ON ei.invitation_id = eir.invitation_id
+                 JOIN employee_invitation_role_archive ra
+                   ON ra.invitation_id = eir.invitation_id AND ra.role_id = eir.role_id
+                 WHERE ei.user_account_id IS NULL OR ei.employee_id IS NULL"
+            )->fetchColumn();
+
+            $detachedRoleCount = 0;
+            $detachedInvCount = 0;
             if ($detachArchivedFromLive) {
-                $this->db->exec(
+                $detachedRoleCount = (int)$this->db->exec(
                     "DELETE eir
                      FROM employee_invitation_role eir
                      JOIN employee_invitation ei ON ei.invitation_id = eir.invitation_id
                      JOIN employee_invitation_decoupled_archive a ON a.invitation_id = eir.invitation_id
                      WHERE ei.user_account_id IS NULL OR ei.employee_id IS NULL"
                 );
-                $this->db->exec(
+                $detachedInvCount = (int)$this->db->exec(
                     "DELETE ei
                      FROM employee_invitation ei
                      JOIN employee_invitation_decoupled_archive a ON a.invitation_id = ei.invitation_id
@@ -466,6 +609,8 @@ final class InvitationPlaceholderCleanupService
                 'archived_invitations' => $archivedInvCount,
                 'archived_roles' => $archivedRoleCount,
                 'detached_from_live' => $detachArchivedFromLive,
+                'detached_invitations' => $detachedInvCount,
+                'detached_roles' => $detachedRoleCount,
             ];
         } catch (Throwable $e) {
             if ($this->db->inTransaction()) {
@@ -487,7 +632,7 @@ final class InvitationPlaceholderCleanupService
         $unitId = $acct['business_unit_id'] !== null ? (int)$acct['business_unit_id'] : null;
 
         $invStmt = $this->db->prepare(
-            "SELECT invitation_id, business_unit_id, status, accepted_at, revoked_at, expires_at
+            "SELECT invitation_id, employee_id, business_unit_id, status, accepted_at, revoked_at, expires_at
              FROM employee_invitation
              WHERE user_account_id = ?
              ORDER BY invitation_id ASC"
@@ -496,12 +641,17 @@ final class InvitationPlaceholderCleanupService
         $invRows = $invStmt->fetchAll(PDO::FETCH_ASSOC);
 
         $acceptedCount = 0;
+        $mismatchCount = 0;
         $statuses = [];
         foreach ($invRows as $ir) {
             $st = (string)$ir['status'];
             $statuses[] = $st;
             if ($st === 'accepted' || $ir['accepted_at'] !== null) {
                 $acceptedCount++;
+            }
+            $invEid = $ir['employee_id'] !== null ? (int)$ir['employee_id'] : null;
+            if ($invEid === null || $invEid <= 0 || $eid === null || $eid <= 0 || $invEid !== $eid) {
+                $mismatchCount++;
             }
         }
 
@@ -535,6 +685,9 @@ final class InvitationPlaceholderCleanupService
 
         // Check all operational / customer / actor foreign-key dependencies
         $dependencies = [];
+        if ($mismatchCount > 0) {
+            $dependencies['mismatched_invitation_employee_link'] = $mismatchCount;
+        }
         foreach (self::USER_DEP_CHECKS as $label => $pairs) {
             $cnt = $this->sumCount($pairs, $uid);
             if ($cnt > 0) {
@@ -566,6 +719,27 @@ final class InvitationPlaceholderCleanupService
                 if ($cnt > 0) {
                     $dependencies[$label] = $cnt;
                 }
+            }
+
+            $wsStmt = $this->db->prepare(
+                "SELECT COUNT(*) FROM employee_work_status WHERE employee_id = ? AND work_status <> 'Free'"
+            );
+            $wsStmt->execute([$eid]);
+            $nonFreeWorkStatus = (int)$wsStmt->fetchColumn();
+            if ($nonFreeWorkStatus > 0) {
+                $dependencies['employee_work_status_non_default'] = $nonFreeWorkStatus;
+            }
+
+            $crossInvStmt = $this->db->prepare(
+                "SELECT COUNT(*)
+                 FROM employee_invitation
+                 WHERE employee_id = ?
+                   AND (user_account_id IS NULL OR user_account_id <> ?)"
+            );
+            $crossInvStmt->execute([$eid, $uid]);
+            $crossInvCnt = (int)$crossInvStmt->fetchColumn();
+            if ($crossInvCnt > 0) {
+                $dependencies['cross_linked_employee_invitation'] = $crossInvCnt;
             }
         } else {
             $dependencies['missing_linked_employee_row'] = 1;
