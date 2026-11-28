@@ -28,7 +28,8 @@ final class InvitationController extends Controller
                 'invitation' => null,
                 'token' => '',
                 'errors' => [],
-                'signedInEmail' => Session::get('email'),
+                'signedInEmail' => null,
+                'isolateSessionChrome' => true,
             ]);
             return;
         }
@@ -90,7 +91,8 @@ final class InvitationController extends Controller
             'invitation' => $res['invitation'],
             'token' => $rawToken,
             'errors' => [],
-            'signedInEmail' => $signedInEmail,
+            'signedInEmail' => null,
+            'isolateSessionChrome' => true,
         ]);
     }
 
@@ -167,7 +169,8 @@ final class InvitationController extends Controller
                     'invitation' => $display['invitation'],
                     'token' => $rawToken,
                     'errors' => $res['errors'] ?? [],
-                    'signedInEmail' => $signedInEmail,
+                    'signedInEmail' => null,
+                    'isolateSessionChrome' => true,
                 ]);
                 return;
             }
@@ -180,7 +183,8 @@ final class InvitationController extends Controller
                 'invitation' => null,
                 'token' => '',
                 'errors' => [],
-                'signedInEmail' => $signedInEmail,
+                'signedInEmail' => null,
+                'isolateSessionChrome' => true,
             ]);
             return;
         }
@@ -215,12 +219,26 @@ final class InvitationController extends Controller
             $this->redirect('/profile');
         }
 
-        if (Session::get('user_id')) {
-            Session::destroy();
-            Session::start();
-        }
-        Session::flash('success', 'Your employee account has been created and activated. Sign in with your email address and new password.');
-        $this->redirect('/login');
+        // New-employee acceptance is strictly independent of any unrelated browser session:
+        // do not destroy, replace, or write flashes into an existing authenticated session.
+        http_response_code(200);
+        $this->render('auth/accept_invitation', [
+            'title' => 'Employee Account Activated',
+            'invalid' => false,
+            'mode' => 'new_account_accepted',
+            'errorMessage' => null,
+            'invitation' => [
+                'full_name' => (string)($res['full_name'] ?? ''),
+                'email' => (string)($res['email'] ?? ''),
+                'business_unit_name' => (string)($res['business_unit_name'] ?? ''),
+                'position' => (string)($res['position'] ?? ''),
+                'roles' => (string)($res['roles'] ?? ''),
+            ],
+            'token' => '',
+            'errors' => [],
+            'signedInEmail' => null,
+            'isolateSessionChrome' => true,
+        ]);
     }
 
     /**

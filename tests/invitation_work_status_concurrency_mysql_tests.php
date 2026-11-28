@@ -11,6 +11,10 @@ declare(strict_types=1);
  *    PAWCARINO_CONCURRENCY_TEST_DB=<name>.
  *  - Rejects production, application, rollback, system, and arbitrary database names
  *    before opening any PDO connection, and re-verifies SELECT DATABASE() after connecting.
+ *  - Runs a preflight analyze() isolation check before seeding and refuses to proceed
+ *    if any pre-existing proven_placeholders or quarantined_uncertain accounts exist.
+ *  - Runs a post-seed analyze() isolation check before each scenario to verify that only
+ *    that scenario's fixture is an eligible cleanup candidate.
  *  - Does not modify .env, run migrations, or touch any non-fixture records.
  *
  * Prerequisites before running:
@@ -100,6 +104,22 @@ $mysqlVersion = (string)$connA->query('SELECT VERSION()')->fetchColumn();
 $isolation = (string)$connA->query('SELECT @@transaction_isolation')->fetchColumn();
 echo "Connected to {$targetDb} on MySQL {$mysqlVersion} (isolation={$isolation}, lock_wait_timeout=2s)\n";
 
+$svcA = new InvitationPlaceholderCleanupService($connA);
+
+// Preflight database isolation: refuse to run if any pre-existing cleanup candidates or uncertain accounts exist.
+$preflight = $svcA->analyze();
+$preProvenCount = count($preflight['proven_placeholders']);
+$preQuarantinedCount = count($preflight['quarantined_uncertain']);
+if ($preProvenCount > 0 || $preQuarantinedCount > 0) {
+    fwrite(
+        STDERR,
+        "Refusing to run: {$targetDb} is not clean for isolated concurrency testing "
+        . "(pre-existing proven_placeholders={$preProvenCount}, quarantined_uncertain={$preQuarantinedCount}).\n"
+        . "No records were modified.\n"
+    );
+    exit(3);
+}
+
 $passed = 0;
 $failed = 0;
 
@@ -110,6 +130,31 @@ $check = static function (string $label, bool $cond, string $detail = '') use (&
     } else {
         $failed++;
         echo "[FAIL] {$label}" . ($detail !== '' ? " ({$detail})" : '') . "\n";
+    }
+};
+
+$check('Preflight isolation: 0 pre-existing proven_placeholders and 0 quarantined_uncertain accounts', true);
+
+$assertIsolatedFixture = static function (
+    InvitationPlaceholderCleanupService $svc,
+    int $expectedUid,
+    string $scenarioLabel
+): void {
+    $postSeed = $svc->analyze();
+    $provenUids = array_map(
+        static fn(array $r): int => (int)$r['user_account_id'],
+        $postSeed['proven_placeholders']
+    );
+    $quarantinedUids = array_map(
+        static fn(array $r): int => (int)$r['user_account_id'],
+        $postSeed['quarantined_uncertain']
+    );
+    if ($provenUids !== [$expectedUid] || count($quarantinedUids) !== 0) {
+        throw new RuntimeException(
+            "{$scenarioLabel} post-seed isolation failed: expected proven_placeholders=[{$expectedUid}] and "
+            . "quarantined_uncertain=[], got proven_placeholders=[" . implode(',', $provenUids) . "] and "
+            . "quarantined_uncertain=[" . implode(',', $quarantinedUids) . "]. Aborting scenario without calling applyCleanup()."
+        );
     }
 };
 
@@ -236,7 +281,8 @@ echo "\n--- Scenario A: Existing work-status row ---\n";
 $fxA = null;
 try {
     $fxA = $seedFixture($connA, 'a', 'Free');
-    $svcA = new InvitationPlaceholderCleanupService($connA);
+    $assertIsolatedFixture($svcA, $fxA['uid'], 'Scenario A');
+    $check('Scenario A: Post-seed isolation confirmed fixture is the sole eligible cleanup candidate', true);
 
     // 1. Connection B starts a transaction and changes Free -> On Duty without committing
     $connB->beginTransaction();
@@ -270,6 +316,8 @@ try {
     $uaAfterA = $connA->prepare('SELECT COUNT(*) FROM user_account WHERE user_account_id = ?');
     $uaAfterA->execute([$fxA['uid']]);
     $check('Scenario A: user_account row preserved', (int)$uaAfterA->fetchColumn() === 1);
+} catch (Throwable $e) {
+    $check('Scenario A: Aborted safely without unexpected mutation', false, $e->getMessage());
 } finally {
     if ($connB->inTransaction()) {
         $connB->rollBack();
@@ -289,6 +337,11 @@ echo "\n--- Scenario B: Missing work-status row (lock interaction for cleanup se
 $fxB = null;
 try {
     $fxB = $seedFixture($connA, 'b', null);
+    if ($fxA !== null && $fxB['uid'] === $fxA['uid']) {
+        throw new RuntimeException('Scenario B fixture UID collided with Scenario A fixture UID.');
+    }
+    $assertIsolatedFixture($svcA, $fxB['uid'], 'Scenario B');
+    $check('Scenario B: Post-seed isolation confirmed separate fixture is the sole eligible cleanup candidate', true);
 
     // 1. Connection A reproduces cleanup's locking sequence (uaLock + missing employee_work_status FOR UPDATE)
     $connA->beginTransaction();
@@ -325,6 +378,8 @@ try {
     $wsCntB = $connA->prepare('SELECT COUNT(*) FROM employee_work_status WHERE employee_id = ?');
     $wsCntB->execute([$fxB['eid']]);
     $check('Scenario B: No unsafe employee_work_status row inserted', (int)$wsCntB->fetchColumn() === 0);
+} catch (Throwable $e) {
+    $check('Scenario B: Aborted safely without unexpected mutation', false, $e->getMessage());
 } finally {
     if ($connA->inTransaction()) {
         $connA->rollBack();

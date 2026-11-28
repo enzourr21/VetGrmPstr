@@ -1432,6 +1432,11 @@ final class EmployeeInvitationService
                 'user_account_id' => $uid,
                 'employee_id' => $eid,
                 'customer_id' => $cid,
+                'email' => $invitedEmail,
+                'full_name' => trim($firstName . ' ' . $lastName),
+                'business_unit_name' => $unitName,
+                'position' => $positionName,
+                'roles' => $roleListStr,
             ];
         } catch (PDOException $e) {
             if ($this->db->inTransaction()) {

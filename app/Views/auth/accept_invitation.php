@@ -93,13 +93,29 @@ $viewMode = (string)($mode ?? (!empty($invalid) || empty($invitation) ? 'invalid
         </div>
       </form>
 
+    <?php elseif ($viewMode === 'new_account_accepted'): ?>
+      <h1>Employee account activated</h1>
+      <p class="muted auth-lead">Your PawCariño employee account has been created and activated. You can now sign in separately with your email address and new password.</p>
+
+      <div class="card" style="padding: 1rem; margin-bottom: 1.25rem; background: var(--surface-subtle, #f6f7f9);">
+        <dl class="roster-meta" style="margin: 0;">
+          <div><dt>Employee</dt><dd><strong><?= e($invitation['full_name']) ?></strong></dd></div>
+          <div><dt>Email</dt><dd><?= e($invitation['email']) ?></dd></div>
+          <div><dt>Business unit</dt><dd><?= e($invitation['business_unit_name']) ?></dd></div>
+          <div><dt>Position</dt><dd><?= e($invitation['position']) ?></dd></div>
+          <?php if (!empty($invitation['roles'])): ?>
+            <div><dt>Assigned role(s)</dt><dd><code><?= e($invitation['roles']) ?></code></dd></div>
+          <?php endif; ?>
+        </dl>
+      </div>
+
+      <div class="stage-actions">
+        <a class="btn full" href="/login" rel="noreferrer">Go to Sign In</a>
+      </div>
+
     <?php else: ?>
       <h1>Set up your employee account</h1>
       <p class="muted auth-lead">Create your password below to provision and activate your PawCariño employee account.</p>
-
-      <?php if (!empty($signedInEmail)): ?>
-        <div class="flash flash-info" role="status">Currently signed in as <?= e((string)$signedInEmail) ?>. Activating this new employee account will sign out that session.</div>
-      <?php endif; ?>
 
       <?php if (!empty($errorMessage)): ?>
         <div class="flash flash-error" role="alert"><?= e($errorMessage) ?></div>

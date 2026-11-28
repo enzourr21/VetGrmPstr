@@ -9,6 +9,16 @@ declare(strict_types=1);
  * Uses an in-memory FakeAcceptancePdo double (no live MySQL 8.4, no HTTP server, no SMTP).
  */
 
+if (!defined('APP_ROOT')) {
+    define('APP_ROOT', dirname(__DIR__));
+}
+if (!function_exists('e')) {
+    function e(mixed $v): string
+    {
+        return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8');
+    }
+}
+
 require_once dirname(__DIR__) . '/app/Core/EnvConfig.php';
 require_once dirname(__DIR__) . '/app/Core/Core.php';
 require_once dirname(__DIR__) . '/app/Models/Audit.php';
@@ -18,9 +28,12 @@ require_once dirname(__DIR__) . '/app/Services/MailService.php';
 require_once dirname(__DIR__) . '/app/Services/EmployeeInvitationService.php';
 require_once dirname(__DIR__) . '/app/Services/InterfaceSwitcherService.php';
 require_once dirname(__DIR__) . '/app/Controllers/AuthController.php';
+require_once dirname(__DIR__) . '/app/Controllers/InvitationController.php';
 
 use App\Controllers\AuthController;
+use App\Controllers\InvitationController;
 use App\Core\Controller;
+use App\Core\CSRF;
 use App\Core\Database;
 use App\Core\Session;
 use App\Services\EmployeeInvitationService;
@@ -990,6 +1003,168 @@ test('Legacy quarantined invitations retain auth block while accepted, legacy di
         assertTrue($demo['ok'] === true && (int)$demo['account']['user_account_id'] === 1, 'Demo Super Admin shortcut resolves #1');
     } finally {
         $_SESSION = [];
+        setDatabasePdoForTest(null);
+    }
+});
+
+test('Stage 1: New employee acceptance with no existing session renders new_account_accepted and does not auto-login', function () use ($fixedNow) {
+    ['pdo' => $pdo, 'tokens' => $tokens] = makeAcceptanceFixture();
+    $pdo->simulatedNowTs = $fixedNow;
+    setDatabasePdoForTest($pdo);
+
+    $origServer = $_SERVER;
+    $origGet = $_GET;
+    $origPost = $_POST;
+    try {
+        $_SERVER['REQUEST_URI'] = '/invitations/accept';
+        $csrf = bin2hex(random_bytes(16));
+        $_SESSION = ['csrf' => $csrf];
+        $_GET = ['token' => $tokens['new_pending']];
+        $_POST = [];
+
+        $ctrl = new InvitationController();
+        ob_start();
+        $ctrl->showAcceptForm();
+        $getHtml = (string)ob_get_clean();
+
+        assertTrue(str_contains($getHtml, 'Set up your employee account'), 'GET must render new_account form');
+        assertTrue(str_contains($getHtml, 'Carla Mendoza') && str_contains($getHtml, 'Receptionist'), 'GET must show intended employee details');
+        assertTrue(!str_contains($getHtml, 'will sign out that session'), 'GET must not show signed-in warning');
+
+        $_POST = [
+            'csrf_token' => $csrf,
+            'token' => $tokens['new_pending'],
+            'password' => 'GuestAcceptPass!2026',
+            'password_confirm' => 'GuestAcceptPass!2026',
+        ];
+        ob_start();
+        $ctrl->accept();
+        $postHtml = (string)ob_get_clean();
+
+        assertTrue(str_contains($postHtml, 'Employee account activated'), 'POST must render new_account_accepted success state');
+        assertTrue(str_contains($postHtml, 'Carla Mendoza') && str_contains($postHtml, 'new.invitee@pawcarino.test') && str_contains($postHtml, 'Pet Store') && str_contains($postHtml, 'Receptionist') && str_contains($postHtml, 'RECEPTIONIST'), 'Success page must display non-sensitive provisioned account summary');
+        assertTrue(str_contains($postHtml, 'href="/login"'), 'Success page must link separately to /login');
+        assertTrue(!str_contains($postHtml, $tokens['new_pending']) && !str_contains($postHtml, 'GuestAcceptPass!2026'), 'Success page must never expose raw token or password');
+        assertTrue(!isset($_SESSION['user_id']), 'Recipient must not be automatically logged in');
+        assertTrue(($_SESSION['csrf'] ?? null) === $csrf, 'CSRF token must remain preserved');
+        assertTrue(empty($_SESSION['_flash']), 'No session flash should be written for isolated acceptance');
+    } finally {
+        $_SESSION = [];
+        $_SERVER = $origServer;
+        $_GET = $origGet;
+        $_POST = $origPost;
+        setDatabasePdoForTest(null);
+    }
+});
+
+test('Stage 1: New employee acceptance while Super Admin #211 is signed in preserves session, CSRF, flashes, hides admin chrome, and blocks replay', function () use ($fixedNow) {
+    ['pdo' => $pdo, 'tokens' => $tokens] = makeAcceptanceFixture();
+    $pdo->simulatedNowTs = $fixedNow;
+    $knownHash = password_hash('SuperAdminPass!2026', PASSWORD_DEFAULT);
+    $pdo->users[211] = [
+        'user_account_id' => 211,
+        'email' => 'superadmin@vetgrpet.local',
+        'username' => 'superadmin211',
+        'password_hash' => $knownHash,
+        'account_status' => 'active',
+        'is_super_admin' => 1,
+        'email_verified_at' => '2026-01-01 00:00:00',
+    ];
+    $pdo->employees[150] = [
+        'employee_id' => 150,
+        'user_account_id' => 211,
+        'business_unit_id' => 1,
+        'first_name' => 'Evelyn',
+        'last_name' => 'Sterling',
+        'position' => 'Super Administrator',
+        'employee_status' => 'active',
+    ];
+    $pdo->accountRoles[] = ['user_account_id' => 211, 'role_id' => 1, 'business_unit_id' => 1];
+    setDatabasePdoForTest($pdo);
+
+    $origServer = $_SERVER;
+    $origGet = $_GET;
+    $origPost = $_POST;
+    try {
+        $_SERVER['REQUEST_URI'] = '/invitations/accept';
+        $adminCsrf = bin2hex(random_bytes(16));
+        $queuedFlash = [['info', 'Admin queued flash must stay untouched']];
+        $_SESSION = [
+            'user_id' => 211,
+            'email' => 'superadmin@vetgrpet.local',
+            'employee_id' => 150,
+            'base_context' => 'employee',
+            'active_context' => 'employee',
+            'auth_method' => 'email',
+            'is_super_admin' => true,
+            'csrf' => $adminCsrf,
+            '_flash' => $queuedFlash,
+        ];
+        $_GET = ['token' => $tokens['new_pending']];
+        $_POST = [];
+
+        $ctrl = new InvitationController();
+        ob_start();
+        $ctrl->showAcceptForm();
+        $getHtml = (string)ob_get_clean();
+
+        // Isolated chrome: no Super Admin email, avatar, interface switcher, logout, or admin flash
+        assertTrue(str_contains($getHtml, 'Set up your employee account'), 'GET must render setup form');
+        assertTrue(!str_contains($getHtml, 'superadmin@vetgrpet.local'), 'GET must not display unrelated signed-in email');
+        assertTrue(!str_contains($getHtml, 'will sign out that session'), 'GET must not display sign-out warning');
+        assertTrue(!str_contains($getHtml, 'admin-profile-toggle') && !str_contains($getHtml, 'Switch Interface'), 'GET must not render unrelated admin avatar or interface switcher');
+        assertTrue(!str_contains($getHtml, 'action="/logout"'), 'GET must not render unrelated logout form');
+        assertTrue(!str_contains($getHtml, 'Admin queued flash must stay untouched'), 'GET must not display or drain unrelated admin flash');
+        assertTrue(($_SESSION['_flash'] ?? null) === $queuedFlash, 'GET must preserve unrelated admin flash in $_SESSION');
+
+        // POST acceptance while Super Admin #211 is signed in
+        $_POST = [
+            'csrf_token' => $adminCsrf,
+            'token' => $tokens['new_pending'],
+            'password' => 'IsolatedNewEmp!2026',
+            'password_confirm' => 'IsolatedNewEmp!2026',
+        ];
+        $userCountBefore = count($pdo->users);
+        $empCountBefore = count($pdo->employees);
+        ob_start();
+        $ctrl->accept();
+        $postHtml = (string)ob_get_clean();
+
+        assertTrue(str_contains($postHtml, 'Employee account activated'), 'POST must render acceptance success view');
+        assertTrue(str_contains($postHtml, 'Carla Mendoza') && str_contains($postHtml, 'new.invitee@pawcarino.test') && str_contains($postHtml, 'RECEPTIONIST'), 'Success page must show new employee details');
+        assertTrue(str_contains($postHtml, 'href="/login"'), 'Success page must link to /login');
+        assertTrue(!str_contains($postHtml, 'superadmin@vetgrpet.local') && !str_contains($postHtml, 'admin-profile-toggle') && !str_contains($postHtml, 'Switch Interface') && !str_contains($postHtml, 'action="/logout"'), 'Success page must hide unrelated admin chrome');
+        assertTrue(!str_contains($postHtml, 'Admin queued flash must stay untouched'), 'Success page must not drain unrelated admin flash');
+
+        // Verify Super Admin #211 session is completely untouched
+        assertTrue((int)($_SESSION['user_id'] ?? 0) === 211, 'Super Admin user_id must remain 211');
+        assertTrue(($_SESSION['email'] ?? '') === 'superadmin@vetgrpet.local', 'Super Admin email must remain intact');
+        assertTrue(($_SESSION['base_context'] ?? '') === 'employee' && ($_SESSION['active_context'] ?? '') === 'employee' && !empty($_SESSION['is_super_admin']), 'Super Admin auth context must remain intact');
+        assertTrue(($_SESSION['csrf'] ?? '') === $adminCsrf, 'Super Admin CSRF token must remain unchanged');
+        assertTrue(($_SESSION['_flash'] ?? null) === $queuedFlash, 'Super Admin queued flash must remain intact');
+
+        // Verify new account was provisioned independently (not attached to #211)
+        assertTrue(count($pdo->users) === $userCountBefore + 1 && count($pdo->employees) === $empCountBefore + 1, 'Exactly one new user and employee must be provisioned');
+        $newUid = (int)$pdo->invitations[201]['user_account_id'];
+        $newEid = (int)$pdo->invitations[201]['employee_id'];
+        assertTrue($newUid !== 211 && $newEid !== 150, 'New employee must not reuse Super Admin #211 identity');
+        assertTrue($pdo->users[$newUid]['email'] === 'new.invitee@pawcarino.test', 'Provisioned account email must match invitation');
+        $newRoles = array_values(array_filter($pdo->accountRoles, fn($ar) => (int)$ar['user_account_id'] === $newUid && (int)$ar['business_unit_id'] === 1));
+        assertTrue(count($newRoles) === 1 && (int)$newRoles[0]['role_id'] === 3, 'New employee must receive intended role');
+
+        // Replay of consumed invitation must fail closed with zero duplicates and keep #211 session intact
+        ob_start();
+        $ctrl->accept();
+        $replayHtml = (string)ob_get_clean();
+        assertTrue(str_contains($replayHtml, 'Invitation unavailable'), 'Replay must render Invitation unavailable');
+        assertTrue(!str_contains($replayHtml, 'superadmin@vetgrpet.local') && !str_contains($replayHtml, 'admin-profile-toggle'), 'Invalid/replay view must also isolate chrome');
+        assertTrue(count($pdo->users) === $userCountBefore + 1 && count($pdo->employees) === $empCountBefore + 1, 'Replay must not create duplicate records');
+        assertTrue((int)($_SESSION['user_id'] ?? 0) === 211 && ($_SESSION['csrf'] ?? '') === $adminCsrf && ($_SESSION['_flash'] ?? null) === $queuedFlash, 'Replay must keep Super Admin #211 session, CSRF, and flash intact');
+    } finally {
+        $_SESSION = [];
+        $_SERVER = $origServer;
+        $_GET = $origGet;
+        $_POST = $origPost;
         setDatabasePdoForTest(null);
     }
 });

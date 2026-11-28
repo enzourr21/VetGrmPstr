@@ -1,8 +1,9 @@
 <?php
 $curPath = rtrim((string)parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH), '/') ?: '/';
-$isSignedIn = (bool)\App\Core\Session::get('user_id');
-$baseContext = (string)\App\Core\Session::get('base_context', \App\Core\Session::get('employee_id') ? 'employee' : 'customer');
-$activeContext = (string)\App\Core\Session::get('active_context', $baseContext);
+$isIsolatedChrome = !empty($isolateSessionChrome);
+$isSignedIn = !$isIsolatedChrome && (bool)\App\Core\Session::get('user_id');
+$baseContext = $isIsolatedChrome ? 'customer' : (string)\App\Core\Session::get('base_context', \App\Core\Session::get('employee_id') ? 'employee' : 'customer');
+$activeContext = $isIsolatedChrome ? 'customer' : (string)\App\Core\Session::get('active_context', $baseContext);
 $isWorkspaceRoute = str_starts_with($curPath, '/super-admin')
     || str_starts_with($curPath, '/sysadmin')
     || str_starts_with($curPath, '/manager')
@@ -69,14 +70,16 @@ if (str_starts_with($curPath, '/petstore/receptionist') || str_starts_with($curP
 $currentUnitId = $activeUnitId;
 
 // Inventory Manager Mode resolution
-if ($isSuperAdmin) {
+if ($isIsolatedChrome) {
+    $isInvMode = false;
+} elseif ($isSuperAdmin) {
     $isInvMode = !empty(\App\Core\Session::get('inventory_manager_mode'));
 } else {
     $isInvMode = !empty(\App\Core\Session::get('inventory_manager_mode')) || (!$hasBmRole && $hasImRole);
 }
 
 // Temporary Inventory Access Key check
-$isTempInv = !empty($isTempKeyAccess);
+$isTempInv = !$isIsolatedChrome && !empty($isTempKeyAccess);
 if (!$isTempInv && !empty($switcherCtx['employee_id'])) {
     $tempGrants = \App\Core\Session::get('temp_inventory_access', []);
     if (is_array($tempGrants)) {

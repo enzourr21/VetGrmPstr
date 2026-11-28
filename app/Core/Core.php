@@ -155,7 +155,7 @@ abstract class Controller
         ob_start();
         require dirname(__DIR__) . "/Views/$view.php";
         $content = ob_get_clean();
-        $flashes = Session::pullFlash();
+        $flashes = !empty($isolateSessionChrome) ? [] : Session::pullFlash();
         $title = $title ?? 'PawCariño';
         require dirname(__DIR__) . '/Views/layout.php';
     }
