@@ -1393,10 +1393,28 @@ check('14. applyCleanup() locks employee_work_status FOR UPDATE in-transaction a
     };
     $svcRaceNull = new InvitationPlaceholderCleanupService($pdoRaceNull);
     $resRaceNull = $svcRaceNull->applyCleanup(true, 1);
+
     assertSameVal([], $resRaceNull['cleaned_user_ids'], 'Concurrent NULL work_status transition must prevent cleanup deletion.');
+    if (!in_array(5, $resRaceNull['quarantined_user_ids'], true)) {
+        throw new RuntimeException('Concurrent NULL work_status transition must quarantine user 5.');
+    }
     if (!isset($pdoRaceNull->users[5], $pdoRaceNull->employees[5], $pdoRaceNull->employeeWorkStatus[5])) {
         throw new RuntimeException('User 5, employee 5, and NULL work_status row must remain intact.');
     }
+    if (!array_key_exists('work_status', $pdoRaceNull->employeeWorkStatus[5]) || $pdoRaceNull->employeeWorkStatus[5]['work_status'] !== null) {
+        throw new RuntimeException('NULL work_status value must remain unchanged.');
+    }
+    assertSameVal(1, $pdoRaceNull->invitations[50]['is_legacy_quarantined'], 'Invitation 50 must be marked quarantined after concurrent NULL transition.');
+
+    $emp5NullQueries = array_values(array_filter(
+        $pdoRaceNull->workStatusQueries,
+        static fn(array $q): bool => $q['employee_id'] === 5
+    ));
+    assertSameVal(2, count($emp5NullQueries), 'Expected 2 employee_work_status reads for employee 5 in Free -> NULL scenario.');
+    assertSameVal(false, $emp5NullQueries[0]['for_update'], 'Initial analyze() read in Free -> NULL scenario must not lock.');
+    assertSameVal(false, $emp5NullQueries[0]['in_tx'], 'Initial analyze() read in Free -> NULL scenario must be outside transaction.');
+    assertSameVal(true, $emp5NullQueries[1]['for_update'], 'Transactional recheck in Free -> NULL scenario must lock FOR UPDATE.');
+    assertSameVal(true, $emp5NullQueries[1]['in_tx'], 'Transactional recheck in Free -> NULL scenario must execute inside transaction.');
 });
 
 echo "\nResults: {$passed} passed, {$failed} failed.\n";
